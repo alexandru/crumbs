@@ -79,44 +79,75 @@ jobs:
       - name: Smoke test image
         env:
           IMAGE: crumbs:smoke-${{ matrix.platform_name }}
-          CONTAINER: crumbs-smoke-${{ matrix.platform_name }}
+          CONTAINER: crumbs-smoke-${{ matrix.platform_name }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
 
+          TMP_DIR="$(mktemp -d "${RUNNER_TEMP}/crumbs-smoke.XXXXXX")"
+          BODY="$TMP_DIR/body.json"
+          HEADERS="$TMP_DIR/headers.txt"
+
           cleanup() {
+            local trap_status=$?
+            trap - EXIT
+            if [ "$trap_status" -ne 0 ]; then
+              echo "container logs:" >&2
+              docker logs "$CONTAINER" >&2 || true
+            fi
             docker rm --force "$CONTAINER" >/dev/null 2>&1 || true
+            rm -rf "$TMP_DIR"
+            exit "$trap_status"
           }
           trap cleanup EXIT
 
-          docker run --detach --name "$CONTAINER" "$IMAGE" >/dev/null
+          docker run --detach --name "$CONTAINER" --publish 127.0.0.1::8080 "$IMAGE" >/dev/null
 
+          published="$(docker port "$CONTAINER" 8080/tcp 2>/dev/null | head -n 1 || true)"
+          host_port="${published##*:}"
+          if [ -z "$published" ] || ! [[ "$host_port" =~ ^[0-9]+$ ]]; then
+            echo "could not determine the published host port" >&2
+            exit 1
+          fi
+
+          status=""
           ready=0
           for _ in $(seq 1 30); do
-            logs="$(docker logs "$CONTAINER" 2>&1 || true)"
-            if printf '%s\n' "$logs" | grep -qF 'Hello, world!'; then
+            status="$(curl --silent --show-error --connect-timeout 1 --max-time 2 --output "$BODY" --dump-header "$HEADERS" --write-out '%{http_code}' "http://127.0.0.1:${host_port}/" 2>/dev/null || true)"
+            if [ "$status" = "200" ] && grep -qiE '^content-type:[[:space:]]*application/json([[:space:]]*;.*)?[[:space:]]*$' "$HEADERS"; then
               ready=1
               break
             fi
             running="$(docker inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null || printf 'false')"
             if [ "$running" != "true" ]; then
               echo "container exited before becoming ready" >&2
-              printf '%s\n' "$logs" >&2
               exit 1
             fi
             sleep 1
           done
 
           if [ "$ready" -ne 1 ]; then
-            echo "timed out waiting for the readiness output" >&2
-            docker logs "$CONTAINER" >&2 || true
+            echo "timed out waiting for GET / to return HTTP 200 with application/json (last status: ${status:-none})" >&2
+            if [ -s "$HEADERS" ]; then
+              cat "$HEADERS" >&2
+            fi
             exit 1
           fi
+
+          python3 - "$BODY" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as response:
+              payload = json.load(response)
+
+          if payload != {"greeting": "Hello, world!"}:
+              raise SystemExit(f"unexpected JSON payload: {payload!r}")
+          PY
 
           sleep 2
           running="$(docker inspect --format '{{.State.Running}}' "$CONTAINER")"
           if [ "$running" != "true" ]; then
             echo "container did not stay running until a termination signal" >&2
-            docker logs "$CONTAINER" >&2 || true
             exit 1
           fi
 
@@ -124,7 +155,6 @@ jobs:
           exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER")"
           if [ "$exit_code" -ne 0 ]; then
             echo "container exited with status $exit_code after SIGTERM" >&2
-            docker logs "$CONTAINER" >&2 || true
             exit 1
           fi
 

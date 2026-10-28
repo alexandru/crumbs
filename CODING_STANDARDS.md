@@ -2,7 +2,11 @@
 
 These rules apply to the Rust code in this repository and use RFC 2119 keywords.
 
-Use the `rust-skills` skill when writing, reviewing, or refactoring Rust code.
+Use the `rust-skills` and `code-refinements` skills when writing, reviewing, or refactoring Rust code.
+
+## Types
+
+Configuration fields and other domain values MUST use semantic types (e.g. `HttpPort`, `HttpStatusCode`), not bare primitives. Type aliases are the minimum; use newtypes when compiler-enforced distinctions or invariants are needed.
 
 ## Panics
 
@@ -32,4 +36,4 @@ Files MUST start with the most important definitions: public types, their impls,
 
 ## Comments
 
-Comments MUST explain what the code does not make obvious and MUST NOT restate signatures or logic. Document the code enough for a beginner Rust developer to understand it.
+Comments MUST explain what the code does not make obvious and MUST NOT restate signatures or logic. Comments explaining non-obvious constructs (e.g., concurrency or lifecycle issues) to a Rust advanced-beginner are encouraged (assume expertise in Scala).

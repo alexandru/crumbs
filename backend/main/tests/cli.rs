@@ -66,6 +66,18 @@ fn invalid_subcommand_exits_nonzero() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+fn server_start_requires_config() -> Result<(), Box<dyn Error>> {
+    let output = run(&["server", "start"])?;
+
+    assert!(
+        !output.status.success(),
+        "expected a nonzero exit status, got {}",
+        output.status
+    );
+    Ok(())
+}
+
 fn run(args: &[&str]) -> io::Result<Output> {
     Command::new(BIN).args(args).output()
 }

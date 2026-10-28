@@ -14,12 +14,8 @@ Rust code MUST follow CODING_STANDARDS.md.
 
 ### Rust unit tests
 
-Rust unit tests MUST live in a crate-local `unit-tests/` directory that mirrors the `src/` layout, not inline in source files. A source file declares its test module with `#[cfg(test)]` and a `#[path]` attribute relative to that source file, and the module MUST be named `tests`:
+Unit tests MUST live in crate-local `unit-tests/`, mirroring `src/`, loaded through `mod tests` with `#[cfg(test)]` and a relative `#[path]`. Integration tests stay in `tests/`.
 
-```rust
-#[cfg(test)]
-#[path = "../unit-tests/config.rs"]
-mod tests;
-```
+### README
 
-For `src/lib.rs` the test file is `unit-tests/lib.rs`. For `src/foo/bar.rs` it is `unit-tests/foo/bar.rs`, loaded with `#[path = "../../unit-tests/foo/bar.rs"]`. Integration tests MUST remain in `tests/`.
+README.md is a short, user-facing homepage. MUST NOT add developer notes, implementation details, or walkthroughs unless explicitly requested.

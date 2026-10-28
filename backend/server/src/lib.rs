@@ -1,18 +1,25 @@
-//! Server scaffold for Crumbs.
+//! HTTP server for Crumbs.
 //!
-//! The process installs Unix shutdown handlers, announces readiness on standard
-//! output, and waits for SIGHUP, SIGINT, or SIGTERM before exiting successfully.
+//! The server receives typed HTTP settings, binds the listener, announces
+//! readiness on standard output, and serves until SIGHUP, SIGINT, or SIGTERM
+//! arrives.
 
 #[cfg(not(unix))]
 compile_error!("crumbs-server currently supports Unix targets only");
 
-#[cfg(unix)]
 use std::io::{self, Write};
+use std::net::{Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 
-#[cfg(unix)]
+use axum::{Json, Router};
 use crumbs_database::Database;
-#[cfg(unix)]
-use tokio::signal::unix::{SignalKind, signal};
+use serde::Serialize;
+use tokio::net::TcpListener;
+use tokio::signal::unix::{Signal, SignalKind, signal};
+
+mod config;
+
+pub use config::{HttpConfig, HttpPort};
 
 /// Arguments accepted by the `server` subcommand.
 #[derive(Debug, clap::Args)]
@@ -26,86 +33,112 @@ pub struct ServerArgs {
 #[derive(Debug, clap::Subcommand)]
 pub enum ServerCommand {
     /// Start the server and wait for a shutdown signal.
-    Start,
+    Start {
+        /// Path to the TOML configuration file.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+    },
 }
 
 /// Errors produced while starting or running the server.
-#[cfg(unix)]
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The tokio runtime could not be created.
-    Runtime(io::Error),
+    #[error("failed to create the async runtime: {0}")]
+    Runtime(#[source] io::Error),
     /// A Unix signal handler could not be installed.
-    Signal(io::Error),
+    #[error("failed to install a signal handler: {0}")]
+    Signal(#[source] io::Error),
+    /// The HTTP listener could not bind to the configured port.
+    #[error("failed to bind the HTTP listener to port {port}: {source}")]
+    Bind {
+        port: HttpPort,
+        #[source]
+        source: io::Error,
+    },
+    /// The bound listener did not report its local address.
+    #[error("failed to read the bound listener address: {0}")]
+    LocalAddr(#[source] io::Error),
     /// The readiness message could not be written or flushed.
-    Output(io::Error),
+    #[error("failed to write server output: {0}")]
+    Output(#[source] io::Error),
+    /// The HTTP server stopped with an error.
+    #[error("failed to serve HTTP requests: {0}")]
+    Serve(#[source] io::Error),
 }
 
-#[cfg(unix)]
-impl std::fmt::Display for Error {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Runtime(source) => {
-                write!(formatter, "failed to create the async runtime: {source}")
-            }
-            Self::Signal(source) => {
-                write!(formatter, "failed to install a signal handler: {source}")
-            }
-            Self::Output(source) => {
-                write!(formatter, "failed to write server output: {source}")
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Runtime(source) | Self::Signal(source) | Self::Output(source) => Some(source),
-        }
-    }
-}
-
-/// Runs the server until a shutdown signal arrives.
+/// Runs the HTTP server until a shutdown signal arrives.
 ///
 /// The database handle is owned for the lifetime of the process so request
-/// handling can share it without reconnecting.
+/// handling can share it without reconnecting. Port `0` in `config` lets the
+/// operating system choose an available port; the readiness message reports the
+/// actual bound address.
 ///
 /// # Errors
 ///
 /// Returns an error if the tokio runtime or Unix signal handlers cannot be
-/// created, or if the readiness message cannot be written to standard output.
-#[cfg(unix)]
-pub fn start(database: Database) -> Result<(), Error> {
+/// created, if the listener cannot bind, if its address cannot be read, if the
+/// readiness message cannot be written to standard output, or if the HTTP
+/// server fails.
+pub fn start(database: Database, config: HttpConfig) -> Result<(), Error> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(Error::Runtime)?;
 
-    runtime.block_on(run_until_shutdown(database))
+    runtime.block_on(run_until_shutdown(database, config))
 }
 
-#[cfg(unix)]
-async fn run_until_shutdown(database: Database) -> Result<(), Error> {
-    let mut hangup = signal(SignalKind::hangup()).map_err(Error::Signal)?;
-    let mut interrupt = signal(SignalKind::interrupt()).map_err(Error::Signal)?;
-    let mut terminate = signal(SignalKind::terminate()).map_err(Error::Signal)?;
+async fn run_until_shutdown(database: Database, config: HttpConfig) -> Result<(), Error> {
+    // Handlers are installed before bind/readiness so Tokio buffers signals
+    // that arrive during startup until the shutdown future is polled.
+    let hangup = signal(SignalKind::hangup()).map_err(Error::Signal)?;
+    let interrupt = signal(SignalKind::interrupt()).map_err(Error::Signal)?;
+    let terminate = signal(SignalKind::terminate()).map_err(Error::Signal)?;
+
+    let bind_address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.port));
+    let listener = TcpListener::bind(bind_address)
+        .await
+        .map_err(|source| Error::Bind {
+            port: config.port,
+            source,
+        })?;
+    let address = listener.local_addr().map_err(Error::LocalAddr)?;
+
+    let application = Router::new().route("/", axum::routing::get(hello));
 
     {
         let mut stdout = io::stdout().lock();
-        writeln!(stdout, "Hello, world!").map_err(Error::Output)?;
+        writeln!(stdout, "Listening on http://{address}").map_err(Error::Output)?;
         stdout.flush().map_err(Error::Output)?;
     }
 
-    // Kept until shutdown so the database handle lives as long as the server.
+    // Owned until shutdown so the database handle lives as long as the process.
     let _database = database;
 
+    axum::serve(listener, application)
+        .with_graceful_shutdown(shutdown_signal(hangup, interrupt, terminate))
+        .await
+        .map_err(Error::Serve)
+}
+
+async fn shutdown_signal(mut hangup: Signal, mut interrupt: Signal, mut terminate: Signal) {
     tokio::select! {
-        _ = hangup.recv() => Ok(()),
-        _ = interrupt.recv() => Ok(()),
-        _ = terminate.recv() => Ok(()),
+        _ = hangup.recv() => {}
+        _ = interrupt.recv() => {}
+        _ = terminate.recv() => {}
     }
+}
+
+#[derive(Debug, Serialize)]
+struct Greeting {
+    greeting: &'static str,
+}
+
+async fn hello() -> Json<Greeting> {
+    Json(Greeting {
+        greeting: "Hello, world!",
+    })
 }
 
 #[cfg(test)]

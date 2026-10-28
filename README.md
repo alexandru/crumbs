@@ -10,10 +10,8 @@ From the repository root:
 
 ```sh
 cd backend
-cargo run -p crumbs-main -- server start
+cargo run -p crumbs-main -- server start --config resources/application-sample.toml
 ```
-
-Expect `Hello, world!`; the process keeps running until Ctrl+C or another shutdown signal.
 
 ## Container
 
@@ -21,5 +19,5 @@ From the repository root:
 
 ```sh
 docker build -t crumbs ./backend
-docker run --rm --name crumbs crumbs
+docker run --rm --name crumbs -p 8080:8080 crumbs
 ```
