@@ -11,15 +11,5 @@
 pub struct Database;
 
 #[cfg(test)]
-mod tests {
-    use super::Database;
-
-    #[test]
-    fn default_database_is_send_sync_and_debuggable() {
-        fn require_traits<T: Send + Sync + Default + std::fmt::Debug>() {}
-        require_traits::<Database>();
-
-        let database = Database;
-        assert_eq!(format!("{database:?}"), "Database");
-    }
-}
+#[path = "../unit-tests/lib.rs"]
+mod tests;

@@ -43,31 +43,5 @@ fn run_cli(cli: Cli) -> Result<(), crumbs_server::Error> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{Cli, Command};
-    use clap::Parser;
-    use crumbs_server::{ServerArgs, ServerCommand};
-
-    #[test]
-    fn parses_server_start_command() -> Result<(), clap::Error> {
-        let cli = Cli::try_parse_from(["crumbs", "server", "start"])?;
-
-        assert!(matches!(
-            cli.command,
-            Command::Server(ServerArgs {
-                command: ServerCommand::Start
-            })
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn rejects_missing_subcommand() {
-        assert!(Cli::try_parse_from(["crumbs"]).is_err());
-    }
-
-    #[test]
-    fn rejects_unknown_subcommand() {
-        assert!(Cli::try_parse_from(["crumbs", "worker"]).is_err());
-    }
-}
+#[path = "../unit-tests/lib.rs"]
+mod tests;
