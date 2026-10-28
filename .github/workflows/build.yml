@@ -1,0 +1,131 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: quality (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            platform_name: amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            platform_name: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Run checks
+        working-directory: backend
+        run: cargo xtask check
+
+  docker:
+    name: docker (${{ matrix.platform }})
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            platform_name: amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            platform_name: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: backend
+          file: backend/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: true
+          provenance: false
+          tags: crumbs:smoke-${{ matrix.platform_name }}
+
+      - name: Smoke test image
+        env:
+          IMAGE: crumbs:smoke-${{ matrix.platform_name }}
+          CONTAINER: crumbs-smoke-${{ matrix.platform_name }}
+        run: |
+          set -euo pipefail
+
+          cleanup() {
+            docker rm --force "$CONTAINER" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run --detach --name "$CONTAINER" "$IMAGE" >/dev/null
+
+          ready=0
+          for _ in $(seq 1 30); do
+            logs="$(docker logs "$CONTAINER" 2>&1 || true)"
+            if printf '%s\n' "$logs" | grep -qF 'Hello, world!'; then
+              ready=1
+              break
+            fi
+            running="$(docker inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null || printf 'false')"
+            if [ "$running" != "true" ]; then
+              echo "container exited before becoming ready" >&2
+              printf '%s\n' "$logs" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            echo "timed out waiting for the readiness output" >&2
+            docker logs "$CONTAINER" >&2 || true
+            exit 1
+          fi
+
+          sleep 2
+          running="$(docker inspect --format '{{.State.Running}}' "$CONTAINER")"
+          if [ "$running" != "true" ]; then
+            echo "container did not stay running until a termination signal" >&2
+            docker logs "$CONTAINER" >&2 || true
+            exit 1
+          fi
+
+          docker stop --time 10 "$CONTAINER" >/dev/null
+          exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER")"
+          if [ "$exit_code" -ne 0 ]; then
+            echo "container exited with status $exit_code after SIGTERM" >&2
+            docker logs "$CONTAINER" >&2 || true
+            exit 1
+          fi
+
+          echo "image smoke test passed"

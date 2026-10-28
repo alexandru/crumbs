@@ -1,0 +1,20 @@
+[package]
+name = "crumbs-main"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "crumbs"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+crumbs-database.workspace = true
+crumbs-server.workspace = true
+
+[dev-dependencies]
+nix.workspace = true
+
+[lints]
+workspace = true
