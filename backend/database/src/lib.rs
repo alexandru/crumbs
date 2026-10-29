@@ -42,15 +42,22 @@ pub struct Database {
 impl Database {
     /// Opens the database at the configured path and applies pending migrations.
     ///
-    /// Missing parent directories and the database file are created.
+    /// The configured path is resolved to an absolute filesystem path before
+    /// use and passed to SQLite literally. SQLite URI syntax and special names
+    /// such as `:memory:` are not interpreted. Missing parent directories and
+    /// the database file are created.
     ///
     /// # Errors
     ///
-    /// Returns an error if the parent directory cannot be created, SQLite cannot
-    /// open the file, or an embedded migration cannot be applied or validated.
+    /// Returns an error if the path cannot be resolved, the parent directory
+    /// cannot be created, SQLite cannot open the file, or an embedded migration
+    /// cannot be applied or validated.
     pub async fn open(config: DatabaseConfig) -> Result<Self, Error> {
-        let path = config.path.clone();
-        let pool = open_pool(config).await?;
+        let path = std::path::absolute(&config.path).map_err(|source| Error::ResolvePath {
+            path: config.path,
+            source,
+        })?;
+        let pool = open_pool(DatabaseConfig { path: path.clone() }).await?;
         if let Err(source) = MIGRATOR.run(&pool).await {
             pool.close().await;
             return Err(Error::Migration { path, source });
@@ -79,6 +86,14 @@ impl fmt::Debug for Database {
 /// Errors produced while opening or preparing the database.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// The configured database path could not be resolved to an absolute path.
+    #[error("failed to resolve the database path {}: {source}", path.display())]
+    ResolvePath {
+        /// Configured database path that could not be resolved.
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     /// A parent directory for the database file could not be created.
     #[error("failed to create the database directory {}: {source}", path.display())]
     CreateDirectory {
@@ -158,6 +173,10 @@ const WAL_AUTOCHECKPOINT_PAGES: &str = "1000";
 const STATEMENT_CACHE_CAPACITY: usize = 32;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+
+#[cfg(test)]
+#[path = "../unit-tests/import_usda_release.rs"]
+mod import_usda_release;
 
 #[cfg(test)]
 #[path = "../unit-tests/lib.rs"]

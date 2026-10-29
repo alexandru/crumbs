@@ -620,6 +620,26 @@ async fn database_path_that_is_a_directory_reports_the_path() -> Result<(), Box<
     Ok(())
 }
 
+#[tokio::test]
+async fn empty_database_path_is_rejected_without_a_handle() -> Result<(), Box<dyn StdError>> {
+    let error = match Database::open(config(PathBuf::new())).await {
+        Ok(database) => {
+            database.close().await;
+            return Err(io::Error::other("empty path opened a database").into());
+        }
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, Error::ResolvePath { .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("failed to resolve the database path"),
+        "{error}"
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn unwritable_parent_reports_the_database_path() -> Result<(), Box<dyn StdError>> {
