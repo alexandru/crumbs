@@ -2,6 +2,8 @@
 //!
 //! [`Database`] owns a small SQLite pool, applies the embedded migrations
 //! before exposing a usable handle, and is passed to the server at startup.
+//! Dropping the handle closes the pool immediately and asks SQLite workers to
+//! close. Worker shutdown is asynchronous and is not awaited by `Drop`.
 //!
 //! # Resource settings
 //!
@@ -33,8 +35,8 @@ pub use config::{DatabaseConfig, DatabasePath};
 
 /// Handle to the application database.
 ///
-/// The handle owns its connection pool and closes it when dropped. Call
-/// [`Database::close`] for deterministic shutdown before the process exits.
+/// The handle owns its connection pool. Dropping it closes the pool and starts
+/// best-effort asynchronous cleanup when a Tokio runtime is available.
 pub struct Database {
     pool: SqlitePool,
 }
@@ -50,9 +52,8 @@ impl Database {
     /// cannot open the file, or an embedded migration cannot be applied or
     /// validated. No handle is returned on failure.
     pub async fn open(config: DatabaseConfig) -> Result<Self, Error> {
-        let path = config.path;
-
-        if let Some(parent) = path
+        if let Some(parent) = config
+            .path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
@@ -65,9 +66,10 @@ impl Database {
         }
 
         let options = SqliteConnectOptions::new()
-            .filename(&path)
+            .filename(&config.path)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
+            // SQLite FULL synchronizes commits to disk; this is independent of Rust async execution.
             .synchronous(SqliteSynchronous::Full)
             .foreign_keys(true)
             .busy_timeout(BUSY_TIMEOUT)
@@ -83,23 +85,32 @@ impl Database {
             .connect_with(options)
             .await
             .map_err(|source| Error::Open {
-                path: path.clone(),
+                path: config.path.clone(),
                 source,
             })?;
 
-        if let Err(source) = MIGRATOR.run(&pool).await {
-            pool.close().await;
-            return Err(Error::Migration { path, source });
-        }
+        let database = Self { pool };
+        MIGRATOR
+            .run(&database.pool)
+            .await
+            .map_err(|source| Error::Migration {
+                path: config.path,
+                source,
+            })?;
 
-        Ok(Self { pool })
+        Ok(database)
     }
+}
 
-    /// Closes the pool and waits for its connections to finish.
-    ///
-    /// Calling this more than once is safe.
-    pub async fn close(&self) {
-        self.pool.close().await;
+impl Drop for Database {
+    fn drop(&mut self) {
+        // Pool::close marks the pool closed before returning its async wait future.
+        // Dropping that future skips waiting; schedule the wait when possible.
+        drop(self.pool.close());
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let pool = self.pool.clone();
+            runtime.spawn(async move { pool.close().await });
+        }
     }
 }
 

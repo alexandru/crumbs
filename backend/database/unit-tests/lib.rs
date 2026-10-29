@@ -34,7 +34,6 @@ async fn open_creates_parents_database_and_migrations() -> Result<(), Box<dyn St
         "crumbs_sources was not created as a STRICT table: {schema}"
     );
 
-    database.close().await;
     Ok(())
 }
 
@@ -52,8 +51,8 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
         query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
             .fetch_one(&database.pool)
             .await?;
-    database.close().await;
-
+    drop(database);
+    assert_wal_released(&path).await?;
     let reopened = Database::open(config(path)).await?;
     let sources: i64 = query_scalar("SELECT COUNT(*) FROM crumbs_sources")
         .fetch_one(&reopened.pool)
@@ -69,8 +68,104 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
         "reopening reapplied a completed migration"
     );
 
-    reopened.close().await;
-    reopened.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn dropping_database_releases_sqlite_and_preserves_committed_data()
+-> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    {
+        let database = Database::open(config(path.clone())).await?;
+        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+            .bind("usda")
+            .execute(&database.pool)
+            .await?;
+        assert!(wal_path(&path).exists(), "write did not create a WAL file");
+    }
+
+    assert_wal_released(&path).await?;
+
+    let reopened = Database::open(config(path.clone())).await?;
+    let sources: i64 = query_scalar("SELECT COUNT(*) FROM crumbs_sources")
+        .fetch_one(&reopened.pool)
+        .await?;
+    assert_eq!(sources, 1, "dropping the database lost committed data");
+    drop(reopened);
+    assert_wal_released(&path).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn early_error_return_drops_database_and_releases_sqlite() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let result = operation_that_returns_error(path.clone()).await;
+
+    assert_eq!(
+        result.err().map(|error| error.to_string()).as_deref(),
+        Some("operation failed after opening database")
+    );
+    assert_wal_released(&path).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelling_operation_drops_database_and_releases_sqlite() -> Result<(), Box<dyn StdError>>
+{
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let (opened_sender, opened_receiver) = tokio::sync::oneshot::channel();
+    let task_path = path.clone();
+    let wal_check_path = path.clone();
+    let task = tokio::spawn(async move {
+        let database = Database::open(config(task_path))
+            .await
+            .map_err(io::Error::other)?;
+        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+            .bind("usda")
+            .execute(&database.pool)
+            .await
+            .map_err(io::Error::other)?;
+        assert!(
+            wal_path(&wal_check_path).exists(),
+            "write did not create a WAL file"
+        );
+        let _ = opened_sender.send(());
+        std::future::pending::<()>().await;
+        Ok::<(), io::Error>(())
+    });
+
+    opened_receiver.await?;
+    task.abort();
+    match task.await {
+        Err(error) if error.is_cancelled() => {}
+        _ => return Err(io::Error::other("database task was not cancelled").into()),
+    }
+    assert_wal_released(&path).await?;
+    Ok(())
+}
+
+#[test]
+fn dropping_database_before_runtime_teardown_releases_sqlite() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let database = Database::open(config(path.clone())).await?;
+        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+            .bind("usda")
+            .execute(&database.pool)
+            .await?;
+        assert!(wal_path(&path).exists(), "write did not create a WAL file");
+        drop(database);
+        Ok::<(), Box<dyn StdError>>(())
+    })?;
+    drop(runtime);
+    assert_wal_released_blocking(&path)?;
     Ok(())
 }
 
@@ -93,7 +188,6 @@ async fn applies_pragmas_and_pool_limits_to_every_connection() -> Result<(), Box
 
     drop(first);
     drop(second);
-    database.close().await;
     Ok(())
 }
 
@@ -119,7 +213,6 @@ async fn enforces_foreign_keys() -> Result<(), Box<dyn StdError>> {
         .await;
 
     assert!(result.is_err(), "foreign key violation was accepted");
-    database.close().await;
     Ok(())
 }
 
@@ -142,7 +235,6 @@ async fn fts5_is_available_in_the_bundled_sqlite() -> Result<(), Box<dyn StdErro
         .await?;
 
     assert_eq!(matches, 1, "FTS5 did not index the inserted text");
-    database.close().await;
     Ok(())
 }
 
@@ -156,15 +248,15 @@ async fn migration_checksum_mismatch_is_reported_without_a_handle() -> Result<()
     query("UPDATE _sqlx_migrations SET checksum = X'00'")
         .execute(&database.pool)
         .await?;
-    database.close().await;
-
+    assert!(wal_path(&path).exists(), "write did not create a WAL file");
+    drop(database);
+    assert_wal_released(&path).await?;
     let error = match Database::open(config(path.clone())).await {
-        Ok(database) => {
-            database.close().await;
-            return Err(io::Error::other("modified migration was accepted").into());
-        }
+        Ok(_) => return Err(io::Error::other("modified migration was accepted").into()),
         Err(error) => error,
     };
+
+    assert_wal_released(&path).await?;
 
     assert!(matches!(error, Error::Migration { .. }));
     assert!(
@@ -182,10 +274,7 @@ async fn invalid_parent_path_reports_the_directory() -> Result<(), Box<dyn StdEr
     let path = blocker.join("nested").join("crumbs.db");
 
     let error = match Database::open(config(path)).await {
-        Ok(database) => {
-            database.close().await;
-            return Err(io::Error::other("database opened below a regular file").into());
-        }
+        Ok(_) => return Err(io::Error::other("database opened below a regular file").into()),
         Err(error) => error,
     };
 
@@ -204,8 +293,7 @@ async fn database_path_that_is_a_directory_reports_the_path() -> Result<(), Box<
     fs::create_dir(&path)?;
 
     let error = match Database::open(config(path.clone())).await {
-        Ok(database) => {
-            database.close().await;
+        Ok(_) => {
             return Err(io::Error::other("a directory was accepted as a database file").into());
         }
         Err(error) => error,
@@ -234,17 +322,12 @@ async fn unwritable_parent_reports_the_database_path() -> Result<(), Box<dyn Std
     fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))?;
 
     if !permissions_enforced {
-        if let Ok(database) = result {
-            database.close().await;
-        }
+        drop(result);
         return Ok(());
     }
 
     let error = match result {
-        Ok(database) => {
-            database.close().await;
-            return Err(io::Error::other("database opened in an unwritable directory").into());
-        }
+        Ok(_) => return Err(io::Error::other("database opened in an unwritable directory").into()),
         Err(error) => error,
     };
 
@@ -266,7 +349,6 @@ async fn debug_does_not_expose_connection_details() -> Result<(), Box<dyn StdErr
 
     assert_eq!(debug, "Database { .. }");
     assert!(!debug.contains(&path.display().to_string()));
-    database.close().await;
     Ok(())
 }
 
@@ -278,6 +360,45 @@ fn database_is_send_sync() {
 
 fn config(path: PathBuf) -> DatabaseConfig {
     DatabaseConfig { path }
+}
+
+async fn operation_that_returns_error(path: PathBuf) -> Result<(), io::Error> {
+    let database = Database::open(config(path))
+        .await
+        .map_err(io::Error::other)?;
+    query("INSERT INTO crumbs_sources (id) VALUES (?)")
+        .bind("usda")
+        .execute(&database.pool)
+        .await
+        .map_err(io::Error::other)?;
+    Err(io::Error::other("operation failed after opening database"))
+}
+
+async fn assert_wal_released(path: &std::path::Path) -> Result<(), Box<dyn StdError>> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while wal_path(path).exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
+fn assert_wal_released_blocking(path: &std::path::Path) -> Result<(), Box<dyn StdError>> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while wal_path(path).exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if wal_path(path).exists() {
+        return Err(io::Error::other("SQLite WAL file remained after database drop").into());
+    }
+    Ok(())
+}
+
+fn wal_path(path: &std::path::Path) -> PathBuf {
+    let mut wal_path = path.as_os_str().to_owned();
+    wal_path.push("-wal");
+    wal_path.into()
 }
 
 async fn assert_connection_pragmas(
