@@ -20,6 +20,7 @@ mod cli;
 mod clock;
 mod config;
 mod foods;
+mod fts;
 mod import;
 
 pub use cli::{DbArgs, DbCommand};
