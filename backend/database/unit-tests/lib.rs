@@ -80,7 +80,7 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
 
     let database = Database::open(config(path.clone())).await?;
     query("INSERT INTO crumbs_sources (id) VALUES (?)")
-        .bind("usda")
+        .bind("test-source")
         .execute(&database.pool)
         .await?;
     let applied_before: i64 =
@@ -92,7 +92,7 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
     assert_sqlite_fds_released(&path)?;
     drop(database);
     let reopened = Database::open(config(path.clone())).await?;
-    let sources: i64 = query_scalar("SELECT COUNT(*) FROM crumbs_sources")
+    let sources: i64 = query_scalar("SELECT COUNT(*) FROM crumbs_sources WHERE id = 'test-source'")
         .fetch_one(&reopened.pool)
         .await?;
     let applied_after: i64 =

@@ -1,0 +1,157 @@
+{
+  "FoundationFoods": [
+    {
+      "fdcId": 321358,
+      "description": "Hummus, commercial",
+      "dataType": "Foundation",
+      "foodCategory": {
+        "description": "Legumes and Legume Products"
+      },
+      "publicationDate": "4/1/2019",
+      "ndbNumber": 16158,
+      "foodNutrients": [
+        {
+          "type": "FoodNutrient",
+          "id": 2219707,
+          "nutrient": {
+            "id": 1120,
+            "number": "334",
+            "name": "Cryptoxanthin, beta",
+            "rank": 7460,
+            "unitName": "µg"
+          },
+          "dataPoints": 1,
+          "foodNutrientDerivation": {
+            "code": "A",
+            "description": "Analytical",
+            "foodNutrientSource": {
+              "id": 1,
+              "code": "1",
+              "description": "Analytical or derived from analytical"
+            }
+          },
+          "median": 3.0,
+          "amount": 3.0
+        },
+        {
+          "type": "FoodNutrient",
+          "id": 2219708,
+          "nutrient": {
+            "id": 1122,
+            "number": "337",
+            "name": "Lycopene",
+            "rank": 7530,
+            "unitName": "µg"
+          },
+          "dataPoints": 1,
+          "foodNutrientDerivation": {
+            "code": "A",
+            "description": "Analytical",
+            "foodNutrientSource": {
+              "id": 1,
+              "code": "1",
+              "description": "Analytical or derived from analytical"
+            }
+          },
+          "median": 0.0,
+          "amount": 0.0
+        }
+      ],
+      "foodPortions": [
+        {
+          "id": 118804,
+          "value": 2.0,
+          "measureUnit": {
+            "id": 1001,
+            "name": "tablespoon",
+            "abbreviation": "tbsp"
+          },
+          "modifier": "",
+          "gramWeight": 33.9,
+          "sequenceNumber": 1,
+          "minYearAcquired": 2015,
+          "amount": 2.0
+        }
+      ]
+    },
+    {
+      "fdcId": 321360,
+      "description": "Tomatoes, grape, raw",
+      "dataType": "Foundation",
+      "foodCategory": {
+        "description": "Vegetables and Vegetable Products"
+      },
+      "publicationDate": "4/1/2019",
+      "ndbNumber": 100147,
+      "scientificName": "Solanum lycopersicum",
+      "foodNutrients": [
+        {
+          "type": "FoodNutrient",
+          "id": 2219983,
+          "nutrient": {
+            "id": 1051,
+            "number": "255",
+            "name": "Water",
+            "rank": 100,
+            "unitName": "g"
+          },
+          "dataPoints": 18,
+          "foodNutrientDerivation": {
+            "code": "A",
+            "description": "Analytical",
+            "foodNutrientSource": {
+              "id": 1,
+              "code": "1",
+              "description": "Analytical or derived from analytical"
+            }
+          },
+          "max": 93.6,
+          "min": 90.9,
+          "median": 92.7,
+          "amount": 92.5
+        },
+        {
+          "type": "FoodNutrient",
+          "id": 2219984,
+          "nutrient": {
+            "id": 1162,
+            "number": "401",
+            "name": "Vitamin C, total ascorbic acid",
+            "rank": 6300,
+            "unitName": "mg"
+          },
+          "dataPoints": 12,
+          "foodNutrientDerivation": {
+            "code": "A",
+            "description": "Analytical",
+            "foodNutrientSource": {
+              "id": 1,
+              "code": "1",
+              "description": "Analytical or derived from analytical"
+            }
+          },
+          "max": 32.4,
+          "min": 22.4,
+          "median": 26.3,
+          "amount": 27.2
+        }
+      ],
+      "foodPortions": [
+        {
+          "id": 118808,
+          "value": 5.0,
+          "measureUnit": {
+            "id": 1082,
+            "name": "tomatoes",
+            "abbreviation": "tomatoes"
+          },
+          "modifier": "",
+          "gramWeight": 49.7,
+          "sequenceNumber": 1,
+          "minYearAcquired": 2016,
+          "amount": 5.0
+        }
+      ]
+    }
+  ]
+}

@@ -6,7 +6,7 @@
 
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use sqlx::migrate::{MigrateError, Migrator};
@@ -15,9 +15,15 @@ use sqlx::sqlite::{
 };
 use tokio::runtime::{Handle, TryCurrentError};
 
+mod cli;
 mod config;
+mod foods;
+mod import;
+mod usda_import;
 
+pub use cli::{DbArgs, DbCommand};
 pub use config::{DatabaseConfig, DatabasePath};
+pub use import::{ImportError, ImportReport, ImportedFoods};
 
 /// Handle to the application database.
 ///
@@ -45,6 +51,19 @@ impl Database {
             return Err(Error::Migration { path, source });
         }
         Ok(Self { pool })
+    }
+
+    /// Imports a USDA FoodData Central JSON download from `path`.
+    ///
+    /// Foods commit independently as they are streamed. A later parse or write
+    /// failure leaves earlier commits in place.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the input cannot be opened, parsed, or persisted,
+    /// including the number of foods committed before the failure.
+    pub async fn import_usda(&self, path: impl AsRef<Path>) -> Result<ImportReport, ImportError> {
+        import::import_usda(&self.pool, path.as_ref()).await
     }
 
     /// Waits for connections to close and prevents further database operations.

@@ -30,6 +30,19 @@ fn server_help_lists_start_command() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn db_help_lists_import_usda_command() -> Result<(), Box<dyn Error>> {
+    let output = run(&["db", "--help"])?;
+    assert_success(&output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("import-usda"),
+        "unexpected help output: {stdout}"
+    );
+    Ok(())
+}
+
+#[test]
 fn version_reports_package_version() -> Result<(), Box<dyn Error>> {
     let output = run(&["--version"])?;
     assert_success(&output);
