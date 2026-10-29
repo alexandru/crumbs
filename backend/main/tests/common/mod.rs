@@ -9,7 +9,7 @@ use std::error::Error;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -18,25 +18,26 @@ use std::time::{Duration, Instant};
 use http::{Response, StatusCode};
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
-use tempfile::NamedTempFile;
+use tempfile::TempDir;
 
 /// Maximum time to wait for a clean shutdown.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// TOML configuration that asks the operating system for an available port.
-pub const EPHEMERAL_PORT_CONFIG: &str = "[http]\nport = 0\n";
+pub const EPHEMERAL_PORT_CONFIG: &str = "[http]\nport = 0\n\n[database]\npath = \"crumbs.db\"\n";
 
 /// A running `crumbs server start` process listening on an ephemeral port.
 pub struct ServerProcess {
     child: Child,
     address: SocketAddr,
     exited: bool,
+    _config: TemporaryConfig,
 }
 
 impl ServerProcess {
     /// Starts the server with the given TOML configuration contents.
     pub fn spawn(contents: &str) -> Result<Self, Box<dyn Error>> {
-        // `NamedTempFile` deletes the file on drop, so it must stay in scope
-        // until the child has loaded the configuration and reports readiness.
+        // The temporary directory holds both the configuration file and any
+        // relative database path, so it must live as long as the process.
         let config = temporary_config(contents)?;
         let mut child = server_command(config.path()).spawn()?;
 
@@ -59,6 +60,7 @@ impl ServerProcess {
             child,
             address,
             exited: false,
+            _config: config,
         })
     }
 
@@ -99,11 +101,28 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
-/// Writes `contents` to a new temporary file.
-pub fn temporary_config(contents: &str) -> Result<NamedTempFile, Box<dyn Error>> {
-    let file = NamedTempFile::new()?;
-    fs::write(file.path(), contents)?;
-    Ok(file)
+/// Writes `contents` to a configuration file in a new temporary directory.
+pub fn temporary_config(contents: &str) -> Result<TemporaryConfig, Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("application.toml");
+    fs::write(&path, contents)?;
+    Ok(TemporaryConfig {
+        _directory: directory,
+        path,
+    })
+}
+
+/// A temporary directory containing a process configuration file.
+pub struct TemporaryConfig {
+    _directory: TempDir,
+    path: PathBuf,
+}
+
+impl TemporaryConfig {
+    /// Returns the path to the configuration file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 /// Runs `crumbs server start --config <config>` and waits for it to exit.

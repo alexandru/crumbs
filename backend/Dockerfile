@@ -17,6 +17,7 @@ LABEL org.opencontainers.image.source="https://github.com/alexandru/crumbs"
 WORKDIR /app
 COPY resources/application-sample.toml /app/application.toml
 COPY --from=builder /build/crumbs /usr/local/bin/crumbs
+RUN mkdir -p /app/data && chown 65532:65532 /app/data
 
 EXPOSE 8080
 

@@ -1,0 +1,3 @@
+CREATE TABLE crumbs_sources (
+    id TEXT NOT NULL PRIMARY KEY
+) STRICT;

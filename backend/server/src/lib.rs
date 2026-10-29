@@ -43,9 +43,6 @@ pub enum ServerCommand {
 /// Errors produced while starting or running the server.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The tokio runtime could not be created.
-    #[error("failed to create the async runtime: {0}")]
-    Runtime(#[source] io::Error),
     /// A Unix signal handler could not be installed.
     #[error("failed to install a signal handler: {0}")]
     Signal(#[source] io::Error),
@@ -69,27 +66,18 @@ pub enum Error {
 
 /// Runs the HTTP server until a shutdown signal arrives.
 ///
-/// The database handle is owned for the lifetime of the process so request
-/// handling can share it without reconnecting. Port `0` in `config` lets the
+/// The database handle is borrowed for the lifetime of the server so request
+/// handling can share it without reconnecting; the caller keeps ownership and
+/// closes it after this function returns. Port `0` in `config` lets the
 /// operating system choose an available port; the readiness message reports the
 /// actual bound address.
 ///
 /// # Errors
 ///
-/// Returns an error if the tokio runtime or Unix signal handlers cannot be
-/// created, if the listener cannot bind, if its address cannot be read, if the
-/// readiness message cannot be written to standard output, or if the HTTP
-/// server fails.
-pub fn start(database: Database, config: HttpConfig) -> Result<(), Error> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(Error::Runtime)?;
-
-    runtime.block_on(run_until_shutdown(database, config))
-}
-
-async fn run_until_shutdown(database: Database, config: HttpConfig) -> Result<(), Error> {
+/// Returns an error if Unix signal handlers cannot be created, if the listener
+/// cannot bind, if its address cannot be read, if the readiness message cannot
+/// be written to standard output, or if the HTTP server fails.
+pub async fn start(_database: &Database, config: HttpConfig) -> Result<(), Error> {
     // Handlers are installed before bind/readiness so Tokio buffers signals
     // that arrive during startup until the shutdown future is polled.
     let hangup = signal(SignalKind::hangup()).map_err(Error::Signal)?;
@@ -112,9 +100,6 @@ async fn run_until_shutdown(database: Database, config: HttpConfig) -> Result<()
         writeln!(stdout, "Listening on http://{address}").map_err(Error::Output)?;
         stdout.flush().map_err(Error::Output)?;
     }
-
-    // Owned until shutdown so the database handle lives as long as the process.
-    let _database = database;
 
     axum::serve(listener, application)
         .with_graceful_shutdown(shutdown_signal(hangup, interrupt, terminate))

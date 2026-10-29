@@ -3,6 +3,7 @@
 mod common;
 
 use std::error::Error;
+use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 
 use http::HeaderValue;
@@ -46,11 +47,32 @@ fn unknown_route_returns_not_found() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn startup_creates_the_configured_database_file() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let database_path = directory.path().join("nested").join("crumbs.db");
+    let config = format!(
+        "[http]\nport = 0\n\n[database]\npath = \"{}\"\n",
+        database_path.display()
+    );
+
+    let server = ServerProcess::spawn(&config)?;
+
+    assert!(
+        database_path.is_file(),
+        "startup did not create {}",
+        database_path.display()
+    );
+    let response = get(&server, "/")?;
+    assert_eq!(response.status(), HttpStatusCode::OK);
+    Ok(())
+}
+
+#[test]
 fn missing_configuration_file_fails_before_serving() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("missing.toml");
 
-    assert_failed_start(run_server_to_exit(&path)?);
+    assert_failed_start(&run_server_to_exit(&path)?);
     Ok(())
 }
 
@@ -58,7 +80,7 @@ fn missing_configuration_file_fails_before_serving() -> Result<(), Box<dyn Error
 fn malformed_configuration_fails_before_serving() -> Result<(), Box<dyn Error>> {
     let config = temporary_config("[http\nport = 0\n")?;
 
-    assert_failed_start(run_server_to_exit(config.path())?);
+    assert_failed_start(&run_server_to_exit(config.path())?);
     Ok(())
 }
 
@@ -66,13 +88,41 @@ fn malformed_configuration_fails_before_serving() -> Result<(), Box<dyn Error>> 
 fn occupied_port_fails_before_serving() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))?;
     let port = listener.local_addr()?.port();
-    let config = temporary_config(&format!("[http]\nport = {port}\n"))?;
+    let config = temporary_config(&format!(
+        "[http]\nport = {port}\n\n[database]\npath = \"crumbs.db\"\n"
+    ))?;
 
-    assert_failed_start(run_server_to_exit(config.path())?);
+    assert_failed_start(&run_server_to_exit(config.path())?);
     Ok(())
 }
 
-fn assert_failed_start(output: CommandOutput) {
+#[test]
+fn database_initialization_failure_fails_before_serving() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let blocker = directory.path().join("blocker");
+    fs::write(&blocker, b"not a directory")?;
+    let database_path = blocker.join("nested").join("crumbs.db");
+    let config = temporary_config(&format!(
+        "[http]\nport = 0\n\n[database]\npath = \"{}\"\n",
+        database_path.display()
+    ))?;
+
+    let output = run_server_to_exit(config.path())?;
+    assert_failed_start(&output);
+    assert!(
+        output.stderr.contains(&blocker.display().to_string()),
+        "database failure did not name the failing path: {}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("Not a directory"),
+        "database failure did not report the filesystem cause: {}",
+        output.stderr
+    );
+    Ok(())
+}
+
+fn assert_failed_start(output: &CommandOutput) {
     assert!(
         !output.status.success(),
         "expected server startup to fail, got {}",
