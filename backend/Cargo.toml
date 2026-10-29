@@ -13,6 +13,8 @@ clap = { version = "4.6.7", features = ["derive"] }
 config = { version = "0.15.27", default-features = false, features = ["toml"] }
 crumbs-database = { path = "database" }
 crumbs-server = { path = "server" }
+futures-executor = "0.3"
+futures-lite = { version = "2.6", default-features = false, features = ["std"] }
 http = "1"
 nix = { version = "0.31.3", features = ["process", "signal"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -20,7 +22,7 @@ serde_json = "1.0.154"
 sqlx = { version = "0.9.0", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite-bundled"] }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
-tokio = { version = "1.54.1", default-features = false, features = ["fs", "macros", "net", "rt", "signal"] }
+tokio = { version = "1.54.1", default-features = false, features = ["fs", "macros", "net", "rt", "rt-multi-thread", "signal"] }
 
 [workspace.lints.rust]
 warnings = "deny"

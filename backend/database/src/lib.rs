@@ -2,8 +2,7 @@
 //!
 //! [`Database`] owns a small SQLite pool, applies the embedded migrations
 //! before exposing a usable handle, and is passed to the server at startup.
-//! Dropping the handle closes the pool immediately and asks SQLite workers to
-//! close. Worker shutdown is asynchronous and is not awaited by `Drop`.
+//! Dropping the handle blocks until SQLx has returned and closed its connections.
 //!
 //! # Resource settings
 //!
@@ -28,6 +27,7 @@ use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
+use tokio::runtime::{Handle, RuntimeFlavor};
 
 mod config;
 
@@ -35,8 +35,11 @@ pub use config::{DatabaseConfig, DatabasePath};
 
 /// Handle to the application database.
 ///
-/// The handle owns its connection pool. Dropping it closes the pool and starts
-/// best-effort asynchronous cleanup when a Tokio runtime is available.
+/// The handle owns its connection pool and waits for connection shutdown when
+/// dropped. Its originating multi-thread Tokio runtime must outlive it so SQLx
+/// can finish pending connection returns. Database operations run on that runtime.
+/// Connections stay private to this handle; operations must release them before
+/// the owner can be dropped.
 pub struct Database {
     pool: SqlitePool,
 }
@@ -45,13 +48,20 @@ impl Database {
     /// Opens the database at the configured path and applies pending migrations.
     ///
     /// Missing parent directories and the database file are created.
+    /// Opening requires an active multi-thread Tokio runtime.
     ///
     /// # Errors
     ///
-    /// Returns an error when the parent directory cannot be created, SQLite
+    /// Returns an error when the runtime is missing or uses the current-thread
+    /// scheduler, the parent directory cannot be created, SQLite
     /// cannot open the file, or an embedded migration cannot be applied or
     /// validated. No handle is returned on failure.
     pub async fn open(config: DatabaseConfig) -> Result<Self, Error> {
+        let runtime = Handle::try_current().map_err(|_| Error::RuntimeContext)?;
+        if runtime.runtime_flavor() != RuntimeFlavor::MultiThread {
+            return Err(Error::RuntimeContext);
+        }
+
         if let Some(parent) = config
             .path
             .parent()
@@ -104,12 +114,15 @@ impl Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
-        // Pool::close marks the pool closed before returning its async wait future.
-        // Dropping that future skips waiting; schedule the wait when possible.
-        drop(self.pool.close());
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let pool = self.pool.clone();
-            runtime.spawn(async move { pool.close().await });
+        if let Ok(runtime) = Handle::try_current()
+            && runtime.runtime_flavor() == RuntimeFlavor::MultiThread
+        {
+            // Let other Tokio tasks return connections while this thread waits.
+            tokio::task::block_in_place(|| runtime.block_on(self.pool.close()));
+        } else {
+            // SQLite shutdown uses worker channels, so it can also be driven
+            // outside Tokio without nesting another Tokio runtime.
+            futures_lite::future::block_on(self.pool.close());
         }
     }
 }
@@ -123,6 +136,9 @@ impl fmt::Debug for Database {
 /// Errors produced while opening or preparing the database.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// Opening requires an active multi-thread Tokio runtime.
+    #[error("opening the database requires a multi-thread Tokio runtime")]
+    RuntimeContext,
     /// A parent directory for the database file could not be created.
     #[error("failed to create the database directory {}: {source}", path.display())]
     CreateDirectory {

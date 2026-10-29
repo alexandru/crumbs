@@ -65,10 +65,12 @@ fn run_cli(cli: Cli) -> Result<(), Error> {
         Command::Server(ServerArgs { command }) => match command {
             ServerCommand::Start { config } => {
                 let app_config = AppConfig::from_file(config)?;
-                let runtime = tokio::runtime::Builder::new_current_thread()
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
                     .enable_all()
                     .build()
                     .map_err(Error::Runtime)?;
+                // run_server drops the database before block_on returns.
                 runtime.block_on(run_server(app_config))
             }
         },

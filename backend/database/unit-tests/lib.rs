@@ -8,7 +8,7 @@ use sqlx::{SqliteConnection, query, query_scalar};
 
 use super::{Database, DatabaseConfig, Error};
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn open_creates_parents_database_and_migrations() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("nested").join("crumbs.db");
@@ -37,7 +37,7 @@ async fn open_creates_parents_database_and_migrations() -> Result<(), Box<dyn St
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("crumbs.db");
@@ -52,7 +52,6 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
             .fetch_one(&database.pool)
             .await?;
     drop(database);
-    assert_wal_released(&path).await?;
     let reopened = Database::open(config(path)).await?;
     let sources: i64 = query_scalar("SELECT COUNT(*) FROM crumbs_sources")
         .fetch_one(&reopened.pool)
@@ -71,7 +70,48 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
     Ok(())
 }
 
-#[tokio::test]
+#[test]
+fn open_without_runtime_is_rejected_before_filesystem_access() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let parent = directory.path().join("nested");
+    let path = parent.join("crumbs.db");
+
+    let error = match futures_executor::block_on(Database::open(config(path.clone()))) {
+        Ok(_) => return Err(io::Error::other("database opened without a Tokio runtime").into()),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, Error::RuntimeContext));
+    assert!(!parent.exists(), "database directory was created");
+    assert!(!path.exists(), "database file was created");
+    Ok(())
+}
+
+#[test]
+fn open_in_current_thread_runtime_is_rejected_before_filesystem_access()
+-> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let parent = directory.path().join("nested");
+    let path = parent.join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    let error = match runtime.block_on(Database::open(config(path.clone()))) {
+        Ok(_) => {
+            return Err(io::Error::other("database opened in a current-thread runtime").into());
+        }
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, Error::RuntimeContext));
+    assert!(!parent.exists(), "database directory was created");
+    assert!(!path.exists(), "database file was created");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[cfg(target_os = "linux")]
 async fn dropping_database_releases_sqlite_and_preserves_committed_data()
 -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
@@ -82,10 +122,13 @@ async fn dropping_database_releases_sqlite_and_preserves_committed_data()
             .bind("usda")
             .execute(&database.pool)
             .await?;
-        assert!(wal_path(&path).exists(), "write did not create a WAL file");
+        assert!(
+            has_open_sqlite_fds(&path)?,
+            "database has no open file handles"
+        );
     }
 
-    assert_wal_released(&path).await?;
+    assert_sqlite_fds_released(&path)?;
 
     let reopened = Database::open(config(path.clone())).await?;
     let sources: i64 = query_scalar("SELECT COUNT(*) FROM crumbs_sources")
@@ -93,11 +136,12 @@ async fn dropping_database_releases_sqlite_and_preserves_committed_data()
         .await?;
     assert_eq!(sources, 1, "dropping the database lost committed data");
     drop(reopened);
-    assert_wal_released(&path).await?;
+    assert_sqlite_fds_released(&path)?;
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[cfg(target_os = "linux")]
 async fn early_error_return_drops_database_and_releases_sqlite() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("crumbs.db");
@@ -107,31 +151,30 @@ async fn early_error_return_drops_database_and_releases_sqlite() -> Result<(), B
         result.err().map(|error| error.to_string()).as_deref(),
         Some("operation failed after opening database")
     );
-    assert_wal_released(&path).await?;
+    assert_sqlite_fds_released(&path)?;
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[cfg(target_os = "linux")]
 async fn cancelling_operation_drops_database_and_releases_sqlite() -> Result<(), Box<dyn StdError>>
 {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("crumbs.db");
     let (opened_sender, opened_receiver) = tokio::sync::oneshot::channel();
     let task_path = path.clone();
-    let wal_check_path = path.clone();
+    let file_check_path = path.clone();
     let task = tokio::spawn(async move {
         let database = Database::open(config(task_path))
             .await
             .map_err(io::Error::other)?;
+        let mut transaction = database.pool.begin().await.map_err(io::Error::other)?;
         query("INSERT INTO crumbs_sources (id) VALUES (?)")
-            .bind("usda")
-            .execute(&database.pool)
+            .bind("cancelled-transaction")
+            .execute(&mut *transaction)
             .await
             .map_err(io::Error::other)?;
-        assert!(
-            wal_path(&wal_check_path).exists(),
-            "write did not create a WAL file"
-        );
+        assert!(has_open_sqlite_fds(&file_check_path)?);
         let _ = opened_sender.send(());
         std::future::pending::<()>().await;
         Ok::<(), io::Error>(())
@@ -143,15 +186,26 @@ async fn cancelling_operation_drops_database_and_releases_sqlite() -> Result<(),
         Err(error) if error.is_cancelled() => {}
         _ => return Err(io::Error::other("database task was not cancelled").into()),
     }
-    assert_wal_released(&path).await?;
+    assert_sqlite_fds_released(&path)?;
+
+    let reopened = Database::open(config(path.clone())).await?;
+    let sources: i64 =
+        query_scalar("SELECT COUNT(*) FROM crumbs_sources WHERE id = 'cancelled-transaction'")
+            .fetch_one(&reopened.pool)
+            .await?;
+    assert_eq!(sources, 0, "cancelled transaction was committed");
+    drop(reopened);
+    assert_sqlite_fds_released(&path)?;
     Ok(())
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn dropping_database_before_runtime_teardown_releases_sqlite() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("crumbs.db");
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
         .enable_all()
         .build()?;
     runtime.block_on(async {
@@ -160,16 +214,136 @@ fn dropping_database_before_runtime_teardown_releases_sqlite() -> Result<(), Box
             .bind("usda")
             .execute(&database.pool)
             .await?;
-        assert!(wal_path(&path).exists(), "write did not create a WAL file");
+        assert!(
+            has_open_sqlite_fds(&path)?,
+            "database has no open file handles"
+        );
         drop(database);
+        assert_sqlite_fds_released(&path)?;
         Ok::<(), Box<dyn StdError>>(())
     })?;
     drop(runtime);
-    assert_wal_released_blocking(&path)?;
     Ok(())
 }
 
-#[tokio::test]
+#[test]
+#[cfg(target_os = "linux")]
+fn dropping_database_outside_tokio_releases_sqlite() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()?;
+    let database = runtime.block_on(async {
+        let database = Database::open(config(path.clone())).await?;
+        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+            .bind("usda")
+            .execute(&database.pool)
+            .await?;
+        assert!(
+            has_open_sqlite_fds(&path)?,
+            "database has no open file handles"
+        );
+        Ok::<Database, Box<dyn StdError>>(database)
+    })?;
+
+    drop(database);
+    assert_sqlite_fds_released(&path)?;
+    drop(runtime);
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dropping_database_inside_futures_executor_releases_sqlite() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()?;
+    let database = runtime.block_on(async {
+        let database = Database::open(config(path.clone())).await?;
+        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+            .bind("usda")
+            .execute(&database.pool)
+            .await?;
+        assert!(
+            has_open_sqlite_fds(&path)?,
+            "database has no open file handles"
+        );
+        Ok::<Database, Box<dyn StdError>>(database)
+    })?;
+
+    futures_executor::block_on(async { drop(database) });
+    assert_sqlite_fds_released(&path)?;
+    drop(runtime);
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dropping_database_inside_futures_lite_executor_releases_sqlite() -> Result<(), Box<dyn StdError>>
+{
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()?;
+    let database = runtime.block_on(async {
+        let database = Database::open(config(path.clone())).await?;
+        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+            .bind("usda")
+            .execute(&database.pool)
+            .await?;
+        assert!(
+            has_open_sqlite_fds(&path)?,
+            "database has no open file handles"
+        );
+        Ok::<Database, Box<dyn StdError>>(database)
+    })?;
+
+    futures_lite::future::block_on(async { drop(database) });
+    assert_sqlite_fds_released(&path)?;
+    drop(runtime);
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dropping_database_in_current_thread_runtime_releases_sqlite() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()?;
+    let database = runtime.block_on(async {
+        let database = Database::open(config(path.clone())).await?;
+        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+            .bind("usda")
+            .execute(&database.pool)
+            .await?;
+        assert!(
+            has_open_sqlite_fds(&path)?,
+            "database has no open file handles"
+        );
+        Ok::<Database, Box<dyn StdError>>(database)
+    })?;
+    let foreign_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    foreign_runtime.block_on(async move { drop(database) });
+    assert_sqlite_fds_released(&path)?;
+    drop(foreign_runtime);
+    drop(runtime);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn applies_pragmas_and_pool_limits_to_every_connection() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let database = Database::open(config(directory.path().join("crumbs.db"))).await?;
@@ -191,7 +365,7 @@ async fn applies_pragmas_and_pool_limits_to_every_connection() -> Result<(), Box
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn enforces_foreign_keys() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let database = Database::open(config(directory.path().join("crumbs.db"))).await?;
@@ -216,7 +390,7 @@ async fn enforces_foreign_keys() -> Result<(), Box<dyn StdError>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn fts5_is_available_in_the_bundled_sqlite() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let database = Database::open(config(directory.path().join("crumbs.db"))).await?;
@@ -238,7 +412,7 @@ async fn fts5_is_available_in_the_bundled_sqlite() -> Result<(), Box<dyn StdErro
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn migration_checksum_mismatch_is_reported_without_a_handle() -> Result<(), Box<dyn StdError>>
 {
     let directory = tempfile::tempdir()?;
@@ -248,15 +422,21 @@ async fn migration_checksum_mismatch_is_reported_without_a_handle() -> Result<()
     query("UPDATE _sqlx_migrations SET checksum = X'00'")
         .execute(&database.pool)
         .await?;
-    assert!(wal_path(&path).exists(), "write did not create a WAL file");
+    #[cfg(target_os = "linux")]
+    assert!(
+        has_open_sqlite_fds(&path)?,
+        "database has no open file handles"
+    );
     drop(database);
-    assert_wal_released(&path).await?;
+    #[cfg(target_os = "linux")]
+    assert_sqlite_fds_released(&path)?;
     let error = match Database::open(config(path.clone())).await {
         Ok(_) => return Err(io::Error::other("modified migration was accepted").into()),
         Err(error) => error,
     };
 
-    assert_wal_released(&path).await?;
+    #[cfg(target_os = "linux")]
+    assert_sqlite_fds_released(&path)?;
 
     assert!(matches!(error, Error::Migration { .. }));
     assert!(
@@ -266,7 +446,7 @@ async fn migration_checksum_mismatch_is_reported_without_a_handle() -> Result<()
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn invalid_parent_path_reports_the_directory() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let blocker = directory.path().join("blocker");
@@ -286,7 +466,7 @@ async fn invalid_parent_path_reports_the_directory() -> Result<(), Box<dyn StdEr
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn database_path_that_is_a_directory_reports_the_path() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("crumbs.db");
@@ -308,7 +488,7 @@ async fn database_path_that_is_a_directory_reports_the_path() -> Result<(), Box<
 }
 
 #[cfg(unix)]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn unwritable_parent_reports_the_database_path() -> Result<(), Box<dyn StdError>> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -339,7 +519,7 @@ async fn unwritable_parent_reports_the_database_path() -> Result<(), Box<dyn Std
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn debug_does_not_expose_connection_details() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("crumbs.db");
@@ -362,8 +542,9 @@ fn config(path: PathBuf) -> DatabaseConfig {
     DatabaseConfig { path }
 }
 
+#[cfg(target_os = "linux")]
 async fn operation_that_returns_error(path: PathBuf) -> Result<(), io::Error> {
-    let database = Database::open(config(path))
+    let database = Database::open(config(path.clone()))
         .await
         .map_err(io::Error::other)?;
     query("INSERT INTO crumbs_sources (id) VALUES (?)")
@@ -371,34 +552,49 @@ async fn operation_that_returns_error(path: PathBuf) -> Result<(), io::Error> {
         .execute(&database.pool)
         .await
         .map_err(io::Error::other)?;
+    assert!(has_open_sqlite_fds(&path)?);
     Err(io::Error::other("operation failed after opening database"))
 }
 
-async fn assert_wal_released(path: &std::path::Path) -> Result<(), Box<dyn StdError>> {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while wal_path(path).exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+#[cfg(target_os = "linux")]
+fn assert_sqlite_fds_released(path: &std::path::Path) -> Result<(), Box<dyn StdError>> {
+    if has_open_sqlite_fds(path)? {
+        return Err(io::Error::other("SQLite file handles remained after database drop").into());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn has_open_sqlite_fds(path: &std::path::Path) -> io::Result<bool> {
+    let expected = [
+        path.to_path_buf(),
+        sidecar_path(path, "-wal"),
+        sidecar_path(path, "-shm"),
+    ];
+    for entry in fs::read_dir("/proc/self/fd")? {
+        let entry = entry?;
+        let target = match fs::read_link(entry.path()) {
+            Ok(target) => target,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if expected.iter().any(|path| {
+            target == *path
+                || target
+                    .to_str()
+                    .is_some_and(|target| target == format!("{} (deleted)", path.display()))
+        }) {
+            return Ok(true);
         }
-    })
-    .await?;
-    Ok(())
+    }
+    Ok(false)
 }
 
-fn assert_wal_released_blocking(path: &std::path::Path) -> Result<(), Box<dyn StdError>> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while wal_path(path).exists() && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    if wal_path(path).exists() {
-        return Err(io::Error::other("SQLite WAL file remained after database drop").into());
-    }
-    Ok(())
-}
-
-fn wal_path(path: &std::path::Path) -> PathBuf {
-    let mut wal_path = path.as_os_str().to_owned();
-    wal_path.push("-wal");
-    wal_path.into()
+#[cfg(target_os = "linux")]
+fn sidecar_path(path: &std::path::Path, suffix: &str) -> PathBuf {
+    let mut sidecar_path = path.as_os_str().to_owned();
+    sidecar_path.push(suffix);
+    sidecar_path.into()
 }
 
 async fn assert_connection_pragmas(
