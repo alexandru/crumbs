@@ -6,12 +6,15 @@ use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{SqliteConnection, query, query_scalar};
 
+use crate::foods::Source;
 use crate::{Database, DatabaseConfig};
 
 const FOUNDATION_JSON: &str = include_str!("../test-fixtures/foundation.json");
 const BRANDED_JSON: &str = include_str!("../test-fixtures/branded.json");
 const MIGRATION_0001: &str = include_str!("../migrations/0001_create_crumbs_sources.sql");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_create_crumbs_foods.sql");
+type FoodId = i64;
+type SourceFoodId<'a> = &'a str;
 
 #[tokio::test]
 async fn schema_uses_external_content_unicode_tokenizer_and_triggers()
@@ -637,9 +640,9 @@ fn write_input(directory: &Path, name: &str, contents: &str) -> Result<PathBuf, 
 
 async fn insert_food(
     database: &Database,
-    id: i64,
-    source: &str,
-    source_food_id: &str,
+    id: FoodId,
+    source: Source,
+    source_food_id: SourceFoodId<'_>,
     description: &str,
     category: Option<&str>,
     tags: &str,
@@ -666,9 +669,9 @@ async fn insert_food(
 
 async fn food_id(
     database: &Database,
-    source: &str,
-    source_food_id: &str,
-) -> Result<i64, sqlx::Error> {
+    source: Source,
+    source_food_id: SourceFoodId<'_>,
+) -> Result<FoodId, sqlx::Error> {
     query_scalar("SELECT id FROM crumbs_foods WHERE source = ? AND source_food_id = ?")
         .bind(source)
         .bind(source_food_id)
@@ -676,28 +679,28 @@ async fn food_id(
         .await
 }
 
-async fn description(database: &Database, id: i64) -> Result<String, sqlx::Error> {
+async fn description(database: &Database, id: FoodId) -> Result<String, sqlx::Error> {
     query_scalar("SELECT description FROM crumbs_foods WHERE id = ?")
         .bind(id)
         .fetch_one(&database.pool)
         .await
 }
 
-async fn category(database: &Database, id: i64) -> Result<Option<String>, sqlx::Error> {
+async fn category(database: &Database, id: FoodId) -> Result<Option<String>, sqlx::Error> {
     query_scalar("SELECT category FROM crumbs_foods WHERE id = ?")
         .bind(id)
         .fetch_one(&database.pool)
         .await
 }
 
-async fn tags(database: &Database, id: i64) -> Result<String, sqlx::Error> {
+async fn tags(database: &Database, id: FoodId) -> Result<String, sqlx::Error> {
     query_scalar("SELECT tags FROM crumbs_foods WHERE id = ?")
         .bind(id)
         .fetch_one(&database.pool)
         .await
 }
 
-async fn matching_ids(database: &Database, query: &str) -> Result<Vec<i64>, sqlx::Error> {
+async fn matching_ids(database: &Database, query: &str) -> Result<Vec<FoodId>, sqlx::Error> {
     query_scalar(
         "SELECT f.id
          FROM crumbs_foods_fts
@@ -713,7 +716,7 @@ async fn matching_ids(database: &Database, query: &str) -> Result<Vec<i64>, sqlx
 async fn assert_matches(
     database: &Database,
     query: &str,
-    expected: &[i64],
+    expected: &[FoodId],
 ) -> Result<(), Box<dyn StdError>> {
     let actual = matching_ids(database, query).await?;
     assert_eq!(actual, expected, "MATCH {query:?}");
@@ -723,9 +726,9 @@ async fn assert_matches(
 async fn assert_matches_on(
     connection: &mut SqliteConnection,
     query: &str,
-    expected: &[i64],
+    expected: &[FoodId],
 ) -> Result<(), Box<dyn StdError>> {
-    let actual: Vec<i64> = query_scalar(
+    let actual: Vec<FoodId> = query_scalar(
         "SELECT f.id
          FROM crumbs_foods_fts
          JOIN crumbs_foods AS f ON f.id = crumbs_foods_fts.rowid
@@ -751,14 +754,14 @@ async fn migration_count(database: &Database) -> Result<i64, sqlx::Error> {
         .await
 }
 
-async fn indexed_rowid(database: &Database, query: &str) -> Result<Option<i64>, sqlx::Error> {
+async fn indexed_rowid(database: &Database, query: &str) -> Result<Option<FoodId>, sqlx::Error> {
     query_scalar("SELECT rowid FROM crumbs_foods_fts WHERE crumbs_foods_fts MATCH ?")
         .bind(query)
         .fetch_optional(&database.pool)
         .await
 }
 
-async fn indexed_rowid_count(database: &Database, rowid: i64) -> Result<i64, sqlx::Error> {
+async fn indexed_rowid_count(database: &Database, rowid: FoodId) -> Result<i64, sqlx::Error> {
     query_scalar("SELECT COUNT(*) FROM crumbs_foods_fts WHERE rowid = ?")
         .bind(rowid)
         .fetch_one(&database.pool)
