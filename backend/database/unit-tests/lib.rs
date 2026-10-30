@@ -8,6 +8,9 @@ use sqlx::{SqliteConnection, query, query_scalar};
 
 use super::{Database, DatabaseConfig, Error};
 
+#[path = "import_usda_release.rs"]
+mod import_usda_release;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn open_creates_parents_database_and_migrations() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;

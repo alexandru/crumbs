@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use sqlx::{SqlitePool, query, query_as, query_scalar};
+use sqlx::{SqlitePool, query_scalar};
 
 use crate::{Database, DatabaseConfig};
 
@@ -18,21 +18,28 @@ const FOUNDATION_FOOD_COUNT: usize = 424;
 const EXPECTED_SOURCE: &str = "usda";
 const EXPECTED_FOOD_TYPE: &str = "Foundation";
 
+type FoodId = i64;
+type Source = String;
 type SourceFoodId = String;
+type FoodType = String;
+type FoodDescription = String;
+type FoodCategory = String;
+type FoodTags = String;
+type SourceData = String;
 type ReferenceFoods = BTreeMap<SourceFoodId, Value>;
 type TestResult = Result<(), Box<dyn StdError>>;
 
 #[derive(Debug, PartialEq, sqlx::FromRow)]
 struct StoredFood {
     #[sqlx(rename = "id")]
-    local_id: i64,
-    source: String,
-    source_food_id: String,
-    food_type: String,
-    description: String,
-    category: Option<String>,
-    tags: String,
-    source_data: String,
+    local_id: FoodId,
+    source: Source,
+    source_food_id: SourceFoodId,
+    food_type: FoodType,
+    description: FoodDescription,
+    category: Option<FoodCategory>,
+    tags: FoodTags,
+    source_data: SourceData,
 }
 
 #[tokio::test]
@@ -119,7 +126,7 @@ fn load_reference(path: &Path) -> Result<ReferenceFoods, Box<dyn StdError>> {
 }
 
 async fn read_stored(database: &Database) -> Result<Vec<StoredFood>, sqlx::Error> {
-    query_as::<_, StoredFood>(
+    sqlx::query_as::<_, StoredFood>(
         "SELECT id, source, source_food_id, food_type, description, category, tags, source_data
          FROM crumbs_foods
          ORDER BY id",
@@ -192,7 +199,7 @@ async fn verify_fts(pool: &SqlitePool, foods: &[StoredFood]) -> TestResult {
     Ok(())
 }
 
-async fn matching_rowids(pool: &SqlitePool, fts_query: &str) -> Result<Vec<i64>, sqlx::Error> {
+async fn matching_rowids(pool: &SqlitePool, fts_query: &str) -> Result<Vec<FoodId>, sqlx::Error> {
     query_scalar("SELECT rowid FROM crumbs_foods_fts WHERE crumbs_foods_fts MATCH ? ORDER BY rowid")
         .bind(fts_query)
         .fetch_all(pool)
@@ -205,7 +212,9 @@ fn fts_phrase(text: &str) -> String {
 }
 
 async fn verify_foreign_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let violations = query("PRAGMA foreign_key_check").fetch_all(pool).await?;
+    let violations = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(pool)
+        .await?;
     let violation_count = violations.len();
     assert!(
         violations.is_empty(),

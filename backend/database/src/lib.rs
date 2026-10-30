@@ -175,9 +175,5 @@ const STATEMENT_CACHE_CAPACITY: usize = 32;
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[cfg(test)]
-#[path = "../unit-tests/import_usda_release.rs"]
-mod import_usda_release;
-
-#[cfg(test)]
 #[path = "../unit-tests/lib.rs"]
 mod tests;
