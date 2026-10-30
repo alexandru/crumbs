@@ -66,10 +66,8 @@ pub enum Error {
 
 /// Runs the HTTP server until a shutdown signal arrives.
 ///
-/// The database handle is borrowed for the lifetime of the server so request
-/// handling can share it without reconnecting; its owner drops it when the
-/// surrounding scope ends. Port `0` in `config` lets the operating system choose
-/// an available port; the readiness message reports the actual bound address.
+/// Port `0` in `config` lets the operating system choose an available port; the
+/// readiness message reports the actual bound address.
 ///
 /// # Errors
 ///

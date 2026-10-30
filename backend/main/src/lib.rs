@@ -70,7 +70,6 @@ fn run_cli(cli: Cli) -> Result<(), Error> {
                     .enable_all()
                     .build()
                     .map_err(Error::Runtime)?;
-                // run_server drops the database before block_on returns.
                 runtime.block_on(run_server(app_config))
             }
         },

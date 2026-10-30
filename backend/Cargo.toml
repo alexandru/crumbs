@@ -22,7 +22,7 @@ serde_json = "1.0.154"
 sqlx = { version = "0.9.0", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite-bundled"] }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
-tokio = { version = "1.54.1", default-features = false, features = ["fs", "macros", "net", "rt", "rt-multi-thread", "signal"] }
+tokio = { version = "1.54.1", default-features = false, features = ["fs", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 
 [workspace.lints.rust]
 warnings = "deny"

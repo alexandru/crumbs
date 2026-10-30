@@ -11,6 +11,7 @@ Configuration fields and other domain values MUST use semantic types (e.g. `Http
 ## Panics
 
 Rust code MUST NOT panic. Agents MUST NOT use `unwrap`, `expect`, `panic!`, `todo!`, or `unreachable!`.
+Runtime requirements MUST be enforced by the implementation or reported as typed `Result` errors. Unchecked runtime configuration MUST NOT cause panics or unpredictable behavior.
 
 ## Errors
 
@@ -37,3 +38,4 @@ Files MUST start with the most important definitions: public types, their impls,
 ## Comments
 
 Comments MUST explain what the code does not make obvious and MUST NOT restate signatures or logic. Comments explaining non-obvious constructs (e.g., concurrency or lifecycle issues) to a Rust advanced-beginner are encouraged (assume expertise in Scala).
+Public API documentation MUST state concise contracts, observable behavior, and error conditions. Explanations of Rust mechanics for an advanced beginner belong in inline comments, not API documentation.

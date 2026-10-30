@@ -103,42 +103,121 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
 }
 
 #[test]
-fn open_without_runtime_is_rejected_before_filesystem_access() -> Result<(), Box<dyn StdError>> {
+fn open_and_drop_without_runtime_releases_sqlite() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
-    let parent = directory.path().join("nested");
-    let path = parent.join("crumbs.db");
+    let path = directory.path().join("nested").join("crumbs.db");
 
-    let error = match futures_executor::block_on(Database::open(config(path.clone()))) {
-        Ok(_) => return Err(io::Error::other("database opened without a Tokio runtime").into()),
-        Err(error) => error,
-    };
-
-    assert!(matches!(error, Error::RuntimeContext));
-    assert!(!parent.exists(), "database directory was created");
-    assert!(!path.exists(), "database file was created");
+    let database = futures_executor::block_on(Database::open(config(path.clone())))?;
+    assert!(path.is_file(), "database file was not created");
+    drop(database);
+    #[cfg(target_os = "linux")]
+    assert_sqlite_fds_released(&path)?;
     Ok(())
 }
 
 #[test]
-fn open_in_current_thread_runtime_is_rejected_before_filesystem_access()
+fn open_and_drop_in_current_thread_runtime_without_drivers_releases_sqlite()
 -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
-    let parent = directory.path().join("nested");
-    let path = parent.join("crumbs.db");
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
+    let path = directory.path().join("nested").join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+
+    runtime.block_on(async {
+        let database = Database::open(config(path.clone())).await?;
+        assert!(path.is_file(), "database file was not created");
+        drop(database);
+        Ok::<(), Box<dyn StdError>>(())
+    })?;
+    #[cfg(target_os = "linux")]
+    assert_sqlite_fds_released(&path)?;
+    Ok(())
+}
+
+#[test]
+fn open_and_drop_in_multithread_runtime_without_drivers_releases_sqlite()
+-> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("nested").join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
         .build()?;
 
-    let error = match runtime.block_on(Database::open(config(path.clone()))) {
-        Ok(_) => {
-            return Err(io::Error::other("database opened in a current-thread runtime").into());
-        }
-        Err(error) => error,
-    };
+    runtime.block_on(async {
+        let database = Database::open(config(path.clone())).await?;
+        assert!(path.is_file(), "database file was not created");
+        drop(database);
+        Ok::<(), Box<dyn StdError>>(())
+    })?;
+    #[cfg(target_os = "linux")]
+    assert_sqlite_fds_released(&path)?;
+    Ok(())
+}
 
-    assert!(matches!(error, Error::RuntimeContext));
-    assert!(!parent.exists(), "database directory was created");
-    assert!(!path.exists(), "database file was created");
+#[test]
+#[cfg(target_os = "linux")]
+fn open_and_drop_in_local_set_run_until_releases_sqlite() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()?;
+    let local = tokio::task::LocalSet::new();
+
+    runtime.block_on(local.run_until(async {
+        let database = Database::open(config(path.clone())).await?;
+        drop(database);
+        Ok::<(), Box<dyn StdError>>(())
+    }))?;
+    assert_sqlite_fds_released(&path)?;
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn open_and_drop_in_local_set_task_releases_sqlite() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()?;
+    let local = tokio::task::LocalSet::new();
+    let task_path = path.clone();
+    let task = local.spawn_local(async move {
+        let database = Database::open(config(task_path))
+            .await
+            .map_err(io::Error::other)?;
+        drop(database);
+        Ok::<(), io::Error>(())
+    });
+
+    runtime.block_on(local.run_until(async { task.await.map_err(io::Error::other)? }))?;
+    assert_sqlite_fds_released(&path)?;
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn cancelling_open_releases_sqlite_and_allows_reopen() -> Result<(), Box<dyn StdError>> {
+    use std::task::{Context, Poll, Waker};
+
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    {
+        let mut open = std::pin::pin!(Database::open(config(path.clone())));
+        let mut context = Context::from_waker(Waker::noop());
+        match std::future::Future::poll(open.as_mut(), &mut context) {
+            Poll::Pending => {}
+            Poll::Ready(Ok(database)) => drop(database),
+            Poll::Ready(Err(error)) => return Err(error.into()),
+        }
+    }
+
+    assert_sqlite_fds_released(&path)?;
+    let reopened = futures_executor::block_on(Database::open(config(path.clone())))?;
+    drop(reopened);
+    assert_sqlite_fds_released(&path)?;
     Ok(())
 }
 
@@ -200,15 +279,22 @@ async fn cancelling_operation_drops_database_and_releases_sqlite() -> Result<(),
         let database = Database::open(config(task_path))
             .await
             .map_err(io::Error::other)?;
-        let mut transaction = database.pool.begin().await.map_err(io::Error::other)?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
-            .bind("cancelled-transaction")
-            .execute(&mut *transaction)
+        let pool = database.pool.clone();
+        database
+            .run(async move {
+                let mut transaction = pool.begin().await.map_err(io::Error::other)?;
+                query("INSERT INTO crumbs_sources (id) VALUES (?)")
+                    .bind("cancelled-transaction")
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(io::Error::other)?;
+                assert!(has_open_sqlite_fds(&file_check_path)?);
+                let _ = opened_sender.send(());
+                std::future::pending::<()>().await;
+                Ok::<(), io::Error>(())
+            })
             .await
-            .map_err(io::Error::other)?;
-        assert!(has_open_sqlite_fds(&file_check_path)?);
-        let _ = opened_sender.send(());
-        std::future::pending::<()>().await;
+            .map_err(io::Error::other)??;
         Ok::<(), io::Error>(())
     });
 
@@ -255,6 +341,27 @@ fn dropping_database_before_runtime_teardown_releases_sqlite() -> Result<(), Box
         Ok::<(), Box<dyn StdError>>(())
     })?;
     drop(runtime);
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dropping_database_after_caller_runtime_teardown_releases_sqlite() -> Result<(), Box<dyn StdError>>
+{
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .build()?;
+    let database = runtime.block_on(Database::open(config(path.clone())))?;
+
+    assert!(
+        has_open_sqlite_fds(&path)?,
+        "database has no open file handles"
+    );
+    drop(runtime);
+    drop(database);
+    assert_sqlite_fds_released(&path)?;
     Ok(())
 }
 
