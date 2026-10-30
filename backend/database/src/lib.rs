@@ -2,13 +2,13 @@
 //!
 //! [`Database`] owns a small SQLite pool, applies the embedded migrations
 //! before exposing a usable handle, and is passed to the server at startup.
-//! Dropping the handle blocks until SQLx has returned and closed its connections.
+//! Dropping the handle initiates cleanup; [`Database::close`] waits for it.
 
 use std::fmt;
 use std::future::Future;
 use std::io;
 use std::path::PathBuf;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::Duration;
 
 use sqlx::migrate::{MigrateError, Migrator};
@@ -24,12 +24,11 @@ pub use config::{DatabaseConfig, DatabasePath};
 
 /// Handle to the application database.
 ///
-/// Owns its connection pool and execution resources. Dropping the handle waits
-/// for connection shutdown.
+/// Keeps the database open until it is closed or dropped.
 pub struct Database {
     pool: SqlitePool,
     runtime: Handle,
-    worker: Worker,
+    _shutdown: oneshot::Sender<()>,
 }
 
 impl Database {
@@ -46,30 +45,40 @@ impl Database {
         let path = config.path.clone();
         let (ready_sender, ready_receiver) = oneshot::channel();
         let (shutdown_sender, shutdown_receiver) = oneshot::channel();
-        let thread = thread::Builder::new()
+        let _worker = thread::Builder::new()
             .name("crumbs-database".into())
             .spawn(move || run_worker(config, ready_sender, shutdown_receiver))
             .map_err(Error::Worker)?;
-        let worker = Worker {
-            shutdown: Some(shutdown_sender),
-            thread: Some(thread),
-        };
         let (pool, runtime) = ready_receiver.await.map_err(Error::WorkerStopped)??;
         let database = Self {
             pool,
             runtime,
-            worker,
+            _shutdown: shutdown_sender,
         };
         let pool = database.pool.clone();
-        database
+        match database
             .run(async move {
                 MIGRATOR
                     .run(&pool)
                     .await
                     .map_err(|source| Error::Migration { path, source })
             })
-            .await??;
-        Ok(database)
+            .await
+        {
+            Ok(Ok(())) => Ok(database),
+            Ok(Err(error)) | Err(error) => {
+                database.close().await;
+                Err(error)
+            }
+        }
+    }
+
+    /// Waits for connections to close and prevents further database operations.
+    ///
+    /// Repeated and concurrent calls are safe. Dropping the handle afterwards
+    /// does not repeat the shutdown.
+    pub async fn close(&self) {
+        self.pool.close().await;
     }
 
     async fn run<T: Send + 'static>(
@@ -79,15 +88,6 @@ impl Database {
         // Connection acquisition, returns, and cancellation stay on the owned runtime.
         let mut task = Operation(self.runtime.spawn(operation));
         (&mut task.0).await.map_err(Error::Operation)
-    }
-}
-
-impl Drop for Database {
-    fn drop(&mut self) {
-        let pool = self.pool.clone();
-        let close = self.runtime.spawn(async move { pool.close().await });
-        let _ = futures_lite::future::block_on(close);
-        self.worker.shutdown.take();
     }
 }
 
@@ -138,26 +138,11 @@ pub enum Error {
     },
 }
 
-struct Worker {
-    shutdown: Option<oneshot::Sender<()>>,
-    thread: Option<JoinHandle<()>>,
-}
-
 struct Operation<T>(tokio::task::JoinHandle<T>);
 
 impl<T> Drop for Operation<T> {
     fn drop(&mut self) {
         self.0.abort();
-    }
-}
-
-impl Drop for Worker {
-    fn drop(&mut self) {
-        // Closing the channel also covers cancellation while open awaits readiness.
-        self.shutdown.take();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
     }
 }
 
@@ -180,7 +165,10 @@ fn run_worker(
         match open_pool(config).await {
             Ok(pool) => {
                 if ready.send(Ok((pool.clone(), Handle::current()))).is_ok() {
-                    let _ = shutdown.await;
+                    tokio::select! {
+                        _ = shutdown => {},
+                        _ = pool.close_event() => {},
+                    }
                 }
                 pool.close().await;
             }
@@ -209,7 +197,7 @@ async fn open_pool(config: DatabaseConfig) -> Result<SqlitePool, Error> {
         .filename(&config.path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
-        // SQLite FULL synchronizes commits to disk; this is independent of Rust async execution.
+        // FULL synchronizes WAL commits for power-loss durability.
         .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
         .busy_timeout(BUSY_TIMEOUT)
@@ -232,11 +220,14 @@ async fn open_pool(config: DatabaseConfig) -> Result<SqlitePool, Error> {
     Ok(pool)
 }
 
+// SQLite has one writer; the second connection permits a concurrent reader.
 const MAX_CONNECTIONS: u32 = 2;
 const MIN_CONNECTIONS: u32 = 0;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+// Two 2 MiB page caches suggest 4 MiB total, not a ceiling on process RSS.
 const PAGE_CACHE_KIB: &str = "-2048";
+// A checkpoint trigger, not a hard limit on WAL size or checkpoint work.
 const WAL_AUTOCHECKPOINT_PAGES: &str = "1000";
 const STATEMENT_CACHE_CAPACITY: usize = 32;
 

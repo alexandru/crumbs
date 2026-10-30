@@ -33,6 +33,9 @@ async fn open_creates_parents_database_and_migrations() -> Result<(), Box<dyn St
         schema.contains("STRICT"),
         "crumbs_sources was not created as a STRICT table: {schema}"
     );
+    database.close().await;
+    #[cfg(target_os = "linux")]
+    assert_sqlite_fds_released(&path)?;
 
     Ok(())
 }
@@ -58,9 +61,10 @@ fn open_and_drop_with_time_only_runtime_releases_sqlite() -> Result<(), Box<dyn 
             "database has no open file handles"
         );
 
-        drop(database);
+        database.close().await;
         #[cfg(target_os = "linux")]
         assert_sqlite_fds_released(&path)?;
+        drop(database);
 
         Ok::<(), Box<dyn StdError>>(())
     })?;
@@ -83,8 +87,11 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
         query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
             .fetch_one(&database.pool)
             .await?;
+    database.close().await;
+    #[cfg(target_os = "linux")]
+    assert_sqlite_fds_released(&path)?;
     drop(database);
-    let reopened = Database::open(config(path)).await?;
+    let reopened = Database::open(config(path.clone())).await?;
     let sources: i64 = query_scalar("SELECT COUNT(*) FROM crumbs_sources")
         .fetch_one(&reopened.pool)
         .await?;
@@ -98,6 +105,9 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
         applied_after, applied_before,
         "reopening reapplied a completed migration"
     );
+    reopened.close().await;
+    #[cfg(target_os = "linux")]
+    assert_sqlite_fds_released(&path)?;
 
     Ok(())
 }
@@ -107,9 +117,12 @@ fn open_and_drop_without_runtime_releases_sqlite() -> Result<(), Box<dyn StdErro
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("nested").join("crumbs.db");
 
-    let database = futures_executor::block_on(Database::open(config(path.clone())))?;
-    assert!(path.is_file(), "database file was not created");
-    drop(database);
+    futures_executor::block_on(async {
+        let database = Database::open(config(path.clone())).await?;
+        assert!(path.is_file(), "database file was not created");
+        database.close().await;
+        Ok::<(), super::Error>(())
+    })?;
     #[cfg(target_os = "linux")]
     assert_sqlite_fds_released(&path)?;
     Ok(())
@@ -125,6 +138,7 @@ fn open_and_drop_in_current_thread_runtime_without_drivers_releases_sqlite()
     runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
         assert!(path.is_file(), "database file was not created");
+        database.close().await;
         drop(database);
         Ok::<(), Box<dyn StdError>>(())
     })?;
@@ -145,6 +159,7 @@ fn open_and_drop_in_multithread_runtime_without_drivers_releases_sqlite()
     runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
         assert!(path.is_file(), "database file was not created");
+        database.close().await;
         drop(database);
         Ok::<(), Box<dyn StdError>>(())
     })?;
@@ -166,6 +181,7 @@ fn open_and_drop_in_local_set_run_until_releases_sqlite() -> Result<(), Box<dyn 
 
     runtime.block_on(local.run_until(async {
         let database = Database::open(config(path.clone())).await?;
+        database.close().await;
         drop(database);
         Ok::<(), Box<dyn StdError>>(())
     }))?;
@@ -188,6 +204,7 @@ fn open_and_drop_in_local_set_task_releases_sqlite() -> Result<(), Box<dyn StdEr
         let database = Database::open(config(task_path))
             .await
             .map_err(io::Error::other)?;
+        database.close().await;
         drop(database);
         Ok::<(), io::Error>(())
     });
@@ -197,9 +214,60 @@ fn open_and_drop_in_local_set_task_releases_sqlite() -> Result<(), Box<dyn StdEr
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[cfg(target_os = "linux")]
+async fn close_waits_for_checked_out_connections_and_is_idempotent() -> Result<(), Box<dyn StdError>>
+{
+    use std::task::{Context, Poll, Waker};
+
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let database = Database::open(config(path.clone())).await?;
+    let pool = database.pool.clone();
+    let runtime = database.runtime.clone();
+    let connection = database.run(async move { pool.acquire().await }).await??;
+
+    {
+        let mut close = std::pin::pin!(database.close());
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(matches!(
+            std::future::Future::poll(close.as_mut(), &mut context),
+            Poll::Pending
+        ));
+
+        runtime.spawn(async move { drop(connection) }).await?;
+        close.await;
+    }
+    database.close().await;
+    let ((), ()) = tokio::join!(database.close(), database.close());
+    assert_sqlite_fds_released(&path)?;
+    drop(database);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[cfg(target_os = "linux")]
+async fn dropping_database_is_nonblocking_and_worker_closes_pool() -> Result<(), Box<dyn StdError>>
+{
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let database = Database::open(config(path.clone())).await?;
+    let pool = database.pool.clone();
+    let runtime = database.runtime.clone();
+    let connection = database.run(async move { pool.acquire().await }).await??;
+    let pool = database.pool.clone();
+
+    drop(database);
+    pool.close_event().await;
+    runtime.spawn(async move { drop(connection) }).await?;
+    pool.close().await;
+    assert_sqlite_fds_released(&path)?;
+    Ok(())
+}
+
 #[test]
 #[cfg(target_os = "linux")]
-fn cancelling_open_releases_sqlite_and_allows_reopen() -> Result<(), Box<dyn StdError>> {
+fn cancelling_open_allows_reopen() -> Result<(), Box<dyn StdError>> {
     use std::task::{Context, Poll, Waker};
 
     let directory = tempfile::tempdir()?;
@@ -214,10 +282,12 @@ fn cancelling_open_releases_sqlite_and_allows_reopen() -> Result<(), Box<dyn Std
         }
     }
 
-    assert_sqlite_fds_released(&path)?;
-    let reopened = futures_executor::block_on(Database::open(config(path.clone())))?;
-    drop(reopened);
-    assert_sqlite_fds_released(&path)?;
+    let reopened = futures_executor::block_on(async {
+        let database = Database::open(config(path.clone())).await?;
+        database.close().await;
+        Ok::<(), super::Error>(())
+    });
+    reopened?;
     Ok(())
 }
 
@@ -237,8 +307,8 @@ async fn dropping_database_releases_sqlite_and_preserves_committed_data()
             has_open_sqlite_fds(&path)?,
             "database has no open file handles"
         );
+        database.close().await;
     }
-
     assert_sqlite_fds_released(&path)?;
 
     let reopened = Database::open(config(path.clone())).await?;
@@ -246,7 +316,9 @@ async fn dropping_database_releases_sqlite_and_preserves_committed_data()
         .fetch_one(&reopened.pool)
         .await?;
     assert_eq!(sources, 1, "dropping the database lost committed data");
+    reopened.close().await;
     drop(reopened);
+    #[cfg(target_os = "linux")]
     assert_sqlite_fds_released(&path)?;
     Ok(())
 }
@@ -256,13 +328,15 @@ async fn dropping_database_releases_sqlite_and_preserves_committed_data()
 async fn early_error_return_drops_database_and_releases_sqlite() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("crumbs.db");
-    let result = operation_that_returns_error(path.clone()).await;
+    let (pool_sender, pool_receiver) = tokio::sync::oneshot::channel();
+    let result = operation_that_returns_error(path.clone(), pool_sender).await;
 
     assert_eq!(
         result.err().map(|error| error.to_string()).as_deref(),
         Some("operation failed after opening database")
     );
-    assert_sqlite_fds_released(&path)?;
+    let pool = pool_receiver.await?;
+    wait_for_pool_shutdown(&pool, &path).await?;
     Ok(())
 }
 
@@ -273,6 +347,7 @@ async fn cancelling_operation_drops_database_and_releases_sqlite() -> Result<(),
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("crumbs.db");
     let (opened_sender, opened_receiver) = tokio::sync::oneshot::channel();
+    let (pool_sender, pool_receiver) = tokio::sync::oneshot::channel();
     let task_path = path.clone();
     let file_check_path = path.clone();
     let task = tokio::spawn(async move {
@@ -280,6 +355,7 @@ async fn cancelling_operation_drops_database_and_releases_sqlite() -> Result<(),
             .await
             .map_err(io::Error::other)?;
         let pool = database.pool.clone();
+        let _ = pool_sender.send(pool.clone());
         database
             .run(async move {
                 let mut transaction = pool.begin().await.map_err(io::Error::other)?;
@@ -299,12 +375,13 @@ async fn cancelling_operation_drops_database_and_releases_sqlite() -> Result<(),
     });
 
     opened_receiver.await?;
+    let pool = pool_receiver.await?;
     task.abort();
     match task.await {
         Err(error) if error.is_cancelled() => {}
         _ => return Err(io::Error::other("database task was not cancelled").into()),
     }
-    assert_sqlite_fds_released(&path)?;
+    wait_for_pool_shutdown(&pool, &path).await?;
 
     let reopened = Database::open(config(path.clone())).await?;
     let sources: i64 =
@@ -312,7 +389,9 @@ async fn cancelling_operation_drops_database_and_releases_sqlite() -> Result<(),
             .fetch_one(&reopened.pool)
             .await?;
     assert_eq!(sources, 0, "cancelled transaction was committed");
+    reopened.close().await;
     drop(reopened);
+    #[cfg(target_os = "linux")]
     assert_sqlite_fds_released(&path)?;
     Ok(())
 }
@@ -336,8 +415,9 @@ fn dropping_database_before_runtime_teardown_releases_sqlite() -> Result<(), Box
             has_open_sqlite_fds(&path)?,
             "database has no open file handles"
         );
+        let pool = database.pool.clone();
         drop(database);
-        assert_sqlite_fds_released(&path)?;
+        wait_for_pool_shutdown(&pool, &path).await?;
         Ok::<(), Box<dyn StdError>>(())
     })?;
     drop(runtime);
@@ -354,6 +434,7 @@ fn dropping_database_after_caller_runtime_teardown_releases_sqlite() -> Result<(
         .worker_threads(1)
         .build()?;
     let database = runtime.block_on(Database::open(config(path.clone())))?;
+    let pool = database.pool.clone();
 
     assert!(
         has_open_sqlite_fds(&path)?,
@@ -361,7 +442,7 @@ fn dropping_database_after_caller_runtime_teardown_releases_sqlite() -> Result<(
     );
     drop(runtime);
     drop(database);
-    assert_sqlite_fds_released(&path)?;
+    futures_executor::block_on(wait_for_pool_shutdown(&pool, &path))?;
     Ok(())
 }
 
@@ -374,7 +455,7 @@ fn dropping_database_outside_tokio_releases_sqlite() -> Result<(), Box<dyn StdEr
         .worker_threads(1)
         .enable_all()
         .build()?;
-    let database = runtime.block_on(async {
+    let (database, pool) = runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
         query("INSERT INTO crumbs_sources (id) VALUES (?)")
             .bind("usda")
@@ -384,11 +465,12 @@ fn dropping_database_outside_tokio_releases_sqlite() -> Result<(), Box<dyn StdEr
             has_open_sqlite_fds(&path)?,
             "database has no open file handles"
         );
-        Ok::<Database, Box<dyn StdError>>(database)
+        let pool = database.pool.clone();
+        Ok::<(Database, sqlx::SqlitePool), Box<dyn StdError>>((database, pool))
     })?;
 
     drop(database);
-    assert_sqlite_fds_released(&path)?;
+    futures_executor::block_on(wait_for_pool_shutdown(&pool, &path))?;
     drop(runtime);
     Ok(())
 }
@@ -402,7 +484,7 @@ fn dropping_database_inside_futures_executor_releases_sqlite() -> Result<(), Box
         .worker_threads(1)
         .enable_all()
         .build()?;
-    let database = runtime.block_on(async {
+    let (database, pool) = runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
         query("INSERT INTO crumbs_sources (id) VALUES (?)")
             .bind("usda")
@@ -412,11 +494,14 @@ fn dropping_database_inside_futures_executor_releases_sqlite() -> Result<(), Box
             has_open_sqlite_fds(&path)?,
             "database has no open file handles"
         );
-        Ok::<Database, Box<dyn StdError>>(database)
+        let pool = database.pool.clone();
+        Ok::<(Database, sqlx::SqlitePool), Box<dyn StdError>>((database, pool))
     })?;
 
-    futures_executor::block_on(async { drop(database) });
-    assert_sqlite_fds_released(&path)?;
+    futures_executor::block_on(async {
+        drop(database);
+        wait_for_pool_shutdown(&pool, &path).await
+    })?;
     drop(runtime);
     Ok(())
 }
@@ -431,7 +516,7 @@ fn dropping_database_inside_futures_lite_executor_releases_sqlite() -> Result<()
         .worker_threads(1)
         .enable_all()
         .build()?;
-    let database = runtime.block_on(async {
+    let (database, pool) = runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
         query("INSERT INTO crumbs_sources (id) VALUES (?)")
             .bind("usda")
@@ -441,11 +526,14 @@ fn dropping_database_inside_futures_lite_executor_releases_sqlite() -> Result<()
             has_open_sqlite_fds(&path)?,
             "database has no open file handles"
         );
-        Ok::<Database, Box<dyn StdError>>(database)
+        let pool = database.pool.clone();
+        Ok::<(Database, sqlx::SqlitePool), Box<dyn StdError>>((database, pool))
     })?;
 
-    futures_lite::future::block_on(async { drop(database) });
-    assert_sqlite_fds_released(&path)?;
+    futures_lite::future::block_on(async {
+        drop(database);
+        wait_for_pool_shutdown(&pool, &path).await
+    })?;
     drop(runtime);
     Ok(())
 }
@@ -459,7 +547,7 @@ fn dropping_database_in_current_thread_runtime_releases_sqlite() -> Result<(), B
         .worker_threads(1)
         .enable_all()
         .build()?;
-    let database = runtime.block_on(async {
+    let (database, pool) = runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
         query("INSERT INTO crumbs_sources (id) VALUES (?)")
             .bind("usda")
@@ -469,14 +557,17 @@ fn dropping_database_in_current_thread_runtime_releases_sqlite() -> Result<(), B
             has_open_sqlite_fds(&path)?,
             "database has no open file handles"
         );
-        Ok::<Database, Box<dyn StdError>>(database)
+        let pool = database.pool.clone();
+        Ok::<(Database, sqlx::SqlitePool), Box<dyn StdError>>((database, pool))
     })?;
     let foreign_runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
 
-    foreign_runtime.block_on(async move { drop(database) });
-    assert_sqlite_fds_released(&path)?;
+    foreign_runtime.block_on(async {
+        drop(database);
+        wait_for_pool_shutdown(&pool, &path).await
+    })?;
     drop(foreign_runtime);
     drop(runtime);
     Ok(())
@@ -566,9 +657,10 @@ async fn migration_checksum_mismatch_is_reported_without_a_handle() -> Result<()
         has_open_sqlite_fds(&path)?,
         "database has no open file handles"
     );
-    drop(database);
+    database.close().await;
     #[cfg(target_os = "linux")]
     assert_sqlite_fds_released(&path)?;
+    drop(database);
     let error = match Database::open(config(path.clone())).await {
         Ok(_) => return Err(io::Error::other("modified migration was accepted").into()),
         Err(error) => error,
@@ -682,17 +774,33 @@ fn config(path: PathBuf) -> DatabaseConfig {
 }
 
 #[cfg(target_os = "linux")]
-async fn operation_that_returns_error(path: PathBuf) -> Result<(), io::Error> {
+async fn operation_that_returns_error(
+    path: PathBuf,
+    pool_sender: tokio::sync::oneshot::Sender<sqlx::SqlitePool>,
+) -> Result<(), io::Error> {
     let database = Database::open(config(path.clone()))
         .await
         .map_err(io::Error::other)?;
+    let pool = database.pool.clone();
     query("INSERT INTO crumbs_sources (id) VALUES (?)")
         .bind("usda")
         .execute(&database.pool)
         .await
         .map_err(io::Error::other)?;
     assert!(has_open_sqlite_fds(&path)?);
+    let _ = pool_sender.send(pool);
     Err(io::Error::other("operation failed after opening database"))
+}
+
+#[cfg(target_os = "linux")]
+async fn wait_for_pool_shutdown(
+    pool: &sqlx::SqlitePool,
+    path: &std::path::Path,
+) -> Result<(), Box<dyn StdError>> {
+    pool.close_event().await;
+    pool.close().await;
+    assert_sqlite_fds_released(path)?;
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]

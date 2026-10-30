@@ -78,7 +78,9 @@ fn run_cli(cli: Cli) -> Result<(), Error> {
 
 async fn run_server(config: AppConfig) -> Result<(), Error> {
     let database = Database::open(config.database).await?;
-    crumbs_server::start(&database, config.http).await?;
+    let result = crumbs_server::start(&database, config.http).await;
+    database.close().await;
+    result?;
     Ok(())
 }
 
