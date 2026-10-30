@@ -5,18 +5,15 @@
 //! Dropping the handle initiates cleanup; [`Database::close`] waits for it.
 
 use std::fmt;
-use std::future::Future;
 use std::io;
 use std::path::PathBuf;
-use std::thread;
 use std::time::Duration;
 
 use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
-use tokio::runtime::Handle;
-use tokio::sync::oneshot;
+use tokio::runtime::{Handle, TryCurrentError};
 
 mod config;
 
@@ -27,8 +24,6 @@ pub use config::{DatabaseConfig, DatabasePath};
 /// Keeps the database open until it is closed or dropped.
 pub struct Database {
     pool: SqlitePool,
-    runtime: Handle,
-    _shutdown: oneshot::Sender<()>,
 }
 
 impl Database {
@@ -38,39 +33,18 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if execution resources cannot be created, the parent
-    /// directory cannot be created, SQLite cannot open the file, or an embedded
-    /// migration cannot be applied or validated.
+    /// Returns an error if no async runtime is active, the parent directory
+    /// cannot be created, SQLite cannot open the file, or an embedded migration
+    /// cannot be applied or validated.
     pub async fn open(config: DatabaseConfig) -> Result<Self, Error> {
+        Handle::try_current().map_err(Error::RuntimeContext)?;
         let path = config.path.clone();
-        let (ready_sender, ready_receiver) = oneshot::channel();
-        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
-        let _worker = thread::Builder::new()
-            .name("crumbs-database".into())
-            .spawn(move || run_worker(config, ready_sender, shutdown_receiver))
-            .map_err(Error::Worker)?;
-        let (pool, runtime) = ready_receiver.await.map_err(Error::WorkerStopped)??;
-        let database = Self {
-            pool,
-            runtime,
-            _shutdown: shutdown_sender,
-        };
-        let pool = database.pool.clone();
-        match database
-            .run(async move {
-                MIGRATOR
-                    .run(&pool)
-                    .await
-                    .map_err(|source| Error::Migration { path, source })
-            })
-            .await
-        {
-            Ok(Ok(())) => Ok(database),
-            Ok(Err(error)) | Err(error) => {
-                database.close().await;
-                Err(error)
-            }
+        let pool = open_pool(config).await?;
+        if let Err(source) = MIGRATOR.run(&pool).await {
+            pool.close().await;
+            return Err(Error::Migration { path, source });
         }
+        Ok(Self { pool })
     }
 
     /// Waits for connections to close and prevents further database operations.
@@ -79,15 +53,6 @@ impl Database {
     /// does not repeat the shutdown.
     pub async fn close(&self) {
         self.pool.close().await;
-    }
-
-    async fn run<T: Send + 'static>(
-        &self,
-        operation: impl Future<Output = T> + Send + 'static,
-    ) -> Result<T, Error> {
-        // Connection acquisition, returns, and cancellation stay on the owned runtime.
-        let mut task = Operation(self.runtime.spawn(operation));
-        (&mut task.0).await.map_err(Error::Operation)
     }
 }
 
@@ -100,18 +65,9 @@ impl fmt::Debug for Database {
 /// Errors produced while opening or preparing the database.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The database worker thread could not be created.
-    #[error("failed to start the database worker: {0}")]
-    Worker(#[source] io::Error),
-    /// The database runtime could not be created.
-    #[error("failed to create the database runtime: {0}")]
-    Runtime(#[source] io::Error),
-    /// The database worker stopped before reporting its startup result.
-    #[error("database worker stopped during startup: {0}")]
-    WorkerStopped(#[source] oneshot::error::RecvError),
-    /// A database operation stopped before completion.
-    #[error("database operation stopped before completion: {0}")]
-    Operation(#[source] tokio::task::JoinError),
+    /// Database initialization was attempted outside an async runtime.
+    #[error("database initialization requires an async runtime: {0}")]
+    RuntimeContext(#[source] TryCurrentError),
     /// A parent directory for the database file could not be created.
     #[error("failed to create the database directory {}: {source}", path.display())]
     CreateDirectory {
@@ -136,47 +92,6 @@ pub enum Error {
         #[source]
         source: MigrateError,
     },
-}
-
-struct Operation<T>(tokio::task::JoinHandle<T>);
-
-impl<T> Drop for Operation<T> {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-fn run_worker(
-    config: DatabaseConfig,
-    ready: oneshot::Sender<Result<(SqlitePool, Handle), Error>>,
-    shutdown: oneshot::Receiver<()>,
-) {
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            let _ = ready.send(Err(Error::Runtime(error)));
-            return;
-        }
-    };
-    runtime.block_on(async move {
-        match open_pool(config).await {
-            Ok(pool) => {
-                if ready.send(Ok((pool.clone(), Handle::current()))).is_ok() {
-                    tokio::select! {
-                        _ = shutdown => {},
-                        _ = pool.close_event() => {},
-                    }
-                }
-                pool.close().await;
-            }
-            Err(error) => {
-                let _ = ready.send(Err(error));
-            }
-        }
-    });
 }
 
 async fn open_pool(config: DatabaseConfig) -> Result<SqlitePool, Error> {

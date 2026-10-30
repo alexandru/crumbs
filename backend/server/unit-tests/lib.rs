@@ -3,6 +3,7 @@ use std::path::Path;
 use super::{ServerArgs, ServerCommand};
 use axum::Json;
 use clap::Parser;
+use crumbs_database::{Database, DatabaseConfig};
 
 #[derive(Debug, Parser)]
 struct TestCli {
@@ -42,6 +43,24 @@ fn rejects_server_start_without_config() {
 #[test]
 fn rejects_unknown_server_operation() {
     assert!(TestCli::try_parse_from(["crumbs", "server", "stop"]).is_err());
+}
+
+#[test]
+fn start_without_runtime_returns_runtime_context_error() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let database = runtime.block_on(Database::open(DatabaseConfig { path }))?;
+
+    let result = futures_executor::block_on(super::start(&database, super::HttpConfig { port: 0 }));
+    assert!(matches!(result, Err(super::Error::RuntimeContext(_))));
+
+    runtime.block_on(database.close());
+    drop(database);
+    drop(runtime);
+    Ok(())
 }
 
 #[tokio::test]
