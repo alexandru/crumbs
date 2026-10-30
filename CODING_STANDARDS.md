@@ -11,11 +11,14 @@ Configuration fields and other domain values MUST use semantic types (e.g. `Http
 ## Panics
 
 Rust code MUST NOT panic. Agents MUST NOT use `unwrap`, `expect`, `panic!`, `todo!`, or `unreachable!`.
-Async subsystems SHOULD share the application's runtime. The composition root MUST enable the drivers required by its subsystems and propagate runtime-creation failures as typed `Result` errors. Subsystem APIs MAY assume this configured application context, but MUST report a missing runtime through typed errors. Supporting arbitrary externally configured runtimes requires a separate explicit requirement.
 
 ## Errors
 
 Fallible operations MUST return `Result` and use `?` to propagate errors.
+
+## Async runtime
+
+Async subsystems SHOULD share the application's runtime. The composition root MUST enable the drivers required by its subsystems and propagate runtime-creation failures as typed `Result` errors. Subsystem APIs MAY assume this configured application context, but MUST report a missing runtime through typed errors. Supporting arbitrary externally configured runtimes requires a separate explicit requirement.
 
 ## Imports
 
