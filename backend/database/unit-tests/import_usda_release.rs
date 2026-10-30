@@ -7,9 +7,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use sqlx::{SqlitePool, query_scalar};
+use sqlx::{SqlitePool, query, query_scalar};
 
-use crate::{Database, DatabaseConfig};
+use crate::{Database, DatabaseConfig, FoodStore, TagName};
 
 const RELEASE_JSON_ENV: &str = "USDA_FOUNDATION_JSON";
 const ENV_HELP: &str = "USDA_FOUNDATION_JSON must point at the official 2026-10-29 Foundation JSON";
@@ -56,8 +56,21 @@ async fn imports_full_october_2026_foundation_release_idempotently() -> TestResu
 
     let first_report = database.import_usda(json_path.as_path()).await?;
     assert_eq!(first_report.committed().get(), 424, "first import count");
-    let first = read_stored(&database).await?;
+    let mut first = read_stored(&database).await?;
     verify_reference(&first, &reference)?;
+    let reviewed_tag = TagName::new("Reviewed")?;
+    let (reviewed_food_id, reviewed_food_local_id) = match first.first_mut() {
+        Some(food) => {
+            food.tags = reviewed_tag.as_str().to_owned();
+            (crate::FoodId(food.local_id), food.local_id)
+        }
+        None => return Err(invalid_data("first import returned no foods")),
+    };
+    database
+        .set_food_tags(reviewed_food_id, std::slice::from_ref(&reviewed_tag))
+        .await?;
+    let tag_matches = matching_rowids(&database.pool, "tags:reviewed").await?;
+    assert_eq!(tag_matches, vec![reviewed_food_local_id], "FTS tag");
     verify_fts(&database.pool, &first).await?;
     verify_foreign_keys(&database.pool).await?;
     database.close().await;
@@ -71,6 +84,13 @@ async fn imports_full_october_2026_foundation_release_idempotently() -> TestResu
     let second = read_stored(&reopened).await?;
     assert_eq!(first, second, "reimport changed stored foods");
     verify_fts(&reopened.pool, &second).await?;
+    let case_insensitive_tag = TagName::new("rEVIEWED")?;
+    let tagged_foods = reopened.foods_with_tag(&case_insensitive_tag).await?;
+    assert_eq!(tagged_foods.len(), 1, "persisted tag lookup");
+    let tagged_food = tagged_foods
+        .first()
+        .ok_or_else(|| invalid_data("reopened tag lookup returned no foods"))?;
+    assert_eq!(tagged_food.id, reviewed_food_id, "reopened tag food id");
     verify_foreign_keys(&reopened.pool).await?;
     let applied_reimport = applied_migrations(&reopened.pool).await?;
     assert_eq!(applied_reimport, applied_before, "reimport migrations");
@@ -127,9 +147,11 @@ fn load_reference(path: &Path) -> Result<ReferenceFoods, Box<dyn StdError>> {
 
 async fn read_stored(database: &Database) -> Result<Vec<StoredFood>, sqlx::Error> {
     sqlx::query_as::<_, StoredFood>(
-        "SELECT id, source, source_food_id, food_type, description, category, tags, source_data
-         FROM crumbs_foods
-         ORDER BY id",
+        "SELECT f.id, f.source, f.source_food_id, f.food_type, f.description, f.category,
+                s.tags AS tags, f.source_data
+         FROM crumbs_foods AS f
+         JOIN crumbs_foods_search_content AS s ON s.id = f.id
+         ORDER BY f.id",
     )
     .fetch_all(&database.pool)
     .await
@@ -196,6 +218,15 @@ async fn verify_fts(pool: &SqlitePool, foods: &[StoredFood]) -> TestResult {
             );
         }
     }
+    query("INSERT INTO crumbs_foods_fts (crumbs_foods_fts) VALUES ('integrity-check')")
+        .execute(pool)
+        .await?;
+    query(
+        "INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rank)
+         VALUES ('integrity-check', 1)",
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
