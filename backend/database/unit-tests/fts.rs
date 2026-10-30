@@ -6,14 +6,14 @@ use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{SqliteConnection, query, query_scalar};
 
-use crate::foods::Source;
-use crate::{Database, DatabaseConfig};
+use crate::{Database, DatabaseConfig, FoodStore, TagName};
 
 const FOUNDATION_JSON: &str = include_str!("../test-fixtures/foundation.json");
 const BRANDED_JSON: &str = include_str!("../test-fixtures/branded.json");
 const MIGRATION_0001: &str = include_str!("../migrations/0001_create_crumbs_sources.sql");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_create_crumbs_foods.sql");
 type FoodId = i64;
+type Source<'a> = &'a str;
 type SourceFoodId<'a> = &'a str;
 
 #[tokio::test]
@@ -24,25 +24,13 @@ async fn schema_uses_external_content_unicode_tokenizer_and_triggers()
     let sql: String = query_scalar("SELECT sql FROM sqlite_master WHERE name = 'crumbs_foods_fts'")
         .fetch_one(&database.pool)
         .await?;
-    assert!(sql.contains("content = 'crumbs_foods'"), "{sql}");
+    assert!(
+        sql.contains("content = 'crumbs_foods_search_content'"),
+        "{sql}"
+    );
     assert!(sql.contains("content_rowid = 'id'"), "{sql}");
     assert!(sql.contains("remove_diacritics 2"), "{sql}");
 
-    let triggers: Vec<String> = query_scalar(
-        "SELECT name FROM sqlite_master
-         WHERE type = 'trigger' AND name LIKE 'crumbs_foods_fts_after_%'
-         ORDER BY name",
-    )
-    .fetch_all(&database.pool)
-    .await?;
-    assert_eq!(
-        triggers,
-        vec![
-            "crumbs_foods_fts_after_delete",
-            "crumbs_foods_fts_after_insert",
-            "crumbs_foods_fts_after_update",
-        ]
-    );
     assert_eq!(fts_row_count(&database).await?, 0);
     assert_fts_integrity(&database).await?;
     Ok(())
@@ -315,6 +303,11 @@ async fn reimport_replaces_stale_terms_without_duplicate_hits() -> Result<(), Bo
     let foundation = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
     database.import_usda(&foundation).await?;
     let id = food_id(&database, "usda", "321358").await?;
+    let favorite = TagName::new("favorite")?;
+    database
+        .set_food_tags(crate::FoodId(id), &[favorite])
+        .await?;
+    assert_matches(&database, "tags:favorite", &[id]).await?;
 
     let updated = write_input(
         directory.path(),
@@ -330,12 +323,14 @@ async fn reimport_replaces_stale_terms_without_duplicate_hits() -> Result<(), Bo
     }
     assert_matches(&database, "chickpea", &[id]).await?;
     assert_matches(&database, "spreads", &[id]).await?;
+    assert_matches(&database, "tags:favorite", &[id]).await?;
     assert_eq!(fts_row_count(&database).await?, 2);
 
     for _ in 0..3 {
         database.import_usda(&updated).await?;
     }
     assert_matches(&database, "chickpea", &[id]).await?;
+    assert_matches(&database, "tags:favorite", &[id]).await?;
     assert_eq!(fts_row_count(&database).await?, 2);
     assert_fts_integrity(&database).await?;
     Ok(())
@@ -360,11 +355,13 @@ async fn updates_clear_null_categories_tags_and_keep_unchanged_rows_stable()
 
     query(
         "UPDATE crumbs_foods
-         SET description = 'Changed food', category = 'Newcat', tags = 'newtag'
+         SET description = 'Changed food', category = 'Newcat'
          WHERE id = 1",
     )
     .execute(&database.pool)
     .await?;
+    let new_tag = TagName::new("newtag")?;
+    database.set_food_tags(crate::FoodId(1), &[new_tag]).await?;
     assert_matches(&database, "mutable", &[]).await?;
     assert_matches(&database, "oldcat", &[]).await?;
     assert_matches(&database, "oldtag", &[]).await?;
@@ -372,16 +369,17 @@ async fn updates_clear_null_categories_tags_and_keep_unchanged_rows_stable()
     assert_matches(&database, "newcat", &[1]).await?;
     assert_matches(&database, "newtag", &[1]).await?;
 
-    query("UPDATE crumbs_foods SET category = NULL, tags = '' WHERE id = 1")
+    query("UPDATE crumbs_foods SET category = NULL WHERE id = 1")
         .execute(&database.pool)
         .await?;
+    database.set_food_tags(crate::FoodId(1), &[]).await?;
     assert_matches(&database, "newcat", &[]).await?;
     assert_matches(&database, "newtag", &[]).await?;
     assert_matches(&database, "changed", &[1]).await?;
     assert_eq!(category(&database, 1).await?, None);
     assert_eq!(tags(&database, 1).await?, "");
 
-    query("UPDATE crumbs_foods SET description = 'Changed food', category = NULL, tags = '' WHERE id = 1")
+    query("UPDATE crumbs_foods SET description = 'Changed food', category = NULL WHERE id = 1")
         .execute(&database.pool)
         .await?;
     assert_matches(&database, "changed", &[1]).await?;
@@ -420,14 +418,171 @@ async fn cross_source_foods_are_independently_indexed() -> Result<(), Box<dyn St
 
     query(
         "UPDATE crumbs_foods
-         SET description = 'Changed Other', category = 'Other Changed', tags = 'changedtag'
+         SET description = 'Changed Other', category = 'Other Changed'
          WHERE source = 'other' AND id = 2",
     )
     .execute(&database.pool)
     .await?;
+    let changed_tag = TagName::new("changedtag")?;
+    database
+        .set_food_tags(crate::FoodId(2), &[changed_tag])
+        .await?;
     assert_matches(&database, "shared", &[1]).await?;
+    assert_matches(&database, "othertag", &[]).await?;
     assert_matches(&database, "changed", &[2]).await?;
+    assert_matches(&database, "tags:changedtag", &[2]).await?;
     assert_eq!(description(&database, 1).await?, "Shared Orchard Apple");
+    assert_fts_integrity(&database).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_tagging_and_replacement_update_the_index() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    insert_food(&database, 1, "community", "tagged", "Tagged food", None, "").await?;
+
+    let vegan = TagName::new("Vegan")?;
+    let lowercase_vegan = TagName::new("vegan")?;
+    database
+        .set_food_tags(crate::FoodId(1), &[vegan, lowercase_vegan])
+        .await?;
+    assert_matches(&database, "tags:vegan", &[1]).await?;
+    assert_fts_integrity(&database).await?;
+
+    let regional = TagName::new("regional")?;
+    database
+        .set_food_tags(crate::FoodId(1), &[regional])
+        .await?;
+    assert_matches(&database, "tags:vegan", &[]).await?;
+    assert_matches(&database, "tags:regional", &[1]).await?;
+    assert_fts_integrity(&database).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn renaming_a_shared_tag_reindexes_each_assigned_food() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    insert_food(
+        &database,
+        1,
+        "community",
+        "shared-one",
+        "First shared food",
+        None,
+        "",
+    )
+    .await?;
+    insert_food(
+        &database,
+        2,
+        "community",
+        "shared-two",
+        "Second shared food",
+        None,
+        "",
+    )
+    .await?;
+    let shared = TagName::new("sharedtag")?;
+    database
+        .set_food_tags(crate::FoodId(1), std::slice::from_ref(&shared))
+        .await?;
+    database.set_food_tags(crate::FoodId(2), &[shared]).await?;
+    assert_matches(&database, "tags:sharedtag", &[1, 2]).await?;
+
+    let id = tag_id(&database, "sharedtag").await?;
+    query("UPDATE crumbs_tags SET name = ?, name_key = ? WHERE id = ?")
+        .bind("renamedtag")
+        .bind("renamedtag")
+        .bind(id)
+        .execute(&database.pool)
+        .await?;
+
+    assert_matches(&database, "tags:sharedtag", &[]).await?;
+    assert_matches(&database, "tags:renamedtag", &[1, 2]).await?;
+    assert_fts_integrity(&database).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn deleting_a_tag_removes_its_terms_and_keeps_other_tags() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    insert_food(
+        &database,
+        1,
+        "community",
+        "tag-delete",
+        "Tagged food",
+        None,
+        "",
+    )
+    .await?;
+    let obsolete = TagName::new("obsolete")?;
+    let retained = TagName::new("retained")?;
+    database
+        .set_food_tags(crate::FoodId(1), &[obsolete, retained])
+        .await?;
+    assert_matches(&database, "tags:obsolete", &[1]).await?;
+    assert_matches(&database, "tags:retained", &[1]).await?;
+
+    let id = tag_id(&database, "obsolete").await?;
+    query("DELETE FROM crumbs_tags WHERE id = ?")
+        .bind(id)
+        .execute(&database.pool)
+        .await?;
+
+    assert_matches(&database, "tags:obsolete", &[]).await?;
+    assert_matches(&database, "tags:retained", &[1]).await?;
+    assert_eq!(fts_row_count(&database).await?, 1);
+    assert_fts_integrity(&database).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn moving_a_tag_assignment_reindexes_both_foods() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    insert_food(
+        &database,
+        1,
+        "community",
+        "move-one",
+        "First food",
+        None,
+        "",
+    )
+    .await?;
+    insert_food(
+        &database,
+        2,
+        "community",
+        "move-two",
+        "Second food",
+        None,
+        "",
+    )
+    .await?;
+    let moving = TagName::new("move")?;
+    let first_only = TagName::new("firstonly")?;
+    let second_only = TagName::new("secondonly")?;
+    database
+        .set_food_tags(crate::FoodId(1), &[moving.clone(), first_only.clone()])
+        .await?;
+    database
+        .set_food_tags(crate::FoodId(2), std::slice::from_ref(&second_only))
+        .await?;
+    assert_matches(&database, "tags:move", &[1]).await?;
+
+    let id = tag_id(&database, "move").await?;
+    query(
+        "UPDATE crumbs_food_tags SET food_id = 2
+         WHERE food_id = 1 AND tag_id = ?",
+    )
+    .bind(id)
+    .execute(&database.pool)
+    .await?;
+
+    assert_matches(&database, "tags:move", &[2]).await?;
+    assert_matches(&database, "tags:firstonly", &[1]).await?;
+    assert_matches(&database, "tags:secondonly", &[2]).await?;
     assert_fts_integrity(&database).await?;
     Ok(())
 }
@@ -461,18 +616,29 @@ async fn direct_rowid_update_and_delete_keep_index_consistent() -> Result<(), Bo
         .await?;
     assert_matches(&database, "alpha", &[20]).await?;
     assert_matches(&database, "keep", &[1]).await?;
+    assert_matches(&database, "tags:tag", &[20]).await?;
     assert_eq!(indexed_rowid(&database, "alpha").await?, Some(20));
     assert_eq!(indexed_rowid_count(&database, 2).await?, 0);
 
+    let tag = tag_id(&database, "tag").await?;
+    query("UPDATE crumbs_tags SET id = 100 WHERE id = ?")
+        .bind(tag)
+        .execute(&database.pool)
+        .await?;
+    assert_matches(&database, "tags:tag", &[20]).await?;
+
     query(
         "UPDATE crumbs_foods
-         SET id = 30, description = 'Direct beta', category = NULL, tags = 'tag2'
+         SET id = 30, description = 'Direct beta', category = NULL
          WHERE id = 20",
     )
     .execute(&database.pool)
     .await?;
+    let tag2 = TagName::new("tag2")?;
+    database.set_food_tags(crate::FoodId(30), &[tag2]).await?;
     assert_matches(&database, "alpha", &[]).await?;
     assert_matches(&database, "beta", &[30]).await?;
+    assert_matches(&database, "tags:tag", &[]).await?;
     assert_matches(&database, "tag2", &[30]).await?;
     assert_eq!(indexed_rowid_count(&database, 20).await?, 0);
 
@@ -500,34 +666,83 @@ async fn transaction_rollback_restores_food_and_index() -> Result<(), Box<dyn St
         "keep",
     )
     .await?;
+    insert_food(
+        &database,
+        2,
+        "usda",
+        "other-tagged",
+        "Other committed food",
+        Some("Other"),
+        "retained",
+    )
+    .await?;
 
     let mut update = database.pool.begin().await?;
     query(
         "UPDATE crumbs_foods
-         SET description = 'Temporary update', category = 'Temp', tags = 'temp'
+         SET description = 'Temporary update', category = 'Temp'
          WHERE id = 1",
+    )
+    .execute(&mut *update)
+    .await?;
+    query(
+        "DELETE FROM crumbs_food_tags
+         WHERE food_id = 1
+           AND tag_id = (SELECT id FROM crumbs_tags WHERE name_key = 'keep')",
+    )
+    .execute(&mut *update)
+    .await?;
+    query("INSERT INTO crumbs_tags (name, name_key) VALUES ('temp', 'temp')")
+        .execute(&mut *update)
+        .await?;
+    query(
+        "INSERT INTO crumbs_food_tags (food_id, tag_id)
+         SELECT 1, id FROM crumbs_tags WHERE name_key = 'temp'",
     )
     .execute(&mut *update)
     .await?;
     assert_matches_on(&mut update, "temporary", &[1]).await?;
     assert_matches_on(&mut update, "baseline", &[]).await?;
+    assert_matches_on(&mut update, "tags:temp", &[1]).await?;
+    assert_matches_on(&mut update, "tags:keep", &[]).await?;
     update.rollback().await?;
     assert_matches(&database, "temporary", &[]).await?;
     assert_matches(&database, "baseline", &[1]).await?;
+    assert_matches(&database, "tags:temp", &[]).await?;
+    assert_matches(&database, "tags:keep", &[1]).await?;
     assert_eq!(description(&database, 1).await?, "Committed baseline");
+    assert_fts_integrity(&database).await?;
+
+    let keep_tag_id = tag_id(&database, "keep").await?;
+    let mut tag_update = database.pool.begin().await?;
+    query("UPDATE crumbs_tags SET name = 'renamed', name_key = 'renamed' WHERE id = ?")
+        .bind(keep_tag_id)
+        .execute(&mut *tag_update)
+        .await?;
+    query("UPDATE crumbs_food_tags SET food_id = 2 WHERE food_id = 1 AND tag_id = ?")
+        .bind(keep_tag_id)
+        .execute(&mut *tag_update)
+        .await?;
+    assert_matches_on(&mut tag_update, "tags:keep", &[]).await?;
+    assert_matches_on(&mut tag_update, "tags:renamed", &[2]).await?;
+    tag_update.rollback().await?;
+    assert_matches(&database, "tags:keep", &[1]).await?;
+    assert_matches(&database, "tags:renamed", &[]).await?;
+    assert_matches(&database, "tags:retained", &[2]).await?;
+    assert_fts_integrity(&database).await?;
 
     let mut insert = database.pool.begin().await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, tags, source_data)
-         VALUES (2, 'usda', 'rolled-insert', 'Foundation', 'Rolled back insert', NULL, '', '{}')",
+            (id, source, source_food_id, food_type, description, category, source_data)
+         VALUES (3, 'usda', 'rolled-insert', 'Foundation', 'Rolled back insert', NULL, '{}')",
     )
     .execute(&mut *insert)
     .await?;
-    assert_matches_on(&mut insert, "rolled", &[2]).await?;
+    assert_matches_on(&mut insert, "rolled", &[3]).await?;
     insert.rollback().await?;
     assert_matches(&database, "rolled", &[]).await?;
-    assert_eq!(fts_row_count(&database).await?, 1);
+    assert_eq!(fts_row_count(&database).await?, 2);
     assert_fts_integrity(&database).await?;
     Ok(())
 }
@@ -586,12 +801,28 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         .foreign_keys(true);
     let pool = SqlitePool::connect_with(options).await?;
     migrator.run(&pool).await?;
+    query("INSERT INTO crumbs_sources (id) VALUES ('usda')")
+        .execute(&pool)
+        .await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, tags, source_data)
+            (id, source, source_food_id, food_type, description, category, source_data)
          VALUES
-            (1, 'usda', 'old-1', 'Foundation', 'Roșii coapte', 'Legume', 'roșu', '{}'),
-            (2, 'usda', 'old-2', 'Foundation', 'Cheddar Cheese', 'Dairy', 'sharp', '{}')",
+            (1, 'usda', 'old-1', 'Foundation', 'Roșii coapte', 'Legume', '{}'),
+            (2, 'usda', 'old-2', 'Foundation', 'Cheddar Cheese', 'Dairy', '{}')",
+    )
+    .execute(&pool)
+    .await?;
+    query(
+        "INSERT INTO crumbs_tags (id, name, name_key)
+         VALUES (1, 'roșu', ?), (2, 'sharp', 'sharp')",
+    )
+    .bind("ros\u{0326}u")
+    .execute(&pool)
+    .await?;
+    query(
+        "INSERT INTO crumbs_food_tags (food_id, tag_id)
+         VALUES (1, 1), (2, 2)",
     )
     .execute(&pool)
     .await?;
@@ -641,7 +872,7 @@ fn write_input(directory: &Path, name: &str, contents: &str) -> Result<PathBuf, 
 async fn insert_food(
     database: &Database,
     id: FoodId,
-    source: Source,
+    source: Source<'_>,
     source_food_id: SourceFoodId<'_>,
     description: &str,
     category: Option<&str>,
@@ -653,23 +884,26 @@ async fn insert_food(
         .await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, tags, source_data)
-         VALUES (?, ?, ?, 'Foundation', ?, ?, ?, '{}')",
+            (id, source, source_food_id, food_type, description, category, source_data)
+         VALUES (?, ?, ?, 'Foundation', ?, ?, '{}')",
     )
     .bind(id)
     .bind(source)
     .bind(source_food_id)
     .bind(description)
     .bind(category)
-    .bind(tags)
     .execute(&database.pool)
     .await?;
+    if !tags.is_empty() {
+        let tag = TagName::new(tags)?;
+        database.set_food_tags(crate::FoodId(id), &[tag]).await?;
+    }
     Ok(())
 }
 
 async fn food_id(
     database: &Database,
-    source: Source,
+    source: Source<'_>,
     source_food_id: SourceFoodId<'_>,
 ) -> Result<FoodId, sqlx::Error> {
     query_scalar("SELECT id FROM crumbs_foods WHERE source = ? AND source_food_id = ?")
@@ -694,8 +928,15 @@ async fn category(database: &Database, id: FoodId) -> Result<Option<String>, sql
 }
 
 async fn tags(database: &Database, id: FoodId) -> Result<String, sqlx::Error> {
-    query_scalar("SELECT tags FROM crumbs_foods WHERE id = ?")
+    query_scalar("SELECT tags FROM crumbs_foods_search_content WHERE id = ?")
         .bind(id)
+        .fetch_one(&database.pool)
+        .await
+}
+
+async fn tag_id(database: &Database, name_key: &str) -> Result<i64, sqlx::Error> {
+    query_scalar("SELECT id FROM crumbs_tags WHERE name_key = ?")
+        .bind(name_key)
         .fetch_one(&database.pool)
         .await
 }

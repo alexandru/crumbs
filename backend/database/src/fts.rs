@@ -1,16 +1,17 @@
-//! Full-text index invariants for `crumbs_foods`.
+//! Full-text index invariants for food metadata and normalized tag names.
 //!
-//! `crumbs_foods_fts` is an external-content FTS5 table over `crumbs_foods`.
-//! It stores token terms, not a duplicate copy of each food row; display text
-//! remains in `crumbs_foods`. `content_rowid` is `crumbs_foods.id`, and the
-//! insert, delete, and changed-field update triggers keep the index row in sync
-//! with the food row in the same transaction.
+//! `crumbs_foods_fts` is an external-content FTS5 table over
+//! `crumbs_foods_search_content`, a view projecting food description, category,
+//! and ordered tag names from `crumbs_tags` and `crumbs_food_tags`. Source data
+//! and display values remain in their normalized tables; FTS stores token terms.
+//! `content_rowid` is the view's food `id`.
 //!
-//! The update trigger compares `id`, `description`, `category`, and `tags` with
-//! `IS NOT` so unchanged upserts do not rewrite index entries. The tokenizer is
-//! `unicode61 remove_diacritics 2`: it folds case and Latin diacritics, but it
-//! does not stem, translate, or treat different letters such as `â` and `î` as
-//! interchangeable.
+//! Food triggers reindex changed `id`, `description`, or `category` values.
+//! Assignment and tag triggers reindex documents when tag membership or names
+//! change. `IS NOT` comparisons avoid rewriting unchanged metadata. The
+//! tokenizer is `unicode61 remove_diacritics 2`: it folds case and Latin
+//! diacritics, but it does not stem, translate, or treat different letters
+//! such as `â` and `î` as interchangeable.
 
 #[cfg(test)]
 #[path = "../unit-tests/fts.rs"]
