@@ -1,2 +1,5 @@
 [http]
 port = 8080
+
+[database]
+path = "data/crumbs.db"

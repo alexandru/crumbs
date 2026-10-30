@@ -13,7 +13,9 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+futures-executor.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

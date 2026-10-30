@@ -4,6 +4,8 @@
 //! Server-owned argument types are composed into this hierarchy, keeping server
 //! options close to their implementation.
 
+use std::io;
+
 use ::config::ConfigError;
 use clap::{Parser, Subcommand};
 use crumbs_database::Database;
@@ -35,6 +37,12 @@ pub enum Error {
     /// The application configuration could not be loaded.
     #[error("failed to load configuration: {0}")]
     Config(#[from] ConfigError),
+    /// The async runtime could not be created.
+    #[error("failed to create the async runtime: {0}")]
+    Runtime(#[source] io::Error),
+    /// The database could not be opened or migrated.
+    #[error(transparent)]
+    Database(#[from] crumbs_database::Error),
     /// The server failed to start or run.
     #[error(transparent)]
     Server(#[from] crumbs_server::Error),
@@ -44,7 +52,8 @@ pub enum Error {
 ///
 /// # Errors
 ///
-/// Returns an error if the configuration cannot be loaded or server startup
+/// Returns an error if the configuration cannot be loaded, the runtime cannot
+/// be created, the database cannot be opened or migrated, or server startup
 /// fails.
 pub fn run() -> Result<(), Error> {
     let cli = Cli::parse();
@@ -55,12 +64,24 @@ fn run_cli(cli: Cli) -> Result<(), Error> {
     match cli.command {
         Command::Server(ServerArgs { command }) => match command {
             ServerCommand::Start { config } => {
-                let config = AppConfig::from_file(config)?;
-                crumbs_server::start(Database, config.http)?;
-                Ok(())
+                let app_config = AppConfig::from_file(config)?;
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()
+                    .map_err(Error::Runtime)?;
+                runtime.block_on(run_server(app_config))
             }
         },
     }
+}
+
+async fn run_server(config: AppConfig) -> Result<(), Error> {
+    let database = Database::open(config.database).await?;
+    let result = crumbs_server::start(&database, config.http).await;
+    database.close().await;
+    result?;
+    Ok(())
 }
 
 #[cfg(test)]

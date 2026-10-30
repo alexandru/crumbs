@@ -15,6 +15,7 @@ use axum::{Json, Router};
 use crumbs_database::Database;
 use serde::Serialize;
 use tokio::net::TcpListener;
+use tokio::runtime::{Handle, TryCurrentError};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
 mod config;
@@ -43,9 +44,9 @@ pub enum ServerCommand {
 /// Errors produced while starting or running the server.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The tokio runtime could not be created.
-    #[error("failed to create the async runtime: {0}")]
-    Runtime(#[source] io::Error),
+    /// Server startup was attempted outside an async runtime.
+    #[error("server startup requires an async runtime: {0}")]
+    RuntimeContext(#[source] TryCurrentError),
     /// A Unix signal handler could not be installed.
     #[error("failed to install a signal handler: {0}")]
     Signal(#[source] io::Error),
@@ -69,27 +70,16 @@ pub enum Error {
 
 /// Runs the HTTP server until a shutdown signal arrives.
 ///
-/// The database handle is owned for the lifetime of the process so request
-/// handling can share it without reconnecting. Port `0` in `config` lets the
-/// operating system choose an available port; the readiness message reports the
-/// actual bound address.
+/// Port `0` in `config` lets the operating system choose an available port; the
+/// readiness message reports the actual bound address.
 ///
 /// # Errors
 ///
-/// Returns an error if the tokio runtime or Unix signal handlers cannot be
-/// created, if the listener cannot bind, if its address cannot be read, if the
-/// readiness message cannot be written to standard output, or if the HTTP
-/// server fails.
-pub fn start(database: Database, config: HttpConfig) -> Result<(), Error> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(Error::Runtime)?;
-
-    runtime.block_on(run_until_shutdown(database, config))
-}
-
-async fn run_until_shutdown(database: Database, config: HttpConfig) -> Result<(), Error> {
+/// Returns an error if no async runtime is active, signal handlers cannot be
+/// created, the listener cannot bind, its address cannot be read, the readiness
+/// message cannot be written to standard output, or the HTTP server fails.
+pub async fn start(_database: &Database, config: HttpConfig) -> Result<(), Error> {
+    Handle::try_current().map_err(Error::RuntimeContext)?;
     // Handlers are installed before bind/readiness so Tokio buffers signals
     // that arrive during startup until the shutdown future is polled.
     let hangup = signal(SignalKind::hangup()).map_err(Error::Signal)?;
@@ -112,9 +102,6 @@ async fn run_until_shutdown(database: Database, config: HttpConfig) -> Result<()
         writeln!(stdout, "Listening on http://{address}").map_err(Error::Output)?;
         stdout.flush().map_err(Error::Output)?;
     }
-
-    // Owned until shutdown so the database handle lives as long as the process.
-    let _database = database;
 
     axum::serve(listener, application)
         .with_graceful_shutdown(shutdown_signal(hangup, interrupt, terminate))
