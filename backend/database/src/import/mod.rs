@@ -11,15 +11,16 @@
 //! the asynchronous consumer. Each successfully persisted food commits in its
 //! own transaction.
 
+mod usda;
+
 use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 
-use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 use tokio::task::JoinError;
 
-use crate::foods;
-use crate::usda_import::{FdcId, ParseError, PreparedFood, RecordPosition, stream_foods};
+use self::usda::{ParseError, PreparedFood, RecordPosition, stream_foods};
+use crate::{Food, FoodWriter, SourceFoodId};
 
 /// Number of foods committed by an import.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -59,10 +60,16 @@ pub struct ImportError {
     failure: Box<ImportFailure>,
 }
 
-pub(crate) async fn import_usda(
-    pool: &SqlitePool,
-    path: &Path,
+/// Imports a USDA file into a food-store implementation, one food per commit.
+///
+/// # Errors
+///
+/// Reports input, parsing, worker, or storage failures with committed progress.
+pub async fn import_usda<S: FoodWriter + ?Sized>(
+    store: &S,
+    path: impl AsRef<Path>,
 ) -> Result<ImportReport, ImportError> {
+    let path = path.as_ref();
     let file = tokio::fs::File::open(path)
         .await
         .map_err(|source| ImportError::open(path, source))?;
@@ -74,7 +81,7 @@ pub(crate) async fn import_usda(
     });
 
     let mut committed = ImportedFoods::default();
-    let consumer_result = consume(pool, &mut receiver, path, &mut committed).await;
+    let consumer_result = consume(store, &mut receiver, path, &mut committed).await;
     drop(receiver);
     let producer_result = producer.await;
 
@@ -112,19 +119,20 @@ impl ImportError {
         }
     }
 
-    fn write(
+    fn write<E: std::error::Error + Send + Sync + 'static>(
         path: &Path,
         committed: ImportedFoods,
-        food: &PreparedFood,
-        source: sqlx::Error,
+        food: &Food,
+        position: RecordPosition,
+        source: E,
     ) -> Self {
         Self {
             path: path.to_path_buf(),
             committed,
             failure: Box::new(ImportFailure::Write {
-                fdc_id: food.fdc_id.clone(),
-                position: food.position,
-                source,
+                fdc_id: food.source_food_id.clone(),
+                position,
+                source: Box::new(source),
             }),
         }
     }
@@ -149,37 +157,34 @@ enum ImportFailure {
     },
     #[error("failed to persist USDA food {fdc_id} at record {position}: {source}")]
     Write {
-        fdc_id: FdcId,
+        fdc_id: SourceFoodId,
         position: RecordPosition,
         #[source]
-        source: sqlx::Error,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
 }
 
-async fn consume(
-    pool: &SqlitePool,
+async fn consume<S: FoodWriter + ?Sized>(
+    store: &S,
     receiver: &mut mpsc::Receiver<PreparedFood>,
     path: &Path,
     committed: &mut ImportedFoods,
 ) -> Result<(), ImportError> {
     while let Some(food) = receiver.recv().await {
-        persist(pool, &food)
+        let position = food.position;
+        let food = food.into_food();
+        store
+            .upsert_food(&food)
             .await
-            .map_err(|source| ImportError::write(path, *committed, &food, source))?;
+            .map_err(|source| ImportError::write(path, *committed, &food, position, source))?;
         committed.increment();
     }
 
     Ok(())
 }
 
-async fn persist(pool: &SqlitePool, food: &PreparedFood) -> Result<(), sqlx::Error> {
-    let mut transaction = pool.begin().await?;
-    foods::upsert_usda_food(&mut transaction, food).await?;
-    transaction.commit().await
-}
-
 const PRODUCER_QUEUE_CAPACITY: usize = 1;
 
 #[cfg(test)]
-#[path = "../unit-tests/import.rs"]
+#[path = "../../unit-tests/import/mod.rs"]
 mod tests;

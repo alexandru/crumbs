@@ -5,10 +5,20 @@ CREATE TABLE crumbs_foods (
     food_type TEXT NOT NULL,
     description TEXT NOT NULL CHECK (length(trim(description)) > 0),
     category TEXT,
-    tags TEXT NOT NULL DEFAULT '',
     source_data TEXT NOT NULL CHECK (json_valid(source_data)),
     UNIQUE (source, source_food_id)
 ) STRICT;
 
-INSERT INTO crumbs_sources (id) VALUES ('usda')
-ON CONFLICT (id) DO NOTHING;
+CREATE TABLE crumbs_tags (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    name_key TEXT NOT NULL UNIQUE CHECK (length(name_key) > 0)
+) STRICT;
+
+CREATE TABLE crumbs_food_tags (
+    food_id INTEGER NOT NULL REFERENCES crumbs_foods(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES crumbs_tags(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    PRIMARY KEY (food_id, tag_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX crumbs_food_tags_by_tag ON crumbs_food_tags (tag_id, food_id);

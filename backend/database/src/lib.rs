@@ -19,11 +19,14 @@ mod cli;
 mod config;
 mod foods;
 mod import;
-mod usda_import;
 
 pub use cli::{DbArgs, DbCommand};
 pub use config::{DatabaseConfig, DatabasePath};
-pub use import::{ImportError, ImportReport, ImportedFoods};
+pub use foods::{
+    Food, FoodCategory, FoodDescription, FoodId, FoodStore, FoodSummary, FoodType, FoodWriter,
+    InvalidTagName, Source, SourceFoodId, Tag, TagId, TagName,
+};
+pub use import::{ImportError, ImportReport, ImportedFoods, import_usda};
 
 /// Handle to the application database.
 ///
@@ -63,7 +66,7 @@ impl Database {
     /// Returns an error when the input cannot be opened, parsed, or persisted,
     /// including the number of foods committed before the failure.
     pub async fn import_usda(&self, path: impl AsRef<Path>) -> Result<ImportReport, ImportError> {
-        import::import_usda(&self.pool, path.as_ref()).await
+        import::import_usda(self, path.as_ref()).await
     }
 
     /// Waits for connections to close and prevents further database operations.

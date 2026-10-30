@@ -15,6 +15,8 @@ use serde_json::Deserializer;
 use serde_json::value::RawValue;
 use tokio::sync::mpsc;
 
+use crate::{Food, Source};
+
 /// A validated food record ready for persistence.
 ///
 /// `raw` holds the original JSON object exactly as it appeared in the archive.
@@ -35,12 +37,26 @@ pub(crate) struct PreparedFood {
     pub(crate) position: RecordPosition,
 }
 
+impl PreparedFood {
+    pub(crate) fn into_food(self) -> Food {
+        Food {
+            source: USDA_SOURCE,
+            source_food_id: self.fdc_id.0,
+            food_type: self.kind.as_str().into(),
+            description: self.description.0,
+            category: self.category.map(|category| category.0),
+            source_data: self.raw,
+        }
+    }
+}
+
 /// A positive FoodData Central identifier represented as decimal text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FdcId(String);
 
 impl FdcId {
     /// Returns the identifier as text.
+    #[cfg(test)]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -98,6 +114,7 @@ pub(crate) struct FoodDescription(String);
 
 impl FoodDescription {
     /// Returns the description as text.
+    #[cfg(test)]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -122,6 +139,7 @@ pub(crate) struct FoodCategory(String);
 
 impl FoodCategory {
     /// Returns the category as text.
+    #[cfg(test)]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -566,6 +584,8 @@ impl<'de> Visitor<'de> for FoodCategoryVisitor {
     }
 }
 
+const USDA_SOURCE: Source = std::borrow::Cow::Borrowed("usda");
+
 #[cfg(test)]
-#[path = "../unit-tests/usda_import.rs"]
+#[path = "../../unit-tests/import/usda.rs"]
 mod tests;
