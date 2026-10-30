@@ -37,9 +37,9 @@ pub use config::{DatabaseConfig, DatabasePath};
 ///
 /// The handle owns its connection pool and waits for connection shutdown when
 /// dropped. Its originating multi-thread Tokio runtime must outlive it so SQLx
-/// can finish pending connection returns. Database operations run on that runtime.
-/// Connections stay private to this handle; operations must release them before
-/// the owner can be dropped.
+/// can finish pending connection returns and must have its time driver enabled.
+/// Database operations run on that runtime. Connections stay private to this
+/// handle; operations must release them before the owner can be dropped.
 pub struct Database {
     pool: SqlitePool,
 }
@@ -48,14 +48,19 @@ impl Database {
     /// Opens the database at the configured path and applies pending migrations.
     ///
     /// Missing parent directories and the database file are created.
-    /// Opening requires an active multi-thread Tokio runtime.
+    /// Opening requires an active multi-thread Tokio runtime with its time
+    /// driver enabled through [`tokio::runtime::Builder::enable_time`] or
+    /// [`tokio::runtime::Builder::enable_all`]. The runtime must outlive the
+    /// returned handle and drive its operations. Timerless runtimes are
+    /// unsupported; SQLx may panic when it needs a timer, and this constructor
+    /// does not check that the time driver is enabled.
     ///
     /// # Errors
     ///
-    /// Returns an error when the runtime is missing or uses the current-thread
-    /// scheduler, the parent directory cannot be created, SQLite
-    /// cannot open the file, or an embedded migration cannot be applied or
-    /// validated. No handle is returned on failure.
+    /// Returns an error when no Tokio runtime is active or the active runtime
+    /// uses the current-thread scheduler, the parent directory cannot be
+    /// created, SQLite cannot open the file, or an embedded migration cannot be
+    /// applied or validated. No handle is returned on failure.
     pub async fn open(config: DatabaseConfig) -> Result<Self, Error> {
         let runtime = Handle::try_current().map_err(|_| Error::RuntimeContext)?;
         if runtime.runtime_flavor() != RuntimeFlavor::MultiThread {
@@ -136,7 +141,7 @@ impl fmt::Debug for Database {
 /// Errors produced while opening or preparing the database.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Opening requires an active multi-thread Tokio runtime.
+    /// No Tokio runtime is active, or the active runtime uses the current-thread scheduler.
     #[error("opening the database requires a multi-thread Tokio runtime")]
     RuntimeContext,
     /// A parent directory for the database file could not be created.

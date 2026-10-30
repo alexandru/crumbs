@@ -37,6 +37,38 @@ async fn open_creates_parents_database_and_migrations() -> Result<(), Box<dyn St
     Ok(())
 }
 
+#[test]
+fn open_and_drop_with_time_only_runtime_releases_sqlite() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("nested").join("crumbs.db");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_time()
+        .build()?;
+
+    runtime.block_on(async {
+        let database = Database::open(config(path.clone())).await?;
+        let applied: i64 = query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
+            .fetch_one(&database.pool)
+            .await?;
+        assert!(applied >= 1, "embedded migrations were not applied");
+        #[cfg(target_os = "linux")]
+        assert!(
+            has_open_sqlite_fds(&path)?,
+            "database has no open file handles"
+        );
+
+        drop(database);
+        #[cfg(target_os = "linux")]
+        assert_sqlite_fds_released(&path)?;
+
+        Ok::<(), Box<dyn StdError>>(())
+    })?;
+
+    drop(runtime);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
