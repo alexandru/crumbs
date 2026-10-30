@@ -4,7 +4,9 @@ use sqlx::{Sqlite, Transaction};
 
 use crate::usda_import::PreparedFood;
 
-pub(crate) const USDA_SOURCE: &str = "usda";
+pub(crate) type Source = &'static str;
+
+pub(crate) const USDA_SOURCE: Source = "usda";
 
 pub(crate) async fn upsert_usda_food(
     transaction: &mut Transaction<'_, Sqlite>,
