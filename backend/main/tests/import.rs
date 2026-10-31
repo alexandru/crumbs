@@ -10,6 +10,8 @@ use std::process::{Command, Output};
 
 use common::temporary_config;
 
+type DatabaseFilename<'a> = &'a str;
+
 const BIN: &str = env!("CARGO_BIN_EXE_crumbs");
 const FOUNDATION_JSON: &str = include_str!("../../database/test-fixtures/foundation.json");
 const CONFIG: &str = "[http]\nport = 0\n\n[database]\npath = \"crumbs.db\"\n";
@@ -79,7 +81,7 @@ fn malformed_input_fails_with_committed_progress() -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-fn assert_literal_database_path(database_name: &str) -> Result<(), Box<dyn Error>> {
+fn assert_literal_database_path(database_name: DatabaseFilename<'_>) -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     fs::write(directory.path().join("foundation.json"), FOUNDATION_JSON)?;
     fs::write(

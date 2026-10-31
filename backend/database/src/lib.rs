@@ -57,7 +57,7 @@ impl Database {
             path: config.path,
             source,
         })?;
-        let pool = open_pool(DatabaseConfig { path: path.clone() }).await?;
+        let pool = open_pool(&path).await?;
         if let Err(source) = MIGRATOR.run(&pool).await {
             pool.close().await;
             return Err(Error::Migration { path, source });
@@ -120,9 +120,8 @@ pub enum Error {
     },
 }
 
-async fn open_pool(config: DatabaseConfig) -> Result<SqlitePool, Error> {
-    if let Some(parent) = config
-        .path
+async fn open_pool(path: &Path) -> Result<SqlitePool, Error> {
+    if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
@@ -135,7 +134,7 @@ async fn open_pool(config: DatabaseConfig) -> Result<SqlitePool, Error> {
     }
 
     let options = SqliteConnectOptions::new()
-        .filename(&config.path)
+        .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         // FULL synchronizes WAL commits for power-loss durability.
@@ -154,7 +153,7 @@ async fn open_pool(config: DatabaseConfig) -> Result<SqlitePool, Error> {
         .connect_with(options)
         .await
         .map_err(|source| Error::Open {
-            path: config.path.clone(),
+            path: path.to_path_buf(),
             source,
         })?;
 

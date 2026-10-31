@@ -13,12 +13,19 @@ use crate::{Database, DatabaseConfig, FoodStore, TagName};
 
 const RELEASE_JSON_ENV: &str = "USDA_FOUNDATION_JSON";
 const ENV_HELP: &str = "USDA_FOUNDATION_JSON must point at the official 2026-10-29 Foundation JSON";
-const PINNED_RELEASE: &str = "2026-10-29";
-const FOUNDATION_FOOD_COUNT: usize = 424;
-const EXPECTED_SOURCE: &str = "usda";
-const EXPECTED_FOOD_TYPE: &str = "Foundation";
+const PINNED_RELEASE: ReleaseDate = "2026-10-29";
+const FOUNDATION_FOOD_COUNT: FoodCount = 424;
+const EXPECTED_SOURCE: SourceRef<'_> = "usda";
+const EXPECTED_FOOD_TYPE: FoodTypeRef<'_> = "Foundation";
 
 type FoodId = i64;
+type ReleaseDate = &'static str;
+type FoodCount = usize;
+type SourceRef<'a> = &'a str;
+type FoodTypeRef<'a> = &'a str;
+type FtsQuery<'a> = &'a str;
+type FtsPhrase = String;
+type MigrationCount = i64;
 type Source = String;
 type SourceFoodId = String;
 type FoodType = String;
@@ -55,7 +62,11 @@ async fn imports_full_october_2026_foundation_release_idempotently() -> TestResu
     assert!(applied_before > 0, "no applied migration");
 
     let first_report = database.import_usda(json_path.as_path()).await?;
-    assert_eq!(first_report.committed().get(), 424, "first import count");
+    assert_eq!(
+        first_report.committed().get(),
+        FOUNDATION_FOOD_COUNT,
+        "first import count"
+    );
     let mut first = read_stored(&database).await?;
     verify_reference(&first, &reference)?;
     let reviewed_tag = TagName::new("Reviewed")?;
@@ -80,7 +91,11 @@ async fn imports_full_october_2026_foundation_release_idempotently() -> TestResu
     assert_eq!(applied_after_reopen, applied_before, "reopen migrations");
 
     let second_report = reopened.import_usda(json_path.as_path()).await?;
-    assert_eq!(second_report.committed().get(), 424, "reimport count");
+    assert_eq!(
+        second_report.committed().get(),
+        FOUNDATION_FOOD_COUNT,
+        "reimport count"
+    );
     let second = read_stored(&reopened).await?;
     assert_eq!(first, second, "reimport changed stored foods");
     verify_fts(&reopened.pool, &second).await?;
@@ -110,16 +125,16 @@ fn load_reference(path: &Path) -> Result<ReferenceFoods, Box<dyn StdError>> {
     let bytes = std::fs::read(path).map_err(|error| {
         io::Error::new(error.kind(), format!("read {}: {error}", path.display()))
     })?;
-    let root: Value = serde_json::from_slice(&bytes).map_err(|error| {
+    let mut root: Value = serde_json::from_slice(&bytes).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("parse {}: {error}", path.display()),
         )
     })?;
     let foods = root
-        .as_object()
-        .and_then(|root| root.get("FoundationFoods"))
-        .and_then(Value::as_array)
+        .as_object_mut()
+        .and_then(|root| root.get_mut("FoundationFoods"))
+        .and_then(Value::as_array_mut)
         .ok_or_else(|| invalid_data("root must contain a FoundationFoods array"))?;
     if foods.len() != FOUNDATION_FOOD_COUNT {
         return Err(invalid_data(format!(
@@ -129,16 +144,13 @@ fn load_reference(path: &Path) -> Result<ReferenceFoods, Box<dyn StdError>> {
     }
 
     let mut reference = BTreeMap::new();
-    for food in foods {
+    for food in foods.drain(..) {
         let source_food_id = food
             .get("fdcId")
             .and_then(Value::as_i64)
             .ok_or_else(|| invalid_data("missing fdcId"))?
             .to_string();
-        if reference
-            .insert(source_food_id.clone(), food.clone())
-            .is_some()
-        {
+        if reference.insert(source_food_id.clone(), food).is_some() {
             return Err(invalid_data(format!("duplicate fdcId {source_food_id}")));
         }
     }
@@ -230,14 +242,17 @@ async fn verify_fts(pool: &SqlitePool, foods: &[StoredFood]) -> TestResult {
     Ok(())
 }
 
-async fn matching_rowids(pool: &SqlitePool, fts_query: &str) -> Result<Vec<FoodId>, sqlx::Error> {
+async fn matching_rowids(
+    pool: &SqlitePool,
+    fts_query: FtsQuery<'_>,
+) -> Result<Vec<FoodId>, sqlx::Error> {
     query_scalar("SELECT rowid FROM crumbs_foods_fts WHERE crumbs_foods_fts MATCH ? ORDER BY rowid")
         .bind(fts_query)
         .fetch_all(pool)
         .await
 }
 
-fn fts_phrase(text: &str) -> String {
+fn fts_phrase(text: &str) -> FtsPhrase {
     // FTS5 escapes a double quote inside a quoted phrase by doubling it.
     format!("\"{}\"", text.replace('"', "\"\""))
 }
@@ -254,7 +269,7 @@ async fn verify_foreign_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-async fn applied_migrations(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+async fn applied_migrations(pool: &SqlitePool) -> Result<MigrationCount, sqlx::Error> {
     query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
         .fetch_one(pool)
         .await
