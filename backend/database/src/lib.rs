@@ -63,8 +63,8 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error when the input cannot be opened, parsed, or persisted,
-    /// including the number of foods committed before the failure.
+    /// Returns an error when no Tokio runtime is active or the input cannot be
+    /// opened, parsed, or persisted, including the number of committed foods.
     pub async fn import_usda(&self, path: impl AsRef<Path>) -> Result<ImportReport, ImportError> {
         import::import_usda(self, path.as_ref()).await
     }

@@ -10,6 +10,104 @@ use super::*;
 const FOUNDATION_RECORD: &str = r#"{"fdcId": 321358, "description": "Hummus, commercial", "dataType": "Foundation", "foodCategory": {"description": "Legumes and Legume Products"}, "publicationDate": "4/1/2019", "foodNutrients": [{"nutrient": {"number": "334", "unitName": "µg"}, "amount": 1.00, "ratio": 1e+3}], "scientificName": "Solanum lycopersicum", "unknown": {"nested": [true, null, "µg"]}}"#;
 const FOUNDATION_RECORD_NULL_CATEGORY: &str = r#"{"fdcId":321360,"description":"Tomatoes, grape, raw","dataType":"Foundation","foodCategory":null}"#;
 const BRANDED_RECORD: &str = r#"{"foodClass":"Branded","description":"GRANOLA, CINNAMON, RAISIN","foodNutrients":[],"publicationDate":"11/13/2020","brandOwner":"MICHELE'S","gtinUpc":"001633636543505","dataSource":"LI","servingSize":28,"servingSizeUnit":"g","householdServingFullText":"0.25 cup","brandedFoodCategory":"Cereal","modifiedDate":"4/26/2020","availableDate":"4/26/2020","dataType":"Branded","fdcId":1106281,"labelNutrients":{"calories":{"value":120}}}"#;
+const SURVEY_RECORD: &str = r#"{"fdcId":2705383,"description":"Milk, human","dataType":"Survey (FNDDS)","wweiaFoodCategory":{"wweiaFoodCategoryDescription":"Human milk","wweiaFoodCategoryCode":3298314}}"#;
+
+#[test]
+fn preserves_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
+    let input = document("SurveyFoods", &[SURVEY_RECORD]);
+    let (result, foods) = collect(input.as_bytes(), 1);
+    result?;
+
+    let food = first_food(&foods)?;
+    assert_eq!(
+        food.category.as_ref().map(FoodCategory::as_str),
+        Some("Human milk")
+    );
+    assert_eq!(food.raw.get(), SURVEY_RECORD);
+    Ok(())
+}
+
+#[test]
+fn survey_category_fallback_preserves_existing_precedence() -> Result<(), Box<dyn StdError>> {
+    let records = [
+        (
+            r#"{"fdcId":9,"description":"Food","dataType":"Survey (FNDDS)","wweiaFoodCategory":["Human milk"]}"#,
+            None,
+        ),
+        (
+            r#"{"fdcId":1,"description":"Food","dataType":"Survey (FNDDS)"}"#,
+            None,
+        ),
+        (
+            r#"{"fdcId":2,"description":"Food","dataType":"Survey (FNDDS)","foodCategory":null,"wweiaFoodCategory":null}"#,
+            None,
+        ),
+        (
+            r#"{"fdcId":3,"description":"Food","dataType":"Survey (FNDDS)","foodCategory":{"description":null},"wweiaFoodCategory":{"wweiaFoodCategoryDescription":"WWEIA"}}"#,
+            Some("WWEIA"),
+        ),
+        (
+            r#"{"fdcId":4,"description":"Food","dataType":"Survey (FNDDS)","foodCategory":{"description":"First","description":"Legacy"},"wweiaFoodCategory":{"wweiaFoodCategoryDescription":"WWEIA"}}"#,
+            Some("Legacy"),
+        ),
+        (
+            r#"{"fdcId":5,"description":"Food","dataType":"Survey (FNDDS)","wweiaFoodCategory":"invalid"}"#,
+            None,
+        ),
+        (
+            r#"{"fdcId":6,"description":"Food","dataType":"Survey (FNDDS)","wweiaFoodCategory":{"wweiaFoodCategoryDescription":42}}"#,
+            None,
+        ),
+        (
+            r#"{"fdcId":7,"description":"Food","dataType":"Survey (FNDDS)","wweiaFoodCategory":null,"wweiaFoodCategory":{"wweiaFoodCategoryDescription":"WWEIA"}}"#,
+            None,
+        ),
+        (
+            r#"{"fdcId":8,"description":"Food","dataType":"Survey (FNDDS)","wweiaFoodCategory":{"wweiaFoodCategoryDescription":"First","wweiaFoodCategoryDescription":"Second"}}"#,
+            Some("Second"),
+        ),
+    ];
+
+    for (record, expected) in records {
+        let input = document("SurveyFoods", &[record]);
+        let (result, foods) = collect(input.as_bytes(), 1);
+        result?;
+        assert_eq!(
+            first_food(&foods)?
+                .category
+                .as_ref()
+                .map(FoodCategory::as_str),
+            expected
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn ignores_wweia_metadata_for_other_food_kinds() -> Result<(), Box<dyn StdError>> {
+    let cases = [
+        (
+            "FoundationFoods",
+            r#"{"fdcId":1,"description":"Food","dataType":"Foundation","wweiaFoodCategory":42}"#,
+        ),
+        (
+            "SRLegacyFoods",
+            r#"{"fdcId":2,"description":"Food","dataType":"SR Legacy","wweiaFoodCategory":{"wweiaFoodCategoryDescription":"WWEIA"}}"#,
+        ),
+        (
+            "BrandedFoods",
+            r#"{"fdcId":3,"description":"Food","dataType":"Branded","wweiaFoodCategory":null,"wweiaFoodCategory":"invalid"}"#,
+        ),
+    ];
+
+    for (root, record) in cases {
+        let input = document(root, &[record]);
+        let (result, foods) = collect(input.as_bytes(), 1);
+        result?;
+        assert_eq!(first_food(&foods)?.category, None);
+    }
+    Ok(())
+}
 
 #[test]
 fn streams_foundation_foods_and_preserves_raw_payload() -> Result<(), Box<dyn StdError>> {

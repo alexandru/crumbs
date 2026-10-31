@@ -16,10 +16,11 @@ mod usda;
 use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 
+use tokio::runtime::{Handle, TryCurrentError};
 use tokio::sync::mpsc;
 use tokio::task::JoinError;
 
-use self::usda::{ParseError, PreparedFood, RecordPosition, stream_foods};
+use self::usda::{ParseError, PreparedFood, RecordPosition};
 use crate::{Food, FoodWriter, SourceFoodId};
 
 /// Number of foods committed by an import.
@@ -64,28 +65,28 @@ pub struct ImportError {
 ///
 /// # Errors
 ///
-/// Reports input, parsing, worker, or storage failures with committed progress.
+/// Reports a missing Tokio runtime or input, parsing, worker, or storage
+/// failures with committed progress.
 pub async fn import_usda<S: FoodWriter + ?Sized>(
     store: &S,
     path: impl AsRef<Path>,
 ) -> Result<ImportReport, ImportError> {
     let path = path.as_ref();
+    Handle::try_current().map_err(|source| ImportError::runtime(path, source))?;
     let file = tokio::fs::File::open(path)
         .await
         .map_err(|source| ImportError::open(path, source))?;
     let file = file.into_std().await;
-    let (sender, mut receiver) = mpsc::channel(PRODUCER_QUEUE_CAPACITY);
+    let (sender, receiver) = mpsc::channel(PRODUCER_QUEUE_CAPACITY);
     let producer = tokio::task::spawn_blocking(move || {
         let reader = BufReader::new(file);
-        stream_foods(reader, &sender)
+        usda::stream_foods(reader, &sender)
     });
 
-    let mut committed = ImportedFoods::default();
-    let consumer_result = consume(store, &mut receiver, path, &mut committed).await;
-    drop(receiver);
+    let consumer_result = consume(store, receiver, path).await;
     let producer_result = producer.await;
 
-    consumer_result?;
+    let committed = consumer_result?;
 
     match producer_result {
         Ok(Ok(())) => Ok(ImportReport { committed }),
@@ -95,6 +96,14 @@ pub async fn import_usda<S: FoodWriter + ?Sized>(
 }
 
 impl ImportError {
+    fn runtime(path: &Path, source: TryCurrentError) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            committed: ImportedFoods::default(),
+            failure: Box::new(ImportFailure::Runtime { source }),
+        }
+    }
+
     fn open(path: &Path, source: io::Error) -> Self {
         Self {
             path: path.to_path_buf(),
@@ -140,6 +149,11 @@ impl ImportError {
 
 #[derive(Debug, thiserror::Error)]
 enum ImportFailure {
+    #[error("no Tokio runtime is active: {source}")]
+    Runtime {
+        #[source]
+        source: TryCurrentError,
+    },
     #[error("failed to open the USDA input file: {source}")]
     Open {
         #[source]
@@ -166,21 +180,21 @@ enum ImportFailure {
 
 async fn consume<S: FoodWriter + ?Sized>(
     store: &S,
-    receiver: &mut mpsc::Receiver<PreparedFood>,
+    mut receiver: mpsc::Receiver<PreparedFood>,
     path: &Path,
-    committed: &mut ImportedFoods,
-) -> Result<(), ImportError> {
+) -> Result<ImportedFoods, ImportError> {
+    let mut committed = ImportedFoods::default();
     while let Some(food) = receiver.recv().await {
         let position = food.position;
         let food = food.into_food();
         store
             .upsert_food(&food)
             .await
-            .map_err(|source| ImportError::write(path, *committed, &food, position, source))?;
+            .map_err(|source| ImportError::write(path, committed, &food, position, source))?;
         committed.increment();
     }
 
-    Ok(())
+    Ok(committed)
 }
 
 const PRODUCER_QUEUE_CAPACITY: usize = 1;

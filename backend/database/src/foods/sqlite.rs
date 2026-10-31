@@ -1,4 +1,6 @@
+use sqlx::sqlite::SqlitePool;
 use sqlx::{FromRow, Row};
+use tokio::runtime::Handle;
 
 use super::{
     Food, FoodCategory, FoodDescription, FoodId, FoodStore, FoodSummary, FoodWriter, Source,
@@ -10,7 +12,7 @@ impl FoodWriter for Database {
     type Error = sqlx::Error;
 
     async fn upsert_food(&self, food: &Food) -> Result<FoodId, Self::Error> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = checked_pool(self)?.begin().await?;
         sqlx::query("INSERT INTO crumbs_sources (id) VALUES (?) ON CONFLICT (id) DO NOTHING")
             .bind(food.source.as_ref())
             .execute(&mut *transaction)
@@ -45,19 +47,20 @@ impl FoodStore for Database {
         source: &Source,
         source_food_id: &SourceFoodId,
     ) -> Result<Option<FoodSummary>, Self::Error> {
+        let pool = checked_pool(self)?;
         let row = sqlx::query_as::<_, FoodRow>(
             "SELECT id, source, source_food_id, food_type, description, category
              FROM crumbs_foods WHERE source = ? AND source_food_id = ?",
         )
         .bind(source.as_ref())
         .bind(source_food_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(pool)
         .await?;
         Ok(row.map(FoodSummary::from))
     }
 
     async fn set_food_tags(&self, food: FoodId, tags: &[TagName]) -> Result<(), Self::Error> {
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = checked_pool(self)?.begin().await?;
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM crumbs_foods WHERE id = ?)")
                 .bind(food.0)
@@ -93,6 +96,7 @@ impl FoodStore for Database {
     }
 
     async fn foods_with_tag(&self, tag: &TagName) -> Result<Vec<FoodSummary>, Self::Error> {
+        let pool = checked_pool(self)?;
         let rows = sqlx::query_as::<_, FoodRow>(
             "SELECT f.id, f.source, f.source_food_id, f.food_type, f.description, f.category
              FROM crumbs_tags t
@@ -101,14 +105,15 @@ impl FoodStore for Database {
              WHERE t.name_key = ? ORDER BY f.id",
         )
         .bind(&tag.key)
-        .fetch_all(&self.pool)
+        .fetch_all(pool)
         .await?;
         Ok(rows.into_iter().map(FoodSummary::from).collect())
     }
 
     async fn list_tags(&self) -> Result<Vec<Tag>, Self::Error> {
+        let pool = checked_pool(self)?;
         sqlx::query("SELECT id, name FROM crumbs_tags ORDER BY name_key")
-            .fetch_all(&self.pool)
+            .fetch_all(pool)
             .await?
             .into_iter()
             .map(|row| {
@@ -120,6 +125,11 @@ impl FoodStore for Database {
             })
             .collect()
     }
+}
+
+fn checked_pool(database: &Database) -> Result<&SqlitePool, sqlx::Error> {
+    Handle::try_current().map_err(|source| sqlx::Error::Configuration(Box::new(source)))?;
+    Ok(&database.pool)
 }
 
 type RowId = i64;

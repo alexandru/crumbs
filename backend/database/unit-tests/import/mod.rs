@@ -7,15 +7,63 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use sqlx::{FromRow, query, query_as, query_scalar};
+use sqlx::{FromRow, query, query_scalar};
 
 use super::ImportError;
-use crate::{Database, DatabaseConfig, Food, FoodId, FoodStore, FoodWriter, TagName};
+use crate::{
+    Database, DatabaseConfig, Food, FoodCategory, FoodDescription, FoodId, FoodStore, FoodWriter,
+    SourceFoodId, TagName,
+};
 
 const FOUNDATION_JSON: &str = include_str!("../../test-fixtures/foundation.json");
 const BRANDED_JSON: &str = include_str!("../../test-fixtures/branded.json");
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(5);
 const LATER_TRIGGER_ROWS: usize = 100;
+
+#[test]
+fn import_without_runtime_returns_error_before_writing() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
+    let store = RecordingFoodWriter::default();
+
+    let error: ImportError = match futures_executor::block_on(super::import_usda(&store, &path)) {
+        Ok(_) => return Err(io::Error::other("import unexpectedly succeeded").into()),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.path, path);
+    assert_eq!(error.committed.get(), 0);
+    assert!(
+        error
+            .source()
+            .and_then(StdError::source)
+            .and_then(|source| source.downcast_ref::<tokio::runtime::TryCurrentError>())
+            .is_some()
+    );
+    let state = store
+        .state
+        .lock()
+        .map_err(|_| io::Error::other("recording food writer mutex was poisoned"))?;
+    assert_eq!(state.successful_writes, 0);
+    assert!(state.foods.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn persists_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
+    let (directory, database) = open_database().await?;
+    let record = r#"{"fdcId":2705383,"description":"Milk, human","dataType":"Survey (FNDDS)","wweiaFoodCategory":{"wweiaFoodCategoryDescription":"Human milk","wweiaFoodCategoryCode":3298314}}"#;
+    let input = format!(r#"{{"SurveyFoods":[{record}]}}"#);
+    let path = write_input(directory.path(), "survey.json", &input)?;
+
+    let report = database.import_usda(&path).await?;
+
+    assert_eq!(report.committed().get(), 1);
+    let food = food_row(&database, "usda", "2705383").await?;
+    assert_eq!(food.category.as_deref(), Some("Human milk"));
+    assert_eq!(food.source_data, record);
+    Ok(())
+}
 
 #[tokio::test]
 async fn imports_foundation_foods_and_preserves_source_details() -> Result<(), Box<dyn StdError>> {
@@ -507,20 +555,27 @@ async fn require_writer_import_error<S: FoodWriter + ?Sized>(
     }
 }
 
-async fn food_count(database: &Database) -> Result<i64, sqlx::Error> {
+async fn food_count(database: &Database) -> Result<FoodCount, sqlx::Error> {
     query_scalar("SELECT COUNT(*) FROM crumbs_foods")
         .fetch_one(&database.pool)
         .await
 }
 
+type SourceText = String;
+type FoodTypeText = String;
+type SourceDataText = String;
+type RowId = i64;
+type FoodCount = i64;
+type WriteCount = usize;
+
 #[derive(Debug, FromRow)]
 struct FoodRow {
-    id: i64,
-    source: String,
-    food_type: String,
-    description: String,
-    category: Option<String>,
-    source_data: String,
+    id: RowId,
+    source: SourceText,
+    food_type: FoodTypeText,
+    description: FoodDescription,
+    category: Option<FoodCategory>,
+    source_data: SourceDataText,
 }
 
 async fn food_row(
@@ -528,7 +583,7 @@ async fn food_row(
     source: &str,
     source_food_id: &str,
 ) -> Result<FoodRow, sqlx::Error> {
-    query_as(
+    sqlx::query_as(
         "SELECT id, source, food_type, description, category, source_data
          FROM crumbs_foods
          WHERE source = ? AND source_food_id = ?",
@@ -542,25 +597,25 @@ async fn food_row(
 #[derive(Default)]
 struct RecordingFoodWriter {
     state: Mutex<RecordingFoodState>,
-    fail_after: Option<usize>,
+    fail_after: Option<WriteCount>,
 }
 
 #[derive(Default)]
 struct RecordingFoodState {
-    foods: HashMap<(String, String), RecordedFood>,
-    last_id: i64,
-    successful_writes: usize,
+    foods: HashMap<(SourceText, SourceFoodId), RecordedFood>,
+    last_id: RowId,
+    successful_writes: WriteCount,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RecordedFood {
     id: FoodId,
-    source: String,
-    source_food_id: String,
-    food_type: String,
-    description: String,
-    category: Option<String>,
-    source_data: String,
+    source: SourceText,
+    source_food_id: SourceFoodId,
+    food_type: FoodTypeText,
+    description: FoodDescription,
+    category: Option<FoodCategory>,
+    source_data: SourceDataText,
 }
 
 impl RecordingFoodWriter {

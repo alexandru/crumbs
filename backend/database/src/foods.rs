@@ -17,12 +17,21 @@ pub trait FoodWriter: Sync {
     type Error: StdError + Send + Sync + 'static;
 
     /// Atomically inserts or updates a food, preserving its local ID and tags.
+    ///
+    /// # Errors
+    ///
+    /// Returns an implementation error if the food cannot be persisted.
     fn upsert_food(&self, food: &Food) -> impl Future<Output = Result<FoodId, Self::Error>> + Send;
 }
 
 /// Looks up foods and manages tag assignments for a food writer.
 pub trait FoodStore: FoodWriter {
     /// Looks up food metadata by its exact source-scoped identity.
+    /// Returns `None` if the identity is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage access fails.
     fn food_by_source(
         &self,
         source: &Source,
@@ -30,6 +39,12 @@ pub trait FoodStore: FoodWriter {
     ) -> impl Future<Output = Result<Option<FoodSummary>, Self::Error>> + Send;
 
     /// Atomically replaces a food's assignments, creating missing tags.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the food is missing or the replacement fails. Failed
+    /// replacement leaves existing assignments unchanged and does not commit
+    /// catalog changes.
     fn set_food_tags(
         &self,
         food: FoodId,
@@ -37,12 +52,20 @@ pub trait FoodStore: FoodWriter {
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// Lists foods with this tag, using case-insensitive exact membership.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage read fails.
     fn foods_with_tag(
         &self,
         tag: &TagName,
     ) -> impl Future<Output = Result<Vec<FoodSummary>, Self::Error>> + Send;
 
     /// Lists the tag catalog, including tags with no current assignments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage read fails.
     fn list_tags(&self) -> impl Future<Output = Result<Vec<Tag>, Self::Error>> + Send;
 }
 

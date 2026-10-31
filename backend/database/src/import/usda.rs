@@ -28,8 +28,8 @@ pub(crate) struct PreparedFood {
     pub(crate) kind: FoodKind,
     /// Nonblank food description, preserved verbatim.
     pub(crate) description: FoodDescription,
-    /// Optional category text from `foodCategory.description` or
-    /// `brandedFoodCategory`.
+    /// Optional category text from `foodCategory.description`,
+    /// `wweiaFoodCategory.wweiaFoodCategoryDescription`, or `brandedFoodCategory`.
     pub(crate) category: Option<FoodCategory>,
     /// Original record object, including every detail field and number spelling.
     pub(crate) raw: Box<RawValue>,
@@ -61,7 +61,7 @@ impl FdcId {
         &self.0
     }
 
-    fn from_json(value: u64) -> Result<Self, RecordError> {
+    fn from_json(value: RawFdcId) -> Result<Self, RecordError> {
         let value = NonZeroU64::new(value).ok_or(RecordError::ZeroFdcId)?;
         Ok(Self(value.to_string()))
     }
@@ -119,7 +119,7 @@ impl FoodDescription {
         &self.0
     }
 
-    fn from_json(value: String) -> Result<Self, RecordError> {
+    fn from_json(value: RawFoodDescription) -> Result<Self, RecordError> {
         if value.trim().is_empty() {
             return Err(RecordError::BlankDescription);
         }
@@ -266,32 +266,23 @@ pub(crate) fn stream_foods(
     sender: &mpsc::Sender<PreparedFood>,
 ) -> Result<(), ParseError> {
     let mut deserializer = Deserializer::from_reader(reader);
-    let mut state = StreamState::new();
+    let mut state = StreamState::Ready;
     let result = RootSeed {
         sender,
         state: &mut state,
     }
     .deserialize(&mut deserializer);
 
-    match result {
-        Ok(()) => {
-            if let Some(failure) = state.take_failure() {
-                return Err(failure);
-            }
-            deserializer
-                .end()
-                .map_err(|source| ParseError::Document { source })
-        }
-        Err(source) => match state.take_failure() {
-            Some(failure) => Err(failure),
-            None => match state.take_syntax_position() {
-                Some(position) => Err(ParseError::Record {
-                    position,
-                    source: RecordError::Syntax(source),
-                }),
-                None => Err(ParseError::Document { source }),
-            },
-        },
+    match (result, state) {
+        (_, StreamState::Failure(failure)) => Err(failure),
+        (Ok(()), StreamState::Ready | StreamState::Syntax(_)) => deserializer
+            .end()
+            .map_err(|source| ParseError::Document { source }),
+        (Err(source), StreamState::Syntax(position)) => Err(ParseError::Record {
+            position,
+            source: RecordError::Syntax(source),
+        }),
+        (Err(source), StreamState::Ready) => Err(ParseError::Document { source }),
     }
 }
 
@@ -302,38 +293,10 @@ const BRANDED_ROOT: &str = "BrandedFoods";
 const ROOT_NAMES: &str = "FoundationFoods, SRLegacyFoods, SurveyFoods, or BrandedFoods";
 const PROCESSING_FAILED: &str = "usda fooddata central processing failed";
 
-struct StreamState {
-    failure: Option<ParseError>,
-    syntax_position: Option<RecordPosition>,
-}
-
-impl StreamState {
-    const fn new() -> Self {
-        Self {
-            failure: None,
-            syntax_position: None,
-        }
-    }
-
-    fn fail(&mut self, failure: ParseError) {
-        if self.failure.is_none() {
-            self.failure = Some(failure);
-        }
-    }
-
-    fn fail_syntax(&mut self, position: RecordPosition) {
-        if self.syntax_position.is_none() {
-            self.syntax_position = Some(position);
-        }
-    }
-
-    fn take_failure(&mut self) -> Option<ParseError> {
-        self.failure.take()
-    }
-
-    fn take_syntax_position(&mut self) -> Option<RecordPosition> {
-        self.syntax_position.take()
-    }
+enum StreamState {
+    Ready,
+    Failure(ParseError),
+    Syntax(RecordPosition),
 }
 
 struct RootSeed<'a> {
@@ -452,7 +415,7 @@ impl<'de> Visitor<'de> for FoodListVisitor<'_> {
                 Ok(Some(raw)) => raw,
                 Ok(None) => return Ok(()),
                 Err(source) => {
-                    state.fail_syntax(position);
+                    *state = StreamState::Syntax(position);
                     return Err(source);
                 }
             };
@@ -460,7 +423,7 @@ impl<'de> Visitor<'de> for FoodListVisitor<'_> {
             let food = match prepare_food(raw, root_kind, position) {
                 Ok(food) => food,
                 Err(source) => {
-                    state.fail(ParseError::Record { position, source });
+                    *state = StreamState::Failure(ParseError::Record { position, source });
                     return Err(serde::de::Error::custom(PROCESSING_FAILED));
                 }
             };
@@ -468,7 +431,7 @@ impl<'de> Visitor<'de> for FoodListVisitor<'_> {
             match sender.blocking_send(food) {
                 Ok(()) => {}
                 Err(_) => {
-                    state.fail(ParseError::ConsumerDisconnected { position });
+                    *state = StreamState::Failure(ParseError::ConsumerDisconnected { position });
                     return Err(serde::de::Error::custom(PROCESSING_FAILED));
                 }
             }
@@ -476,7 +439,7 @@ impl<'de> Visitor<'de> for FoodListVisitor<'_> {
             position = match position.checked_next() {
                 Some(next) => next,
                 None => {
-                    state.fail(ParseError::RecordCountOverflow { position });
+                    *state = StreamState::Failure(ParseError::RecordCountOverflow { position });
                     return Err(serde::de::Error::custom(PROCESSING_FAILED));
                 }
             };
@@ -516,9 +479,14 @@ fn prepare_food(
     let description = FoodDescription::from_json(header.description)?;
     let category = match header.data_type {
         FoodKind::Branded => header.branded_food_category.map(FoodCategory),
-        FoodKind::Foundation | FoodKind::SrLegacy | FoodKind::Survey => header
+        FoodKind::Foundation | FoodKind::SrLegacy => header
             .food_category
             .and_then(|category| category.description)
+            .map(FoodCategory),
+        FoodKind::Survey => header
+            .food_category
+            .and_then(|category| category.description)
+            .or_else(|| survey_category(raw.get()))
             .map(FoodCategory),
     };
 
@@ -532,22 +500,53 @@ fn prepare_food(
     })
 }
 
+type RawFdcId = u64;
+type RawFoodDescription = String;
+type RawFoodCategory = String;
+
 #[derive(Debug, Deserialize)]
 struct Header {
     #[serde(rename = "fdcId")]
-    fdc_id: u64,
-    description: String,
+    fdc_id: RawFdcId,
+    description: RawFoodDescription,
     #[serde(rename = "dataType")]
     data_type: FoodKind,
     #[serde(default, rename = "foodCategory")]
     food_category: Option<FoodCategoryObject>,
     #[serde(default, rename = "brandedFoodCategory")]
-    branded_food_category: Option<String>,
+    branded_food_category: Option<RawFoodCategory>,
+}
+
+fn survey_category(raw: &str) -> Option<RawFoodCategory> {
+    serde_json::from_str::<SurveyCategoryHeader>(raw)
+        .ok()?
+        .category?
+        .0
+        .description
+}
+
+#[derive(Deserialize)]
+struct SurveyCategoryHeader {
+    #[serde(default, rename = "wweiaFoodCategory")]
+    category: Option<SurveyCategoryObject>,
+}
+
+struct SurveyCategoryObject(FoodCategoryObject);
+
+impl<'de> Deserialize<'de> for SurveyCategoryObject {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer
+            .deserialize_map(FoodCategoryVisitor("wweiaFoodCategoryDescription"))
+            .map(Self)
+    }
 }
 
 #[derive(Debug)]
 struct FoodCategoryObject {
-    description: Option<String>,
+    description: Option<RawFoodCategory>,
 }
 
 impl<'de> Deserialize<'de> for FoodCategoryObject {
@@ -555,11 +554,11 @@ impl<'de> Deserialize<'de> for FoodCategoryObject {
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_map(FoodCategoryVisitor)
+        deserializer.deserialize_map(FoodCategoryVisitor("description"))
     }
 }
 
-struct FoodCategoryVisitor;
+struct FoodCategoryVisitor(&'static str);
 
 impl<'de> Visitor<'de> for FoodCategoryVisitor {
     type Value = FoodCategoryObject;
@@ -574,8 +573,8 @@ impl<'de> Visitor<'de> for FoodCategoryVisitor {
     {
         let mut description = None;
         while let Some(key) = map.next_key::<String>()? {
-            if key == "description" {
-                description = map.next_value::<Option<String>>()?;
+            if key == self.0 {
+                description = map.next_value::<Option<RawFoodCategory>>()?;
             } else {
                 map.next_value::<IgnoredAny>()?;
             }
