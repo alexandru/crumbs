@@ -6,15 +6,25 @@ use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{SqliteConnection, query, query_scalar};
 
-use crate::{Database, DatabaseConfig, FoodStore, TagName};
+use crate::{Database, DatabaseConfig, FoodCategory, FoodDescription, FoodStore, TagName};
 
 const FOUNDATION_JSON: &str = include_str!("../test-fixtures/foundation.json");
 const BRANDED_JSON: &str = include_str!("../test-fixtures/branded.json");
 const MIGRATION_0001: &str = include_str!("../migrations/0001_create_crumbs_sources.sql");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_create_crumbs_foods.sql");
 type FoodId = i64;
+type TagId = i64;
+type FoodCount = i64;
+type MigrationCount = i64;
+type IndexedTags = String;
+type FtsTerm = String;
 type Source<'a> = &'a str;
 type SourceFoodId<'a> = &'a str;
+type RawFoodDescription<'a> = &'a str;
+type RawFoodCategory<'a> = &'a str;
+type RawTagName<'a> = &'a str;
+type TagKey<'a> = &'a str;
+type FtsQuery<'a> = &'a str;
 
 #[tokio::test]
 async fn schema_uses_external_content_unicode_tokenizer_and_triggers()
@@ -874,9 +884,9 @@ async fn insert_food(
     id: FoodId,
     source: Source<'_>,
     source_food_id: SourceFoodId<'_>,
-    description: &str,
-    category: Option<&str>,
-    tags: &str,
+    description: RawFoodDescription<'_>,
+    category: Option<RawFoodCategory<'_>>,
+    tags: RawTagName<'_>,
 ) -> Result<(), Box<dyn StdError>> {
     query("INSERT OR IGNORE INTO crumbs_sources (id) VALUES (?)")
         .bind(source)
@@ -913,35 +923,38 @@ async fn food_id(
         .await
 }
 
-async fn description(database: &Database, id: FoodId) -> Result<String, sqlx::Error> {
+async fn description(database: &Database, id: FoodId) -> Result<FoodDescription, sqlx::Error> {
     query_scalar("SELECT description FROM crumbs_foods WHERE id = ?")
         .bind(id)
         .fetch_one(&database.pool)
         .await
 }
 
-async fn category(database: &Database, id: FoodId) -> Result<Option<String>, sqlx::Error> {
+async fn category(database: &Database, id: FoodId) -> Result<Option<FoodCategory>, sqlx::Error> {
     query_scalar("SELECT category FROM crumbs_foods WHERE id = ?")
         .bind(id)
         .fetch_one(&database.pool)
         .await
 }
 
-async fn tags(database: &Database, id: FoodId) -> Result<String, sqlx::Error> {
+async fn tags(database: &Database, id: FoodId) -> Result<IndexedTags, sqlx::Error> {
     query_scalar("SELECT tags FROM crumbs_foods_search_content WHERE id = ?")
         .bind(id)
         .fetch_one(&database.pool)
         .await
 }
 
-async fn tag_id(database: &Database, name_key: &str) -> Result<i64, sqlx::Error> {
+async fn tag_id(database: &Database, name_key: TagKey<'_>) -> Result<TagId, sqlx::Error> {
     query_scalar("SELECT id FROM crumbs_tags WHERE name_key = ?")
         .bind(name_key)
         .fetch_one(&database.pool)
         .await
 }
 
-async fn matching_ids(database: &Database, query: &str) -> Result<Vec<FoodId>, sqlx::Error> {
+async fn matching_ids(
+    database: &Database,
+    query: FtsQuery<'_>,
+) -> Result<Vec<FoodId>, sqlx::Error> {
     query_scalar(
         "SELECT f.id
          FROM crumbs_foods_fts
@@ -956,7 +969,7 @@ async fn matching_ids(database: &Database, query: &str) -> Result<Vec<FoodId>, s
 
 async fn assert_matches(
     database: &Database,
-    query: &str,
+    query: FtsQuery<'_>,
     expected: &[FoodId],
 ) -> Result<(), Box<dyn StdError>> {
     let actual = matching_ids(database, query).await?;
@@ -966,7 +979,7 @@ async fn assert_matches(
 
 async fn assert_matches_on(
     connection: &mut SqliteConnection,
-    query: &str,
+    query: FtsQuery<'_>,
     expected: &[FoodId],
 ) -> Result<(), Box<dyn StdError>> {
     let actual: Vec<FoodId> = query_scalar(
@@ -983,33 +996,36 @@ async fn assert_matches_on(
     Ok(())
 }
 
-async fn fts_row_count(database: &Database) -> Result<i64, sqlx::Error> {
+async fn fts_row_count(database: &Database) -> Result<FoodCount, sqlx::Error> {
     query_scalar("SELECT COUNT(*) FROM crumbs_foods_fts")
         .fetch_one(&database.pool)
         .await
 }
 
-async fn migration_count(database: &Database) -> Result<i64, sqlx::Error> {
+async fn migration_count(database: &Database) -> Result<MigrationCount, sqlx::Error> {
     query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
         .fetch_one(&database.pool)
         .await
 }
 
-async fn indexed_rowid(database: &Database, query: &str) -> Result<Option<FoodId>, sqlx::Error> {
+async fn indexed_rowid(
+    database: &Database,
+    query: FtsQuery<'_>,
+) -> Result<Option<FoodId>, sqlx::Error> {
     query_scalar("SELECT rowid FROM crumbs_foods_fts WHERE crumbs_foods_fts MATCH ?")
         .bind(query)
         .fetch_optional(&database.pool)
         .await
 }
 
-async fn indexed_rowid_count(database: &Database, rowid: FoodId) -> Result<i64, sqlx::Error> {
+async fn indexed_rowid_count(database: &Database, rowid: FoodId) -> Result<FoodCount, sqlx::Error> {
     query_scalar("SELECT COUNT(*) FROM crumbs_foods_fts WHERE rowid = ?")
         .bind(rowid)
         .fetch_one(&database.pool)
         .await
 }
 
-async fn vocab_terms(database: &Database) -> Result<Vec<String>, Box<dyn StdError>> {
+async fn vocab_terms(database: &Database) -> Result<Vec<FtsTerm>, Box<dyn StdError>> {
     query("CREATE VIRTUAL TABLE fts_vocab USING fts5vocab(crumbs_foods_fts, 'row')")
         .execute(&database.pool)
         .await?;
@@ -1023,9 +1039,6 @@ async fn vocab_terms(database: &Database) -> Result<Vec<String>, Box<dyn StdErro
 }
 
 async fn assert_fts_integrity(database: &Database) -> Result<(), Box<dyn StdError>> {
-    query("INSERT INTO crumbs_foods_fts (crumbs_foods_fts) VALUES ('integrity-check')")
-        .execute(&database.pool)
-        .await?;
     query(
         "INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rank)
          VALUES ('integrity-check', 1)",
