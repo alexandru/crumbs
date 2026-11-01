@@ -332,7 +332,7 @@ async fn open_database() -> Result<(tempfile::TempDir, Database), Box<dyn StdErr
 }
 
 fn set_clock(database: &mut Database, time: SystemTime) {
-    database.clock = Clock::controlled(move || time);
+    database.clock = Clock::with_source(move || time);
 }
 
 fn at(millis: u64) -> Result<SystemTime, io::Error> {

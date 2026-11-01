@@ -7,33 +7,28 @@ pub(crate) type UnixMillis = i64;
 
 /// Application clock used for persistence timestamps.
 ///
-/// The default source is the system clock. Unit tests may inject a controlled source.
-#[derive(Default)]
+/// The default source is the system clock. A supplied source may be used as an
+/// alternate clock.
 pub(crate) struct Clock {
-    #[cfg(test)]
     source: ClockSource,
 }
 
-impl Clock {
-    pub(crate) fn now(&self) -> Result<UnixMillis, ClockError> {
-        #[cfg(test)]
-        let time = match &self.source {
-            ClockSource::System => SystemTime::now(),
-            ClockSource::Controlled(controlled) => controlled(),
-        };
-        #[cfg(not(test))]
-        let time = SystemTime::now();
-
-        unix_millis(time)
+impl Default for Clock {
+    fn default() -> Self {
+        Self::with_source(SystemTime::now)
     }
 }
 
-#[cfg(test)]
 impl Clock {
-    pub(crate) fn controlled(source: impl Fn() -> SystemTime + Send + Sync + 'static) -> Self {
+    /// Creates a clock from the supplied time source.
+    pub(crate) fn with_source(source: impl Fn() -> SystemTime + Send + Sync + 'static) -> Self {
         Self {
-            source: ClockSource::Controlled(Box::new(source)),
+            source: Box::new(source),
         }
+    }
+
+    pub(crate) fn now(&self) -> Result<UnixMillis, ClockError> {
+        unix_millis((self.source)())
     }
 }
 
@@ -45,13 +40,7 @@ pub(crate) enum ClockError {
     OutOfRange,
 }
 
-#[cfg(test)]
-#[derive(Default)]
-enum ClockSource {
-    #[default]
-    System,
-    Controlled(Box<dyn Fn() -> SystemTime + Send + Sync>),
-}
+type ClockSource = Box<dyn Fn() -> SystemTime + Send + Sync>;
 
 fn unix_millis(time: SystemTime) -> Result<UnixMillis, ClockError> {
     let elapsed = time
