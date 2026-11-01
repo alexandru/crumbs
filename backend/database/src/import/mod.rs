@@ -16,7 +16,6 @@ mod usda;
 use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 
-use tokio::runtime::{Handle, TryCurrentError};
 use tokio::sync::mpsc;
 use tokio::task::JoinError;
 
@@ -65,14 +64,12 @@ pub struct ImportError {
 ///
 /// # Errors
 ///
-/// Reports a missing Tokio runtime or input, parsing, worker, or storage
-/// failures with committed progress.
+/// Reports input, parsing, worker, or storage failures with committed progress.
 pub async fn import_usda<S: FoodWriter + ?Sized>(
     store: &S,
     path: impl AsRef<Path>,
 ) -> Result<ImportReport, ImportError> {
     let path = path.as_ref();
-    Handle::try_current().map_err(|source| ImportError::runtime(path, source))?;
     let file = tokio::fs::File::open(path)
         .await
         .map_err(|source| ImportError::open(path, source))?;
@@ -96,14 +93,6 @@ pub async fn import_usda<S: FoodWriter + ?Sized>(
 }
 
 impl ImportError {
-    fn runtime(path: &Path, source: TryCurrentError) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            committed: ImportedFoods::default(),
-            failure: Box::new(ImportFailure::Runtime { source }),
-        }
-    }
-
     fn open(path: &Path, source: io::Error) -> Self {
         Self {
             path: path.to_path_buf(),
@@ -149,11 +138,6 @@ impl ImportError {
 
 #[derive(Debug, thiserror::Error)]
 enum ImportFailure {
-    #[error("no Tokio runtime is active: {source}")]
-    Runtime {
-        #[source]
-        source: TryCurrentError,
-    },
     #[error("failed to open the USDA input file: {source}")]
     Open {
         #[source]

@@ -11,56 +11,6 @@ use crate::{Database, DatabaseConfig};
 
 const FOUNDATION_JSON: &str = include_str!("../test-fixtures/foundation.json");
 
-#[test]
-fn sqlite_food_store_without_runtime_returns_errors() -> Result<(), Box<dyn StdError>> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let (_directory, database) = runtime.block_on(open_database())?;
-    let source = Source::Borrowed("community");
-    let food = make_food(
-        source.clone(),
-        "food-1",
-        "Community",
-        "Original",
-        None,
-        "{}",
-    )?;
-    let existing = TagName::new("Existing")?;
-    let replacement = TagName::new("Replacement")?;
-    let food_id = runtime.block_on(async {
-        let food_id = database.upsert_food(&food).await?;
-        database
-            .set_food_tags(food_id, std::slice::from_ref(&existing))
-            .await?;
-        Ok::<_, sqlx::Error>(food_id)
-    })?;
-    let updated = make_food(source.clone(), "food-1", "Community", "Changed", None, "{}")?;
-
-    assert_missing_runtime(futures_executor::block_on(database.upsert_food(&updated)))?;
-    assert_missing_runtime(futures_executor::block_on(
-        database.food_by_source(&source, &food.source_food_id),
-    ))?;
-    assert_missing_runtime(futures_executor::block_on(
-        database.set_food_tags(food_id, std::slice::from_ref(&replacement)),
-    ))?;
-    assert_missing_runtime(futures_executor::block_on(
-        database.foods_with_tag(&existing),
-    ))?;
-    assert_missing_runtime(futures_executor::block_on(database.list_tags()))?;
-
-    runtime.block_on(async {
-        let stored = find_food(&database, &source, &food.source_food_id).await?;
-        assert_eq!(stored.description, "Original");
-        assert_eq!(ids_with_tag(&database, &existing).await?, vec![food_id]);
-        assert!(ids_with_tag(&database, &replacement).await?.is_empty());
-        assert_eq!(database.list_tags().await?.len(), 1);
-        database.close().await;
-        Ok::<_, Box<dyn StdError>>(())
-    })?;
-    Ok(())
-}
-
 #[tokio::test]
 async fn upsert_foods_are_scoped_by_provider_and_keep_opaque_ids() -> Result<(), Box<dyn StdError>>
 {
@@ -345,20 +295,6 @@ async fn failed_tag_replacement_rolls_back_assignments_and_catalog_rows()
     Ok(())
 }
 
-fn assert_missing_runtime<T>(result: Result<T, sqlx::Error>) -> Result<(), Box<dyn StdError>> {
-    match result {
-        Err(sqlx::Error::Configuration(source)) => {
-            assert!(
-                source
-                    .downcast_ref::<tokio::runtime::TryCurrentError>()
-                    .is_some()
-            );
-            Ok(())
-        }
-        _ => Err(io::Error::other("expected missing runtime configuration error").into()),
-    }
-}
-
 async fn open_database() -> Result<(tempfile::TempDir, Database), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let database = Database::open(DatabaseConfig {
@@ -404,12 +340,19 @@ async fn find_food(
 }
 
 async fn ids_with_tag(database: &Database, tag: &TagName) -> Result<Vec<FoodId>, sqlx::Error> {
-    Ok(database
-        .foods_with_tag(tag)
-        .await?
-        .into_iter()
-        .map(|food| food.id)
-        .collect())
+    type RowId = i64;
+
+    Ok(sqlx::query_scalar::<_, RowId>(
+        "SELECT ft.food_id FROM crumbs_food_tags ft
+         JOIN crumbs_tags t ON t.id = ft.tag_id
+         WHERE t.name_key = ? ORDER BY ft.food_id",
+    )
+    .bind(&tag.key)
+    .fetch_all(&database.pool)
+    .await?
+    .into_iter()
+    .map(FoodId)
+    .collect())
 }
 
 fn write_input(directory: &Path, name: &str, contents: &str) -> Result<PathBuf, io::Error> {

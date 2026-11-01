@@ -11,7 +11,7 @@ use sqlx::{FromRow, query, query_scalar};
 
 use super::ImportError;
 use crate::{
-    Database, DatabaseConfig, Food, FoodCategory, FoodDescription, FoodId, FoodStore, FoodWriter,
+    Database, DatabaseConfig, Food, FoodCategory, FoodDescription, FoodId, FoodWriter,
     SourceFoodId, TagName,
 };
 
@@ -19,35 +19,6 @@ const FOUNDATION_JSON: &str = include_str!("../../test-fixtures/foundation.json"
 const BRANDED_JSON: &str = include_str!("../../test-fixtures/branded.json");
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(5);
 const LATER_TRIGGER_ROWS: usize = 100;
-
-#[test]
-fn import_without_runtime_returns_error_before_writing() -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
-    let store = RecordingFoodWriter::default();
-
-    let error: ImportError = match futures_executor::block_on(super::import_usda(&store, &path)) {
-        Ok(_) => return Err(io::Error::other("import unexpectedly succeeded").into()),
-        Err(error) => error,
-    };
-
-    assert_eq!(error.path, path);
-    assert_eq!(error.committed.get(), 0);
-    assert!(
-        error
-            .source()
-            .and_then(StdError::source)
-            .and_then(|source| source.downcast_ref::<tokio::runtime::TryCurrentError>())
-            .is_some()
-    );
-    let state = store
-        .state
-        .lock()
-        .map_err(|_| io::Error::other("recording food writer mutex was poisoned"))?;
-    assert_eq!(state.successful_writes, 0);
-    assert!(state.foods.is_empty());
-    Ok(())
-}
 
 #[tokio::test]
 async fn persists_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
@@ -157,7 +128,7 @@ async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>
     query("INSERT INTO crumbs_sources (id) VALUES ('other')")
         .execute(&database.pool)
         .await?;
-    let other_food_id: i64 = query_scalar(
+    let other_food_id: RowId = query_scalar(
         "INSERT INTO crumbs_foods (
             source, source_food_id, food_type, description, category, source_data
          ) VALUES ('other', '321358', 'Foundation', 'Other source food', NULL, '{}')
@@ -173,15 +144,18 @@ async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>
     database.import_usda(&path).await?;
 
     let other = food_row(&database, "other", "321358").await?;
+    assert_eq!(other.source, "other");
     assert_eq!(other.description, "Other source food");
     assert_eq!(other.source_data, "{}");
-    let tagged_foods = database.foods_with_tag(&other_tag).await?;
-    assert_eq!(tagged_foods.len(), 1);
-    let tagged_food = tagged_foods
-        .first()
-        .ok_or_else(|| io::Error::other("tag lookup returned no foods"))?;
-    assert_eq!(tagged_food.source, "other");
-    assert_eq!(tagged_food.source_food_id, "321358");
+    let tagged_foods: Vec<RowId> = query_scalar(
+        "SELECT ft.food_id FROM crumbs_food_tags ft
+         JOIN crumbs_tags t ON t.id = ft.tag_id
+         WHERE t.name_key = ? ORDER BY ft.food_id",
+    )
+    .bind(other_tag.as_str())
+    .fetch_all(&database.pool)
+    .await?;
+    assert_eq!(tagged_foods, vec![other_food_id]);
     let usda = food_row(&database, "usda", "321358").await?;
     assert_eq!(usda.description, "Hummus, commercial");
     assert_eq!(food_count(&database).await?, 3);

@@ -15,7 +15,6 @@ use axum::{Json, Router};
 use crumbs_database::Database;
 use serde::Serialize;
 use tokio::net::TcpListener;
-use tokio::runtime::{Handle, TryCurrentError};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
 mod config;
@@ -44,9 +43,6 @@ pub enum ServerCommand {
 /// Errors produced while starting or running the server.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Server startup was attempted outside an async runtime.
-    #[error("server startup requires an async runtime: {0}")]
-    RuntimeContext(#[source] TryCurrentError),
     /// A Unix signal handler could not be installed.
     #[error("failed to install a signal handler: {0}")]
     Signal(#[source] io::Error),
@@ -75,11 +71,10 @@ pub enum Error {
 ///
 /// # Errors
 ///
-/// Returns an error if no async runtime is active, signal handlers cannot be
-/// created, the listener cannot bind, its address cannot be read, the readiness
-/// message cannot be written to standard output, or the HTTP server fails.
+/// Returns an error if signal handlers cannot be created, the listener cannot
+/// bind, its address cannot be read, the readiness message cannot be written to
+/// standard output, or the HTTP server fails.
 pub async fn start(_database: &Database, config: HttpConfig) -> Result<(), Error> {
-    Handle::try_current().map_err(Error::RuntimeContext)?;
     // Handlers are installed before bind/readiness so Tokio buffers signals
     // that arrive during startup until the shutdown future is polled.
     let hangup = signal(SignalKind::hangup()).map_err(Error::Signal)?;

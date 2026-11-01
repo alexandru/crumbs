@@ -366,10 +366,8 @@ dependencies = [
  "axum",
  "clap",
  "crumbs-database",
- "futures-executor",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror",
  "tokio",
 ]

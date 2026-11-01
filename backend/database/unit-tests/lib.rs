@@ -113,23 +113,6 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
 }
 
 #[test]
-fn open_without_runtime_is_rejected_before_filesystem_access() -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let parent = directory.path().join("nested");
-    let path = parent.join("crumbs.db");
-
-    let error = match futures_executor::block_on(Database::open(config(path.clone()))) {
-        Ok(_) => return Err(io::Error::other("database opened without a Tokio runtime").into()),
-        Err(error) => error,
-    };
-
-    assert!(matches!(error, Error::RuntimeContext(_)));
-    assert!(!parent.exists(), "database directory was created");
-    assert!(!path.exists(), "database file was created");
-    Ok(())
-}
-
-#[test]
 fn open_and_close_in_current_thread_runtime() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("nested").join("crumbs.db");

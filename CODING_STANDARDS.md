@@ -18,7 +18,7 @@ Fallible operations MUST return `Result` and use `?` to propagate errors.
 
 ## Async runtime
 
-Async subsystems SHOULD share the application's runtime. The composition root MUST enable the drivers required by its subsystems and propagate runtime-creation failures as typed `Result` errors. Subsystem APIs MAY assume this configured application context, but MUST report a missing runtime through typed errors. Supporting arbitrary externally configured runtimes requires a separate explicit requirement.
+Async subsystems SHOULD share the application's runtime. The composition root MUST enable the drivers required by its subsystems and propagate runtime-creation failures as typed `Result` errors. Subsystem APIs MAY assume this configured application context. Supporting arbitrary externally configured runtimes requires a separate explicit requirement.
 
 ## Imports
 

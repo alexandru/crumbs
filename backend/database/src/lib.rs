@@ -13,7 +13,6 @@ use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
-use tokio::runtime::{Handle, TryCurrentError};
 
 mod cli;
 mod config;
@@ -23,8 +22,8 @@ mod import;
 pub use cli::{DbArgs, DbCommand};
 pub use config::{DatabaseConfig, DatabasePath};
 pub use foods::{
-    Food, FoodCategory, FoodDescription, FoodId, FoodStore, FoodSummary, FoodType, FoodWriter,
-    InvalidTagName, Source, SourceFoodId, Tag, TagId, TagName,
+    Food, FoodCategory, FoodDescription, FoodId, FoodSummary, FoodType, FoodWriter, InvalidTagName,
+    Source, SourceFoodId, Tag, TagId, TagName,
 };
 pub use import::{ImportError, ImportReport, ImportedFoods, import_usda};
 
@@ -42,11 +41,9 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if no async runtime is active, the parent directory
-    /// cannot be created, SQLite cannot open the file, or an embedded migration
-    /// cannot be applied or validated.
+    /// Returns an error if the parent directory cannot be created, SQLite cannot
+    /// open the file, or an embedded migration cannot be applied or validated.
     pub async fn open(config: DatabaseConfig) -> Result<Self, Error> {
-        Handle::try_current().map_err(Error::RuntimeContext)?;
         let path = config.path.clone();
         let pool = open_pool(config).await?;
         if let Err(source) = MIGRATOR.run(&pool).await {
@@ -63,8 +60,8 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error when no Tokio runtime is active or the input cannot be
-    /// opened, parsed, or persisted, including the number of committed foods.
+    /// Returns an error when the input cannot be opened, parsed, or persisted,
+    /// including the number of committed foods.
     pub async fn import_usda(&self, path: impl AsRef<Path>) -> Result<ImportReport, ImportError> {
         import::import_usda(self, path.as_ref()).await
     }
@@ -87,9 +84,6 @@ impl fmt::Debug for Database {
 /// Errors produced while opening or preparing the database.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Database initialization was attempted outside an async runtime.
-    #[error("database initialization requires an async runtime: {0}")]
-    RuntimeContext(#[source] TryCurrentError),
     /// A parent directory for the database file could not be created.
     #[error("failed to create the database directory {}: {source}", path.display())]
     CreateDirectory {
