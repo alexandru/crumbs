@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::value::RawValue;
 use sqlx::{FromRow, query_scalar};
 
-use super::{Clock, UnixMillis};
+use crate::clock::{Clock, UnixMillis};
 use crate::{Database, DatabaseConfig, Food, FoodId, FoodWriter, Source, Tag, TagName};
 
 #[tokio::test]

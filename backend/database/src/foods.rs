@@ -9,7 +9,7 @@ use serde_json::value::RawValue;
 use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
 
-pub(crate) mod sqlite;
+mod sqlite;
 
 /// Persists source-scoped foods independently of their import format.
 pub trait FoodWriter: Sync {

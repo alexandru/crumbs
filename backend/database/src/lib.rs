@@ -14,7 +14,10 @@ use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
 
+use crate::clock::Clock;
+
 mod cli;
+mod clock;
 mod config;
 mod foods;
 mod import;
@@ -32,7 +35,7 @@ pub use import::{ImportError, ImportReport, ImportedFoods, import_usda};
 /// Keeps the database open until it is closed or dropped.
 pub struct Database {
     pool: SqlitePool,
-    clock: foods::sqlite::Clock,
+    clock: Clock,
 }
 
 impl Database {
@@ -53,7 +56,7 @@ impl Database {
         }
         Ok(Self {
             pool,
-            clock: foods::sqlite::Clock::default(),
+            clock: Clock::default(),
         })
     }
 
