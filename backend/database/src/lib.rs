@@ -6,7 +6,7 @@
 
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use sqlx::migrate::{MigrateError, Migrator};

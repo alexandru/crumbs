@@ -53,8 +53,8 @@ async fn imported_fixtures_are_searchable_and_preserve_display_text()
     let foundation = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
     let branded = write_input(directory.path(), "branded.json", BRANDED_JSON)?;
 
-    database.import_usda(&foundation).await?;
-    database.import_usda(&branded).await?;
+    crate::import_usda(&database, &foundation).await?;
+    crate::import_usda(&database, &branded).await?;
 
     let hummus = food_id(&database, "usda", "321358").await?;
     let tomatoes = food_id(&database, "usda", "321360").await?;
@@ -311,7 +311,7 @@ async fn decomposed_romanian_forms_match_composed_and_plain_forms() -> Result<()
 async fn reimport_replaces_stale_terms_without_duplicate_hits() -> Result<(), Box<dyn StdError>> {
     let (directory, database) = open_database().await?;
     let foundation = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
-    database.import_usda(&foundation).await?;
+    crate::import_usda(&database, &foundation).await?;
     let id = food_id(&database, "usda", "321358").await?;
     let favorite = TagName::new("favorite")?;
     database
@@ -324,7 +324,7 @@ async fn reimport_replaces_stale_terms_without_duplicate_hits() -> Result<(), Bo
         "updated.json",
         r#"{"FoundationFoods":[{"fdcId":321358,"description":"Chickpea spread","dataType":"Foundation","foodCategory":{"description":"Spreads"}}]}"#,
     )?;
-    database.import_usda(&updated).await?;
+    crate::import_usda(&database, &updated).await?;
 
     assert_eq!(food_id(&database, "usda", "321358").await?, id);
     assert_eq!(description(&database, id).await?, "Chickpea spread");
@@ -337,7 +337,7 @@ async fn reimport_replaces_stale_terms_without_duplicate_hits() -> Result<(), Bo
     assert_eq!(fts_row_count(&database).await?, 2);
 
     for _ in 0..3 {
-        database.import_usda(&updated).await?;
+        crate::import_usda(&database, &updated).await?;
     }
     assert_matches(&database, "chickpea", &[id]).await?;
     assert_matches(&database, "tags:favorite", &[id]).await?;
@@ -702,12 +702,12 @@ async fn transaction_rollback_restores_food_and_index() -> Result<(), Box<dyn St
     )
     .execute(&mut *update)
     .await?;
-    query("INSERT INTO crumbs_tags (name, name_key) VALUES ('temp', 'temp')")
+    query("INSERT INTO crumbs_tags (name, name_key, created_at) VALUES ('temp', 'temp', 0)")
         .execute(&mut *update)
         .await?;
     query(
-        "INSERT INTO crumbs_food_tags (food_id, tag_id)
-         SELECT 1, id FROM crumbs_tags WHERE name_key = 'temp'",
+        "INSERT INTO crumbs_food_tags (food_id, tag_id, created_at)
+         SELECT 1, id, 0 FROM crumbs_tags WHERE name_key = 'temp'",
     )
     .execute(&mut *update)
     .await?;
@@ -744,8 +744,8 @@ async fn transaction_rollback_restores_food_and_index() -> Result<(), Box<dyn St
     let mut insert = database.pool.begin().await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, source_data)
-         VALUES (3, 'usda', 'rolled-insert', 'Foundation', 'Rolled back insert', NULL, '{}')",
+            (id, source, source_food_id, food_type, description, category, source_data, created_at)
+         VALUES (3, 'usda', 'rolled-insert', 'Foundation', 'Rolled back insert', NULL, '{}', 0)",
     )
     .execute(&mut *insert)
     .await?;
@@ -770,7 +770,7 @@ async fn import_failure_keeps_earlier_food_searchable_and_retry_succeeds()
         ]}"#,
     )?;
 
-    assert!(database.import_usda(&path).await.is_err());
+    assert!(crate::import_usda(&database, &path).await.is_err());
     let first = food_id(&database, "usda", "9401").await?;
     assert_matches(&database, "searchable", &[first]).await?;
     assert_matches(&database, "second", &[]).await?;
@@ -782,7 +782,7 @@ async fn import_failure_keeps_earlier_food_searchable_and_retry_succeeds()
             {"fdcId":9402,"description":"Second food","dataType":"Foundation"}
         ]}"#,
     )?;
-    database.import_usda(&path).await?;
+    crate::import_usda(&database, &path).await?;
     let second = food_id(&database, "usda", "9402").await?;
     assert_matches(&database, "searchable", &[first]).await?;
     assert_matches(&database, "second", &[second]).await?;
@@ -811,28 +811,28 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         .foreign_keys(true);
     let pool = SqlitePool::connect_with(options).await?;
     migrator.run(&pool).await?;
-    query("INSERT INTO crumbs_sources (id) VALUES ('usda')")
+    query("INSERT INTO crumbs_sources (id, created_at) VALUES ('usda', 0)")
         .execute(&pool)
         .await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, source_data)
+            (id, source, source_food_id, food_type, description, category, source_data, created_at)
          VALUES
-            (1, 'usda', 'old-1', 'Foundation', 'Roșii coapte', 'Legume', '{}'),
-            (2, 'usda', 'old-2', 'Foundation', 'Cheddar Cheese', 'Dairy', '{}')",
+            (1, 'usda', 'old-1', 'Foundation', 'Roșii coapte', 'Legume', '{}', 0),
+            (2, 'usda', 'old-2', 'Foundation', 'Cheddar Cheese', 'Dairy', '{}', 0)",
     )
     .execute(&pool)
     .await?;
     query(
-        "INSERT INTO crumbs_tags (id, name, name_key)
-         VALUES (1, 'roșu', ?), (2, 'sharp', 'sharp')",
+        "INSERT INTO crumbs_tags (id, name, name_key, created_at)
+         VALUES (1, 'roșu', ?, 0), (2, 'sharp', 'sharp', 0)",
     )
     .bind("ros\u{0326}u")
     .execute(&pool)
     .await?;
     query(
-        "INSERT INTO crumbs_food_tags (food_id, tag_id)
-         VALUES (1, 1), (2, 2)",
+        "INSERT INTO crumbs_food_tags (food_id, tag_id, created_at)
+         VALUES (1, 1, 0), (2, 2, 0)",
     )
     .execute(&pool)
     .await?;
@@ -888,14 +888,14 @@ async fn insert_food(
     category: Option<RawFoodCategory<'_>>,
     tags: RawTagName<'_>,
 ) -> Result<(), Box<dyn StdError>> {
-    query("INSERT OR IGNORE INTO crumbs_sources (id) VALUES (?)")
+    query("INSERT OR IGNORE INTO crumbs_sources (id, created_at) VALUES (?, 0)")
         .bind(source)
         .execute(&database.pool)
         .await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, source_data)
-         VALUES (?, ?, ?, 'Foundation', ?, ?, '{}')",
+            (id, source, source_food_id, food_type, description, category, source_data, created_at)
+         VALUES (?, ?, ?, 'Foundation', ?, ?, '{}', 0)",
     )
     .bind(id)
     .bind(source)

@@ -61,7 +61,7 @@ async fn imports_full_october_2026_foundation_release_idempotently() -> TestResu
     let applied_before = applied_migrations(&database.pool).await?;
     assert!(applied_before > 0, "no applied migration");
 
-    let first_report = database.import_usda(json_path.as_path()).await?;
+    let first_report = crate::import_usda(&database, json_path.as_path()).await?;
     assert_eq!(
         first_report.committed().get(),
         FOUNDATION_FOOD_COUNT,
@@ -90,7 +90,7 @@ async fn imports_full_october_2026_foundation_release_idempotently() -> TestResu
     let applied_after_reopen = applied_migrations(&reopened.pool).await?;
     assert_eq!(applied_after_reopen, applied_before, "reopen migrations");
 
-    let second_report = reopened.import_usda(json_path.as_path()).await?;
+    let second_report = crate::import_usda(&reopened, json_path.as_path()).await?;
     assert_eq!(
         second_report.committed().get(),
         FOUNDATION_FOOD_COUNT,
