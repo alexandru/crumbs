@@ -9,7 +9,8 @@
 //!
 //! Parsing runs on a blocking worker and hands one prepared record at a time to
 //! the asynchronous consumer. Each successfully persisted food commits in its
-//! own transaction.
+//! own transaction. The FTS5 triggers run inside that same transaction, so a
+//! food write and its index update commit or roll back together.
 
 mod usda;
 
