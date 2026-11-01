@@ -5,9 +5,12 @@ mod common;
 use std::error::Error;
 use std::fs;
 use std::io;
+use std::path::Path;
 use std::process::{Command, Output};
 
 use common::temporary_config;
+
+type DatabaseFilename<'a> = &'a str;
 
 const BIN: &str = env!("CARGO_BIN_EXE_crumbs");
 const FOUNDATION_JSON: &str = include_str!("../../database/test-fixtures/foundation.json");
@@ -41,6 +44,14 @@ fn imports_foundation_fixture_and_reports_count() -> Result<(), Box<dyn Error>> 
 }
 
 #[test]
+fn sqlite_special_names_become_literal_files() -> Result<(), Box<dyn Error>> {
+    for database_name in [":memory:", "file::memory:?cache=shared"] {
+        assert_literal_database_path(database_name)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn malformed_input_fails_with_committed_progress() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     let fixture = directory.path().join("malformed.json");
@@ -68,6 +79,54 @@ fn malformed_input_fails_with_committed_progress() -> Result<(), Box<dyn Error>>
         "failure did not report the input path: {stderr}"
     );
     Ok(())
+}
+
+fn assert_literal_database_path(database_name: DatabaseFilename<'_>) -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    fs::write(directory.path().join("foundation.json"), FOUNDATION_JSON)?;
+    fs::write(
+        directory.path().join("application.toml"),
+        format!("[http]\nport = 0\n\n[database]\npath = \"{database_name}\"\n"),
+    )?;
+
+    let first = run_import_in(directory.path())?;
+    assert_success(&first);
+    assert_eq!(String::from_utf8_lossy(&first.stdout), "Imported 2 foods\n");
+
+    let database_path = directory.path().join(database_name);
+    assert!(
+        database_path.is_file(),
+        "literal database file was not created: {}",
+        database_path.display()
+    );
+    let header = fs::read(&database_path)?;
+    assert!(
+        header.starts_with(b"SQLite format 3\0"),
+        "literal database file has no SQLite header: {}",
+        database_path.display()
+    );
+
+    let second = run_import_in(directory.path())?;
+    assert_success(&second);
+    assert_eq!(
+        String::from_utf8_lossy(&second.stdout),
+        "Imported 2 foods\n"
+    );
+    assert!(database_path.is_file());
+    Ok(())
+}
+
+fn run_import_in(directory: &Path) -> io::Result<Output> {
+    Command::new(BIN)
+        .current_dir(directory)
+        .args([
+            "db",
+            "import-usda",
+            "foundation.json",
+            "--config",
+            "application.toml",
+        ])
+        .output()
 }
 
 fn import(fixture: &std::path::Path, config: &std::path::Path) -> io::Result<Output> {

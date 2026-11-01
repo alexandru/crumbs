@@ -8,6 +8,9 @@ use sqlx::{SqliteConnection, query, query_scalar};
 
 use super::{Database, DatabaseConfig, Error};
 
+#[path = "import_usda_release.rs"]
+mod import_usda_release;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn open_creates_parents_database_and_migrations() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
@@ -616,6 +619,26 @@ async fn database_path_that_is_a_directory_reports_the_path() -> Result<(), Box<
     assert!(
         error.to_string().contains(&path.display().to_string()),
         "open error did not name the database path: {error}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_database_path_is_rejected_without_a_handle() -> Result<(), Box<dyn StdError>> {
+    let error = match Database::open(config(PathBuf::new())).await {
+        Ok(database) => {
+            database.close().await;
+            return Err(io::Error::other("empty path opened a database").into());
+        }
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, Error::ResolvePath { .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("failed to resolve the database path"),
+        "{error}"
     );
     Ok(())
 }

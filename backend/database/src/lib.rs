@@ -6,7 +6,7 @@
 
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use sqlx::migrate::{MigrateError, Migrator};
@@ -42,15 +42,22 @@ pub struct Database {
 impl Database {
     /// Opens the database at the configured path and applies pending migrations.
     ///
-    /// Missing parent directories and the database file are created.
+    /// The configured path is resolved to an absolute filesystem path before
+    /// use and passed to SQLite literally. SQLite URI syntax and special names
+    /// such as `:memory:` are not interpreted. Missing parent directories and
+    /// the database file are created.
     ///
     /// # Errors
     ///
-    /// Returns an error if the parent directory cannot be created, SQLite cannot
-    /// open the file, or an embedded migration cannot be applied or validated.
+    /// Returns an error if the path cannot be resolved, the parent directory
+    /// cannot be created, SQLite cannot open the file, or an embedded migration
+    /// cannot be applied or validated.
     pub async fn open(config: DatabaseConfig) -> Result<Self, Error> {
-        let path = config.path.clone();
-        let pool = open_pool(config).await?;
+        let path = std::path::absolute(&config.path).map_err(|source| Error::ResolvePath {
+            path: config.path,
+            source,
+        })?;
+        let pool = open_pool(&path).await?;
         if let Err(source) = MIGRATOR.run(&pool).await {
             pool.close().await;
             return Err(Error::Migration { path, source });
@@ -79,6 +86,14 @@ impl fmt::Debug for Database {
 /// Errors produced while opening or preparing the database.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// The configured database path could not be resolved to an absolute path.
+    #[error("failed to resolve the database path {}: {source}", path.display())]
+    ResolvePath {
+        /// Configured database path that could not be resolved.
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     /// A parent directory for the database file could not be created.
     #[error("failed to create the database directory {}: {source}", path.display())]
     CreateDirectory {
@@ -105,9 +120,8 @@ pub enum Error {
     },
 }
 
-async fn open_pool(config: DatabaseConfig) -> Result<SqlitePool, Error> {
-    if let Some(parent) = config
-        .path
+async fn open_pool(path: &Path) -> Result<SqlitePool, Error> {
+    if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
@@ -120,7 +134,7 @@ async fn open_pool(config: DatabaseConfig) -> Result<SqlitePool, Error> {
     }
 
     let options = SqliteConnectOptions::new()
-        .filename(&config.path)
+        .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         // FULL synchronizes WAL commits for power-loss durability.
@@ -139,7 +153,7 @@ async fn open_pool(config: DatabaseConfig) -> Result<SqlitePool, Error> {
         .connect_with(options)
         .await
         .map_err(|source| Error::Open {
-            path: config.path.clone(),
+            path: path.to_path_buf(),
             source,
         })?;
 
