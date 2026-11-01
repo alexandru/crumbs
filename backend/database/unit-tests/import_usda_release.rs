@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use sqlx::{SqlitePool, query, query_scalar};
 
-use crate::{Database, DatabaseConfig, FoodStore, TagName};
+use crate::{Database, DatabaseConfig, TagName};
 
 const RELEASE_JSON_ENV: &str = "USDA_FOUNDATION_JSON";
 const ENV_HELP: &str = "USDA_FOUNDATION_JSON must point at the official 2026-10-29 Foundation JSON";
@@ -99,13 +99,12 @@ async fn imports_full_october_2026_foundation_release_idempotently() -> TestResu
     let second = read_stored(&reopened).await?;
     assert_eq!(first, second, "reimport changed stored foods");
     verify_fts(&reopened.pool, &second).await?;
-    let case_insensitive_tag = TagName::new("rEVIEWED")?;
-    let tagged_foods = reopened.foods_with_tag(&case_insensitive_tag).await?;
-    assert_eq!(tagged_foods.len(), 1, "persisted tag lookup");
-    let tagged_food = tagged_foods
-        .first()
-        .ok_or_else(|| invalid_data("reopened tag lookup returned no foods"))?;
-    assert_eq!(tagged_food.id, reviewed_food_id, "reopened tag food id");
+    let tag_matches = matching_rowids(&reopened.pool, "tags:reviewed").await?;
+    assert_eq!(
+        tag_matches,
+        vec![reviewed_food_local_id],
+        "reopened and reimported FTS tag"
+    );
     verify_foreign_keys(&reopened.pool).await?;
     let applied_reimport = applied_migrations(&reopened.pool).await?;
     assert_eq!(applied_reimport, applied_before, "reimport migrations");
