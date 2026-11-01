@@ -11,6 +11,10 @@ const FOUNDATION_RECORD: &str = r#"{"fdcId": 321358, "description": "Hummus, com
 const FOUNDATION_RECORD_NULL_CATEGORY: &str = r#"{"fdcId":321360,"description":"Tomatoes, grape, raw","dataType":"Foundation","foodCategory":null}"#;
 const BRANDED_RECORD: &str = r#"{"foodClass":"Branded","description":"GRANOLA, CINNAMON, RAISIN","foodNutrients":[],"publicationDate":"11/13/2020","brandOwner":"MICHELE'S","gtinUpc":"001633636543505","dataSource":"LI","servingSize":28,"servingSizeUnit":"g","householdServingFullText":"0.25 cup","brandedFoodCategory":"Cereal","modifiedDate":"4/26/2020","availableDate":"4/26/2020","dataType":"Branded","fdcId":1106281,"labelNutrients":{"calories":{"value":120}}}"#;
 const SURVEY_RECORD: &str = r#"{"fdcId":2705383,"description":"Milk, human","dataType":"Survey (FNDDS)","wweiaFoodCategory":{"wweiaFoodCategoryDescription":"Human milk","wweiaFoodCategoryCode":3298314}}"#;
+const IO_FAILURE_FIRST_RECORD: &str =
+    r#"{"fdcId":1,"description":"First record","dataType":"Foundation"}"#;
+const IO_FAILURE_SECOND_RECORD: &str =
+    r#"{"fdcId":2,"description":"Second record","dataType":"Foundation"}"#;
 
 #[test]
 fn preserves_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
@@ -300,6 +304,86 @@ fn rejects_malformed_json() -> Result<(), Box<dyn StdError>> {
 }
 
 #[test]
+fn reports_io_failure_while_reading_a_later_record() -> Result<(), Box<dyn StdError>> {
+    let input = document(
+        "FoundationFoods",
+        &[IO_FAILURE_FIRST_RECORD, IO_FAILURE_SECOND_RECORD],
+    );
+    let second_start = record_offset(&input, IO_FAILURE_SECOND_RECORD)?;
+    let fail_after = second_start + IO_FAILURE_SECOND_RECORD.len() / 2;
+    let reader = FailingReader::new(input.as_bytes(), fail_after);
+
+    let (result, foods) = collect_reader(reader, 1);
+
+    assert_eq!(
+        foods.len(),
+        1,
+        "the valid preceding record was not delivered"
+    );
+    let delivered = first_food(&foods)?;
+    assert_eq!(delivered.fdc_id.as_str(), "1");
+
+    let error = error(result)?;
+    let displayed = error.to_string();
+    assert!(
+        displayed.contains("failed to read record JSON: simulated input read failure"),
+        "unexpected read error label: {displayed}"
+    );
+    assert!(
+        !displayed.contains("malformed record JSON"),
+        "I/O failure was labeled as malformed JSON: {displayed}"
+    );
+    match error {
+        ParseError::Record {
+            position,
+            source: RecordError::Read(source),
+        } => {
+            assert_eq!(position.get(), 2);
+            assert_eq!(source.io_error_kind(), Some(io::ErrorKind::Other));
+            assert!(source.to_string().contains("simulated input read failure"));
+        }
+        other => return Err(io::Error::other(format!("unexpected error: {other}")).into()),
+    }
+    Ok(())
+}
+
+#[test]
+fn reports_io_failure_while_reading_document_framing() -> Result<(), Box<dyn StdError>> {
+    let input = br#"{"FoundationFoods":["#;
+    let reader = FailingReader::new(input, 5);
+
+    let (result, foods) = collect_reader(reader, 1);
+
+    assert!(foods.is_empty());
+    let error = error(result)?;
+    require_document_read_error(&error)?;
+    Ok(())
+}
+
+#[test]
+fn reports_io_failure_while_checking_trailing_input() -> Result<(), Box<dyn StdError>> {
+    let input = document(
+        "FoundationFoods",
+        &[IO_FAILURE_FIRST_RECORD, IO_FAILURE_SECOND_RECORD],
+    );
+    let reader = FailingReader::new(input.as_bytes(), input.len());
+
+    let (result, foods) = collect_reader(reader, 1);
+
+    assert_eq!(foods.len(), 2, "completed records were not delivered");
+    let first = first_food(&foods)?;
+    assert_eq!(first.fdc_id.as_str(), "1");
+    let second = foods
+        .get(1)
+        .ok_or_else(|| io::Error::other("second food is missing"))?;
+    assert_eq!(second.fdc_id.as_str(), "2");
+
+    let error = error(result)?;
+    require_document_read_error(&error)?;
+    Ok(())
+}
+
+#[test]
 fn rejects_missing_header_fields_with_json_position() -> Result<(), Box<dyn StdError>> {
     let records = [
         r#"{"description":"Food","dataType":"Foundation"}"#,
@@ -568,6 +652,13 @@ fn document(root: &str, records: &[&str]) -> String {
 }
 
 fn collect(input: &[u8], capacity: usize) -> (Result<(), ParseError>, Vec<PreparedFood>) {
+    collect_reader(input, capacity)
+}
+
+fn collect_reader(
+    input: impl Read,
+    capacity: usize,
+) -> (Result<(), ParseError>, Vec<PreparedFood>) {
     let (sender, mut receiver) = mpsc::channel(capacity);
     let consumer = thread::spawn(move || {
         let mut foods = Vec::new();
@@ -586,10 +677,47 @@ fn collect(input: &[u8], capacity: usize) -> (Result<(), ParseError>, Vec<Prepar
     (result, foods)
 }
 
+fn record_offset(input: &str, record: &str) -> Result<usize, io::Error> {
+    input
+        .find(record)
+        .ok_or_else(|| io::Error::other("record is missing from the test document"))
+}
+
 fn error(result: Result<(), ParseError>) -> Result<ParseError, io::Error> {
     result
         .err()
         .ok_or_else(|| io::Error::other("input was accepted"))
+}
+
+fn require_document_read_error(error: &ParseError) -> Result<(), io::Error> {
+    let displayed = error.to_string();
+    if displayed.contains("invalid USDA FoodData Central document") {
+        return Err(io::Error::other(format!(
+            "I/O failure was labeled as an invalid document: {displayed}"
+        )));
+    }
+    if !displayed.contains("failed to read USDA FoodData Central document:") {
+        return Err(io::Error::other(format!(
+            "unexpected document read error label: {displayed}"
+        )));
+    }
+    match error {
+        ParseError::Read { source } => {
+            let kind = source.io_error_kind();
+            if kind != Some(io::ErrorKind::Other) {
+                return Err(io::Error::other(format!(
+                    "unexpected I/O error kind: {kind:?}"
+                )));
+            }
+            if !source.to_string().contains("simulated input read failure") {
+                return Err(io::Error::other(format!(
+                    "unexpected I/O error message: {source}"
+                )));
+            }
+            Ok(())
+        }
+        other => Err(io::Error::other(format!("unexpected error: {other}"))),
+    }
 }
 
 fn first_food(foods: &[PreparedFood]) -> Result<&PreparedFood, io::Error> {
@@ -636,6 +764,48 @@ impl Read for CountingReader<'_> {
             None => &[],
         };
         let count = remaining.len().min(buffer.len());
+        let source = remaining
+            .get(..count)
+            .ok_or_else(|| io::Error::other("source range was out of bounds"))?;
+        let destination = buffer
+            .get_mut(..count)
+            .ok_or_else(|| io::Error::other("buffer range was out of bounds"))?;
+        destination.copy_from_slice(source);
+        self.offset = self
+            .offset
+            .checked_add(count)
+            .ok_or_else(|| io::Error::other("read offset overflowed"))?;
+        Ok(count)
+    }
+}
+
+struct FailingReader<'a> {
+    input: &'a [u8],
+    offset: usize,
+    fail_after: usize,
+}
+
+impl<'a> FailingReader<'a> {
+    const fn new(input: &'a [u8], fail_after: usize) -> Self {
+        Self {
+            input,
+            offset: 0,
+            fail_after,
+        }
+    }
+}
+
+impl Read for FailingReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.offset >= self.fail_after {
+            return Err(io::Error::other("simulated input read failure"));
+        }
+        let remaining = match self.input.get(self.offset..) {
+            Some(remaining) => remaining,
+            None => &[],
+        };
+        let available = self.fail_after - self.offset;
+        let count = remaining.len().min(buffer.len()).min(available);
         let source = remaining
             .get(..count)
             .ok_or_else(|| io::Error::other("source range was out of bounds"))?;

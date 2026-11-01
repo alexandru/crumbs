@@ -79,7 +79,7 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
     let path = directory.path().join("crumbs.db");
 
     let database = Database::open(config(path.clone())).await?;
-    query("INSERT INTO crumbs_sources (id) VALUES (?)")
+    query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
         .bind("test-source")
         .execute(&database.pool)
         .await?;
@@ -252,7 +252,7 @@ async fn dropping_database_releases_sqlite_and_preserves_committed_data()
     let path = directory.path().join("crumbs.db");
     {
         let database = Database::open(config(path.clone())).await?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
             .bind("test-source")
             .execute(&database.pool)
             .await?;
@@ -310,7 +310,7 @@ async fn cancelling_operation_drops_database_and_releases_sqlite() -> Result<(),
         let close_event = database.pool.close_event();
         let _ = close_event_sender.send(close_event);
         let mut transaction = database.pool.begin().await.map_err(io::Error::other)?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
             .bind("cancelled-transaction")
             .execute(&mut *transaction)
             .await
@@ -355,7 +355,7 @@ fn dropping_database_before_runtime_teardown_releases_sqlite() -> Result<(), Box
         .build()?;
     runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
             .bind("test-source")
             .execute(&database.pool)
             .await?;
@@ -384,7 +384,7 @@ fn dropping_database_outside_tokio_releases_sqlite() -> Result<(), Box<dyn StdEr
         .build()?;
     let (database, close_event) = runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
             .bind("test-source")
             .execute(&database.pool)
             .await?;
@@ -416,7 +416,7 @@ fn dropping_database_inside_futures_executor_releases_sqlite() -> Result<(), Box
         .build()?;
     let (database, close_event) = runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
             .bind("test-source")
             .execute(&database.pool)
             .await?;
@@ -450,7 +450,7 @@ fn dropping_database_in_current_thread_runtime_releases_sqlite() -> Result<(), B
         .build()?;
     let (database, close_event) = runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
             .bind("test-source")
             .execute(&database.pool)
             .await?;
@@ -684,7 +684,7 @@ async fn operation_that_returns_error(
         .await
         .map_err(io::Error::other)?;
     let close_event = database.pool.close_event();
-    query("INSERT INTO crumbs_sources (id) VALUES (?)")
+    query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
         .bind("test-source")
         .execute(&database.pool)
         .await

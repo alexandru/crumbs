@@ -104,7 +104,7 @@ async fn run_server(config: AppConfig) -> Result<(), Error> {
 
 async fn run_import_usda(config: AppConfig, file: PathBuf) -> Result<(), Error> {
     let database = Database::open(config.database).await?;
-    let import_result = database.import_usda(&file).await;
+    let import_result = crumbs_database::import_usda(&database, &file).await;
     database.close().await;
     let report = import_result?;
 

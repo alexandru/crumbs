@@ -6,7 +6,7 @@
 
 use std::fmt;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use sqlx::migrate::{MigrateError, Migrator};
@@ -32,6 +32,7 @@ pub use import::{ImportError, ImportReport, ImportedFoods, import_usda};
 /// Keeps the database open until it is closed or dropped.
 pub struct Database {
     pool: SqlitePool,
+    clock: foods::sqlite::Clock,
 }
 
 impl Database {
@@ -50,20 +51,10 @@ impl Database {
             pool.close().await;
             return Err(Error::Migration { path, source });
         }
-        Ok(Self { pool })
-    }
-
-    /// Imports a USDA FoodData Central JSON download from `path`.
-    ///
-    /// Foods commit independently as they are streamed. A later parse or write
-    /// failure leaves earlier commits in place.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the input cannot be opened, parsed, or persisted,
-    /// including the number of committed foods.
-    pub async fn import_usda(&self, path: impl AsRef<Path>) -> Result<ImportReport, ImportError> {
-        import::import_usda(self, path.as_ref()).await
+        Ok(Self {
+            pool,
+            clock: foods::sqlite::Clock::default(),
+        })
     }
 
     /// Waits for connections to close and prevents further database operations.

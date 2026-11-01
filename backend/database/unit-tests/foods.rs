@@ -159,6 +159,30 @@ async fn tag_names_fold_unicode_case_without_removing_accents() -> Result<(), Bo
     Ok(())
 }
 
+#[test]
+fn tag_names_fold_full_case_canonical_forms_and_latest_unicode_mappings()
+-> Result<(), Box<dyn StdError>> {
+    assert_eq!(TagName::new("Straße")?, TagName::new("STRASSE")?);
+    assert_eq!(TagName::new("ẞ")?, TagName::new("ss")?);
+    assert_eq!(TagName::new("Σ")?, TagName::new("σ")?);
+    assert_eq!(TagName::new("ς")?, TagName::new("σ")?);
+    assert_eq!(TagName::new("ﬃ")?, TagName::new("ffi")?);
+
+    assert_eq!(TagName::new("é")?, TagName::new("e\u{0301}")?);
+    assert_eq!(
+        TagName::new("Șuncă")?,
+        TagName::new("S\u{0326}UNCA\u{0306}")?
+    );
+    assert_ne!(TagName::new("é")?, TagName::new("e")?);
+    assert_ne!(TagName::new("Ș")?, TagName::new("s")?);
+
+    assert_eq!(TagName::new("\u{A7CE}")?, TagName::new("\u{A7CF}")?);
+    assert_eq!(TagName::new("\u{16EA0}")?, TagName::new("\u{16EBB}")?);
+
+    assert_eq!(TagName::new(" Straße ")?.as_str(), "Straße");
+    Ok(())
+}
+
 #[tokio::test]
 async fn food_upserts_and_usda_reimports_preserve_tag_assignments() -> Result<(), Box<dyn StdError>>
 {
@@ -192,7 +216,7 @@ async fn food_upserts_and_usda_reimports_preserve_tag_assignments() -> Result<()
     assert_eq!(ids_with_tag(&database, &favorite).await?, vec![initial_id]);
 
     let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
-    let first_import = database.import_usda(&path).await?;
+    let first_import = crate::import_usda(&database, &path).await?;
     assert_eq!(first_import.committed().get(), 2);
     let imported = find_food(&database, &source, source_food_id).await?;
     assert_eq!(imported.id, initial_id);
@@ -204,7 +228,7 @@ async fn food_upserts_and_usda_reimports_preserve_tag_assignments() -> Result<()
     );
     assert_eq!(ids_with_tag(&database, &favorite).await?, vec![initial_id]);
 
-    let second_import = database.import_usda(&path).await?;
+    let second_import = crate::import_usda(&database, &path).await?;
     assert_eq!(second_import.committed().get(), 2);
     let reimported = find_food(&database, &source, source_food_id).await?;
     assert_eq!(reimported.id, initial_id);

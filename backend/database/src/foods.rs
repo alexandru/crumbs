@@ -5,11 +5,11 @@ use std::error::Error as StdError;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 
-use caseless::Caseless;
 use serde_json::value::RawValue;
+use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
 
-mod sqlite;
+pub(crate) mod sqlite;
 
 /// Persists source-scoped foods independently of their import format.
 pub trait FoodWriter: Sync {
@@ -93,7 +93,8 @@ impl TagName {
         if display.is_empty() {
             return Err(InvalidTagName);
         }
-        let key = display.chars().nfd().default_case_fold().nfd().collect();
+        let decomposed = display.nfd().collect::<String>();
+        let key = UniCase::new(decomposed).to_folded_case().nfd().collect();
         Ok(Self {
             display: display.to_owned(),
             key,

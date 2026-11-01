@@ -9,7 +9,6 @@ publish = false
 
 [workspace.dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
-caseless = "0.2.2"
 clap = { version = "4.6.7", features = ["derive"] }
 config = { version = "0.15.27", default-features = false, features = ["toml"] }
 crumbs-database = { path = "database" }
@@ -23,6 +22,7 @@ sqlx = { version = "0.9.0", default-features = false, features = ["macros", "mig
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", default-features = false, features = ["fs", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+unicase = "2.10.0"
 unicode-normalization = "0.1.26"
 
 [workspace.lints.rust]

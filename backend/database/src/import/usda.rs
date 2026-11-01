@@ -192,12 +192,21 @@ pub(crate) enum ParseError {
         #[source]
         source: serde_json::Error,
     },
-    /// A food record is invalid. `source` identifies the field problem.
+    /// Reading document framing or trailing input failed because of an input I/O
+    /// error.
+    #[error("failed to read USDA FoodData Central document: {source}")]
+    Read {
+        /// Underlying I/O error while reading document framing or trailing input.
+        #[source]
+        source: serde_json::Error,
+    },
+    /// A food record cannot be read or is invalid. `source` identifies the read
+    /// or field problem.
     #[error("invalid USDA FoodData Central record {position}: {source}")]
     Record {
         /// One-based record position.
         position: RecordPosition,
-        /// Record-level validation failure.
+        /// Record-level read or validation failure.
         #[source]
         source: RecordError,
     },
@@ -215,7 +224,17 @@ pub(crate) enum ParseError {
     },
 }
 
-/// Details of an invalid food record.
+impl ParseError {
+    fn document(source: serde_json::Error) -> Self {
+        if source.is_io() {
+            Self::Read { source }
+        } else {
+            Self::Document { source }
+        }
+    }
+}
+
+/// Details of reading or validating a food record.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RecordError {
     /// The record is not a valid header object. Serde's line and column are
@@ -226,6 +245,9 @@ pub(crate) enum RecordError {
     /// the archive document.
     #[error("malformed record JSON: {0}")]
     Syntax(#[source] serde_json::Error),
+    /// Reading the record JSON failed because of an input I/O error.
+    #[error("failed to read record JSON: {0}")]
+    Read(#[source] serde_json::Error),
     /// The record was valid JSON but not an object.
     #[error("food record must be a JSON object")]
     NotObject,
@@ -259,7 +281,8 @@ pub(crate) enum RecordError {
 /// # Errors
 ///
 /// Returns [`ParseError::Document`] for invalid root framing or trailing
-/// content, [`ParseError::Record`] for an invalid record, and
+/// content, [`ParseError::Read`] for document-level input I/O failures,
+/// [`ParseError::Record`] for unreadable or invalid records, and
 /// [`ParseError::ConsumerDisconnected`] when the receiver is dropped.
 pub(crate) fn stream_foods(
     reader: impl Read,
@@ -275,14 +298,18 @@ pub(crate) fn stream_foods(
 
     match (result, state) {
         (_, StreamState::Failure(failure)) => Err(failure),
-        (Ok(()), StreamState::Ready | StreamState::Syntax(_)) => deserializer
-            .end()
-            .map_err(|source| ParseError::Document { source }),
-        (Err(source), StreamState::Syntax(position)) => Err(ParseError::Record {
-            position,
-            source: RecordError::Syntax(source),
-        }),
-        (Err(source), StreamState::Ready) => Err(ParseError::Document { source }),
+        (Ok(()), StreamState::Ready | StreamState::Record(_)) => {
+            deserializer.end().map_err(ParseError::document)
+        }
+        (Err(source), StreamState::Record(position)) => {
+            let source = if source.is_io() {
+                RecordError::Read(source)
+            } else {
+                RecordError::Syntax(source)
+            };
+            Err(ParseError::Record { position, source })
+        }
+        (Err(source), StreamState::Ready) => Err(ParseError::document(source)),
     }
 }
 
@@ -296,7 +323,7 @@ const PROCESSING_FAILED: &str = "usda fooddata central processing failed";
 enum StreamState {
     Ready,
     Failure(ParseError),
-    Syntax(RecordPosition),
+    Record(RecordPosition),
 }
 
 struct RootSeed<'a> {
@@ -415,7 +442,7 @@ impl<'de> Visitor<'de> for FoodListVisitor<'_> {
                 Ok(Some(raw)) => raw,
                 Ok(None) => return Ok(()),
                 Err(source) => {
-                    *state = StreamState::Syntax(position);
+                    *state = StreamState::Record(position);
                     return Err(source);
                 }
             };

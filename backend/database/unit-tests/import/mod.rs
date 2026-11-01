@@ -12,7 +12,7 @@ use sqlx::{FromRow, query, query_scalar};
 use super::ImportError;
 use crate::{
     Database, DatabaseConfig, Food, FoodCategory, FoodDescription, FoodId, FoodWriter,
-    SourceFoodId, TagName,
+    SourceFoodId, TagName, import_usda,
 };
 
 const FOUNDATION_JSON: &str = include_str!("../../test-fixtures/foundation.json");
@@ -27,7 +27,7 @@ async fn persists_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
     let input = format!(r#"{{"SurveyFoods":[{record}]}}"#);
     let path = write_input(directory.path(), "survey.json", &input)?;
 
-    let report = database.import_usda(&path).await?;
+    let report = import_usda(&database, &path).await?;
 
     assert_eq!(report.committed().get(), 1);
     let food = food_row(&database, "usda", "2705383").await?;
@@ -41,7 +41,7 @@ async fn imports_foundation_foods_and_preserves_source_details() -> Result<(), B
     let (directory, database) = open_database().await?;
     let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
 
-    let report = database.import_usda(&path).await?;
+    let report = import_usda(&database, &path).await?;
 
     assert_eq!(report.committed().get(), 2);
     assert_eq!(food_count(&database).await?, 2);
@@ -72,7 +72,7 @@ async fn imports_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn St
     let (directory, database) = open_database().await?;
     let path = write_input(directory.path(), "branded.json", BRANDED_JSON)?;
 
-    let report = database.import_usda(&path).await?;
+    let report = import_usda(&database, &path).await?;
 
     assert_eq!(report.committed().get(), 1);
     let food = food_row(&database, "usda", "1106281").await?;
@@ -94,7 +94,7 @@ async fn imports_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn St
 async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<dyn StdError>> {
     let (directory, database) = open_database().await?;
     let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
-    database.import_usda(&path).await?;
+    import_usda(&database, &path).await?;
     let id_before = food_row(&database, "usda", "321358").await?.id;
 
     query(
@@ -105,7 +105,7 @@ async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<d
     .execute(&database.pool)
     .await?;
 
-    let report = database.import_usda(&path).await?;
+    let report = import_usda(&database, &path).await?;
 
     assert_eq!(report.committed().get(), 2);
     assert_eq!(food_count(&database).await?, 2);
@@ -124,24 +124,24 @@ async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<d
 async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>> {
     let (directory, database) = open_database().await?;
     let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
-    database.import_usda(&path).await?;
-    query("INSERT INTO crumbs_sources (id) VALUES ('other')")
+    import_usda(&database, &path).await?;
+    query("INSERT INTO crumbs_sources (id, created_at) VALUES ('other', 0)")
         .execute(&database.pool)
         .await?;
     let other_food_id: RowId = query_scalar(
         "INSERT INTO crumbs_foods (
-            source, source_food_id, food_type, description, category, source_data
-         ) VALUES ('other', '321358', 'Foundation', 'Other source food', NULL, '{}')
+            source, source_food_id, food_type, description, category, source_data, created_at
+         ) VALUES ('other', '321358', 'Foundation', 'Other source food', NULL, '{}', 0)
          RETURNING id",
     )
     .fetch_one(&database.pool)
     .await?;
-    let other_tag = TagName::new("other")?;
+    let other_tag = TagName::new("Other")?;
     database
         .set_food_tags(FoodId(other_food_id), std::slice::from_ref(&other_tag))
         .await?;
 
-    database.import_usda(&path).await?;
+    import_usda(&database, &path).await?;
 
     let other = food_row(&database, "other", "321358").await?;
     assert_eq!(other.source, "other");
@@ -150,7 +150,7 @@ async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>
     let tagged_foods: Vec<RowId> = query_scalar(
         "SELECT ft.food_id FROM crumbs_food_tags ft
          JOIN crumbs_tags t ON t.id = ft.tag_id
-         WHERE t.name_key = ? ORDER BY ft.food_id",
+         WHERE t.name = ? ORDER BY ft.food_id",
     )
     .bind(other_tag.as_str())
     .fetch_all(&database.pool)
@@ -168,8 +168,8 @@ async fn importing_a_subset_retains_absent_rows_and_coexists() -> Result<(), Box
     let foundation = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
     let branded = write_input(directory.path(), "branded.json", BRANDED_JSON)?;
 
-    database.import_usda(&foundation).await?;
-    let report = database.import_usda(&branded).await?;
+    import_usda(&database, &foundation).await?;
+    let report = import_usda(&database, &branded).await?;
 
     assert_eq!(report.committed().get(), 1);
     assert_eq!(food_count(&database).await?, 3);
@@ -193,8 +193,8 @@ async fn imports_supported_roots_with_exact_food_types() -> Result<(), Box<dyn S
         r#"{"SurveyFoods":[{"fdcId":9302,"description":"Survey food","dataType":"Survey (FNDDS)"}]}"#,
     )?;
 
-    database.import_usda(&sr).await?;
-    database.import_usda(&survey).await?;
+    import_usda(&database, &sr).await?;
+    import_usda(&database, &survey).await?;
 
     let sr_food = food_row(&database, "usda", "9301").await?;
     let survey_food = food_row(&database, "usda", "9302").await?;
@@ -208,7 +208,7 @@ async fn empty_recognized_array_succeeds_with_zero_commits() -> Result<(), Box<d
     let (directory, database) = open_database().await?;
     let path = write_input(directory.path(), "empty.json", r#"{"FoundationFoods":[]}"#)?;
 
-    let report = database.import_usda(&path).await?;
+    let report = import_usda(&database, &path).await?;
 
     assert_eq!(report.committed().get(), 0);
     assert_eq!(food_count(&database).await?, 0);
@@ -295,7 +295,7 @@ async fn parse_failure_after_valid_food_keeps_earlier_commit_and_retry_succeeds(
             {"fdcId":9102,"description":"Second food","dataType":"Foundation"}
         ]}"#,
     )?;
-    let report = database.import_usda(&path).await?;
+    let report = import_usda(&database, &path).await?;
 
     assert_eq!(report.committed().get(), 2);
     assert_eq!(food_count(&database).await?, 2);
@@ -339,7 +339,7 @@ async fn write_failure_rolls_back_only_failed_food_and_retry_succeeds()
     query("DROP TRIGGER fail_trigger_food")
         .execute(&database.pool)
         .await?;
-    let report = database.import_usda(&path).await?;
+    let report = import_usda(&database, &path).await?;
 
     let expected = 2 + LATER_TRIGGER_ROWS;
     assert_eq!(report.committed().get(), expected);
@@ -390,7 +390,7 @@ async fn imports_into_generic_food_writer_and_preserves_raw_json() -> Result<(),
     let first_path = write_input(directory.path(), "first.json", &first_input)?;
     let store = RecordingFoodWriter::default();
 
-    let report = crate::import_usda(&store, &first_path).await?;
+    let report = import_usda(&store, &first_path).await?;
 
     assert_eq!(report.committed().get(), 1);
     let first_food = store
@@ -407,7 +407,7 @@ async fn imports_into_generic_food_writer_and_preserves_raw_json() -> Result<(),
     let second_record = r#"{"fdcId":7301, "description":"Updated alternative food", "dataType":"Foundation", "foodCategory":{"description":"Shelf Stable"}, "details":{"measurement":2.00}}"#;
     let second_input = format!(r#"{{"FoundationFoods":[{second_record}]}}"#);
     let second_path = write_input(directory.path(), "second.json", &second_input)?;
-    let report = crate::import_usda(&store, &second_path).await?;
+    let report = import_usda(&store, &second_path).await?;
 
     assert_eq!(report.committed().get(), 1);
     let updated_food = store
@@ -487,7 +487,7 @@ async fn require_import_error(
     database: &Database,
     path: &Path,
 ) -> Result<ImportError, Box<dyn StdError>> {
-    let result = tokio::time::timeout(IMPORT_TIMEOUT, database.import_usda(path))
+    let result = tokio::time::timeout(IMPORT_TIMEOUT, import_usda(database, path))
         .await
         .map_err(|_| {
             io::Error::other(format!(
@@ -510,7 +510,7 @@ async fn require_writer_import_error<S: FoodWriter + ?Sized>(
     store: &S,
     path: &Path,
 ) -> Result<ImportError, Box<dyn StdError>> {
-    let result = tokio::time::timeout(IMPORT_TIMEOUT, crate::import_usda(store, path))
+    let result = tokio::time::timeout(IMPORT_TIMEOUT, import_usda(store, path))
         .await
         .map_err(|_| {
             io::Error::other(format!(
