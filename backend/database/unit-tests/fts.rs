@@ -6,7 +6,7 @@ use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{SqliteConnection, query, query_scalar};
 
-use crate::{Database, DatabaseConfig, FoodCategory, FoodDescription, FoodStore, TagName};
+use crate::{Database, DatabaseConfig, FoodCategory, FoodDescription, TagName};
 
 const FOUNDATION_JSON: &str = include_str!("../test-fixtures/foundation.json");
 const BRANDED_JSON: &str = include_str!("../test-fixtures/branded.json");
