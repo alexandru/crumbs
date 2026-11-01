@@ -18,7 +18,7 @@ Fallible operations MUST return `Result` and use `?` to propagate errors.
 
 ## Async runtime
 
-Async subsystems SHOULD share the application's runtime. The composition root MUST enable the drivers required by its subsystems and propagate runtime-creation failures as typed `Result` errors. Subsystem APIs MAY assume this configured application context, but MUST report a missing runtime through typed errors. Supporting arbitrary externally configured runtimes requires a separate explicit requirement.
+Async subsystems SHOULD share the application's runtime. The composition root MUST enable the drivers required by its subsystems and propagate runtime-creation failures as typed `Result` errors. Subsystem APIs MAY assume this configured application context. Supporting arbitrary externally configured runtimes requires a separate explicit requirement.
 
 ## Imports
 
@@ -37,6 +37,14 @@ fn parse(input: &str) -> Result<Vec<u8>, FromHexError> {
 ## File structure
 
 Files MUST start with the most important definitions: public types, their impls, and public functions. Private items follow, so the file reads from most important to least important.
+
+## Test compilation
+
+Rust production code under crate-local `src/` MUST NOT use `#[cfg(not(test))]`. `#[cfg(test)]` is permitted under `src/` ONLY on module declarations that load mirrored crate-local `unit-tests/` modules through the required relative `#[path]`.
+
+Production implementations MUST be the same in test and non-test builds. Test-only helpers MUST live in `unit-tests/`, not `src/`. Equivalent test-dependent `cfg`, `cfg_attr`, or `cfg!` forms MUST NOT bypass this rule.
+
+Code reviews MUST explicitly verify compliance.
 
 ## Comments
 

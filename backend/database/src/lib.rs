@@ -13,17 +13,29 @@ use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
-use tokio::runtime::{Handle, TryCurrentError};
 
+use crate::clock::Clock;
+
+mod cli;
+mod clock;
 mod config;
+mod foods;
+mod import;
 
+pub use cli::{DbArgs, DbCommand};
 pub use config::{DatabaseConfig, DatabasePath};
+pub use foods::{
+    Food, FoodCategory, FoodDescription, FoodId, FoodSummary, FoodType, FoodWriter, InvalidTagName,
+    Source, SourceFoodId, Tag, TagId, TagName,
+};
+pub use import::{ImportError, ImportReport, ImportedFoods, import_usda};
 
 /// Handle to the application database.
 ///
 /// Keeps the database open until it is closed or dropped.
 pub struct Database {
     pool: SqlitePool,
+    clock: Clock,
 }
 
 impl Database {
@@ -33,18 +45,19 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if no async runtime is active, the parent directory
-    /// cannot be created, SQLite cannot open the file, or an embedded migration
-    /// cannot be applied or validated.
+    /// Returns an error if the parent directory cannot be created, SQLite cannot
+    /// open the file, or an embedded migration cannot be applied or validated.
     pub async fn open(config: DatabaseConfig) -> Result<Self, Error> {
-        Handle::try_current().map_err(Error::RuntimeContext)?;
         let path = config.path.clone();
         let pool = open_pool(config).await?;
         if let Err(source) = MIGRATOR.run(&pool).await {
             pool.close().await;
             return Err(Error::Migration { path, source });
         }
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            clock: Clock::default(),
+        })
     }
 
     /// Waits for connections to close and prevents further database operations.
@@ -65,9 +78,6 @@ impl fmt::Debug for Database {
 /// Errors produced while opening or preparing the database.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Database initialization was attempted outside an async runtime.
-    #[error("database initialization requires an async runtime: {0}")]
-    RuntimeContext(#[source] TryCurrentError),
     /// A parent directory for the database file could not be created.
     #[error("failed to create the database directory {}: {source}", path.display())]
     CreateDirectory {

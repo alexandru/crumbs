@@ -1,0 +1,26 @@
+{
+  "BrandedFoods": [
+    {
+      "foodClass": "Branded",
+      "description": "GRANOLA, CINNAMON, RAISIN",
+      "foodNutrients": [],
+      "publicationDate": "11/13/2020",
+      "brandOwner": "MICHELE'S",
+      "gtinUpc": "001633636543505",
+      "dataSource": "LI",
+      "servingSize": 28,
+      "servingSizeUnit": "g",
+      "householdServingFullText": "0.25 cup",
+      "brandedFoodCategory": "Cereal",
+      "modifiedDate": "4/26/2020",
+      "availableDate": "4/26/2020",
+      "dataType": "Branded",
+      "fdcId": 1106281,
+      "labelNutrients": {
+        "calories": {
+          "value": 120
+        }
+      }
+    }
+  ]
+}

@@ -1,14 +1,15 @@
 //! Command-line wiring for the `crumbs` executable.
 //!
 //! The clap hierarchy lives here so the executable entry point stays thin.
-//! Server-owned argument types are composed into this hierarchy, keeping server
-//! options close to their implementation.
+//! Server-owned and database-owned argument types are composed into this
+//! hierarchy, keeping each subsystem's options close to its implementation.
 
-use std::io;
+use std::io::{self, Write};
+use std::path::PathBuf;
 
 use ::config::ConfigError;
 use clap::{Parser, Subcommand};
-use crumbs_database::Database;
+use crumbs_database::{Database, DbArgs, DbCommand, ImportError};
 use crumbs_server::{ServerArgs, ServerCommand};
 
 mod config;
@@ -29,6 +30,8 @@ pub struct Cli {
 pub enum Command {
     /// Run the backend server.
     Server(ServerArgs),
+    /// Manage the database.
+    Db(DbArgs),
 }
 
 /// Errors produced while running the executable.
@@ -43,6 +46,12 @@ pub enum Error {
     /// The database could not be opened or migrated.
     #[error(transparent)]
     Database(#[from] crumbs_database::Error),
+    /// A USDA import failed.
+    #[error(transparent)]
+    Import(#[from] ImportError),
+    /// Command output could not be written.
+    #[error("failed to write command output: {0}")]
+    Output(#[source] io::Error),
     /// The server failed to start or run.
     #[error(transparent)]
     Server(#[from] crumbs_server::Error),
@@ -53,8 +62,8 @@ pub enum Error {
 /// # Errors
 ///
 /// Returns an error if the configuration cannot be loaded, the runtime cannot
-/// be created, the database cannot be opened or migrated, or server startup
-/// fails.
+/// be created, the database cannot be opened or migrated, an import fails, or
+/// server startup fails.
 pub fn run() -> Result<(), Error> {
     let cli = Cli::parse();
     run_cli(cli)
@@ -65,15 +74,24 @@ fn run_cli(cli: Cli) -> Result<(), Error> {
         Command::Server(ServerArgs { command }) => match command {
             ServerCommand::Start { config } => {
                 let app_config = AppConfig::from_file(config)?;
-                let runtime = tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(2)
-                    .enable_all()
-                    .build()
-                    .map_err(Error::Runtime)?;
-                runtime.block_on(run_server(app_config))
+                runtime()?.block_on(run_server(app_config))
+            }
+        },
+        Command::Db(DbArgs { command }) => match command {
+            DbCommand::ImportUsda { file, config } => {
+                let app_config = AppConfig::from_file(config)?;
+                runtime()?.block_on(run_import_usda(app_config, file))
             }
         },
     }
+}
+
+fn runtime() -> Result<tokio::runtime::Runtime, Error> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(Error::Runtime)
 }
 
 async fn run_server(config: AppConfig) -> Result<(), Error> {
@@ -81,6 +99,18 @@ async fn run_server(config: AppConfig) -> Result<(), Error> {
     let result = crumbs_server::start(&database, config.http).await;
     database.close().await;
     result?;
+    Ok(())
+}
+
+async fn run_import_usda(config: AppConfig, file: PathBuf) -> Result<(), Error> {
+    let database = Database::open(config.database).await?;
+    let import_result = crumbs_database::import_usda(&database, &file).await;
+    database.close().await;
+    let report = import_result?;
+
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "Imported {} foods", report.committed().get()).map_err(Error::Output)?;
+    stdout.flush().map_err(Error::Output)?;
     Ok(())
 }
 

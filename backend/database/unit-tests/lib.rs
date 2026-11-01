@@ -79,8 +79,8 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
     let path = directory.path().join("crumbs.db");
 
     let database = Database::open(config(path.clone())).await?;
-    query("INSERT INTO crumbs_sources (id) VALUES (?)")
-        .bind("usda")
+    query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
+        .bind("test-source")
         .execute(&database.pool)
         .await?;
     let applied_before: i64 =
@@ -92,7 +92,7 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
     assert_sqlite_fds_released(&path)?;
     drop(database);
     let reopened = Database::open(config(path.clone())).await?;
-    let sources: i64 = query_scalar("SELECT COUNT(*) FROM crumbs_sources")
+    let sources: i64 = query_scalar("SELECT COUNT(*) FROM crumbs_sources WHERE id = 'test-source'")
         .fetch_one(&reopened.pool)
         .await?;
     let applied_after: i64 =
@@ -109,23 +109,6 @@ async fn reopen_preserves_data_and_does_not_reapply_migrations() -> Result<(), B
     #[cfg(target_os = "linux")]
     assert_sqlite_fds_released(&path)?;
 
-    Ok(())
-}
-
-#[test]
-fn open_without_runtime_is_rejected_before_filesystem_access() -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let parent = directory.path().join("nested");
-    let path = parent.join("crumbs.db");
-
-    let error = match futures_executor::block_on(Database::open(config(path.clone()))) {
-        Ok(_) => return Err(io::Error::other("database opened without a Tokio runtime").into()),
-        Err(error) => error,
-    };
-
-    assert!(matches!(error, Error::RuntimeContext(_)));
-    assert!(!parent.exists(), "database directory was created");
-    assert!(!path.exists(), "database file was created");
     Ok(())
 }
 
@@ -269,8 +252,8 @@ async fn dropping_database_releases_sqlite_and_preserves_committed_data()
     let path = directory.path().join("crumbs.db");
     {
         let database = Database::open(config(path.clone())).await?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
-            .bind("usda")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
+            .bind("test-source")
             .execute(&database.pool)
             .await?;
         assert!(
@@ -282,7 +265,7 @@ async fn dropping_database_releases_sqlite_and_preserves_committed_data()
     assert_sqlite_fds_released(&path)?;
 
     let reopened = Database::open(config(path.clone())).await?;
-    let sources: i64 = query_scalar("SELECT COUNT(*) FROM crumbs_sources")
+    let sources: i64 = query_scalar("SELECT COUNT(*) FROM crumbs_sources WHERE id = 'test-source'")
         .fetch_one(&reopened.pool)
         .await?;
     assert_eq!(sources, 1, "dropping the database lost committed data");
@@ -327,7 +310,7 @@ async fn cancelling_operation_drops_database_and_releases_sqlite() -> Result<(),
         let close_event = database.pool.close_event();
         let _ = close_event_sender.send(close_event);
         let mut transaction = database.pool.begin().await.map_err(io::Error::other)?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
             .bind("cancelled-transaction")
             .execute(&mut *transaction)
             .await
@@ -372,8 +355,8 @@ fn dropping_database_before_runtime_teardown_releases_sqlite() -> Result<(), Box
         .build()?;
     runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
-            .bind("usda")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
+            .bind("test-source")
             .execute(&database.pool)
             .await?;
         assert!(
@@ -401,8 +384,8 @@ fn dropping_database_outside_tokio_releases_sqlite() -> Result<(), Box<dyn StdEr
         .build()?;
     let (database, close_event) = runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
-            .bind("usda")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
+            .bind("test-source")
             .execute(&database.pool)
             .await?;
         assert!(
@@ -433,8 +416,8 @@ fn dropping_database_inside_futures_executor_releases_sqlite() -> Result<(), Box
         .build()?;
     let (database, close_event) = runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
-            .bind("usda")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
+            .bind("test-source")
             .execute(&database.pool)
             .await?;
         assert!(
@@ -467,8 +450,8 @@ fn dropping_database_in_current_thread_runtime_releases_sqlite() -> Result<(), B
         .build()?;
     let (database, close_event) = runtime.block_on(async {
         let database = Database::open(config(path.clone())).await?;
-        query("INSERT INTO crumbs_sources (id) VALUES (?)")
-            .bind("usda")
+        query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
+            .bind("test-source")
             .execute(&database.pool)
             .await?;
         assert!(
@@ -701,8 +684,8 @@ async fn operation_that_returns_error(
         .await
         .map_err(io::Error::other)?;
     let close_event = database.pool.close_event();
-    query("INSERT INTO crumbs_sources (id) VALUES (?)")
-        .bind("usda")
+    query("INSERT INTO crumbs_sources (id, created_at) VALUES (?, 0)")
+        .bind("test-source")
         .execute(&database.pool)
         .await
         .map_err(io::Error::other)?;

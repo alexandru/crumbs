@@ -5,14 +5,17 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+clap.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+unicase.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 futures-executor.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true
 
 [lints]
