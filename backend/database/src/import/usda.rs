@@ -55,12 +55,6 @@ impl PreparedFood {
 pub(crate) struct FdcId(String);
 
 impl FdcId {
-    /// Returns the identifier as text.
-    #[cfg(test)]
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-
     fn from_json(value: RawFdcId) -> Result<Self, RecordError> {
         let value = NonZeroU64::new(value).ok_or(RecordError::ZeroFdcId)?;
         Ok(Self(value.to_string()))
@@ -113,12 +107,6 @@ impl fmt::Display for FoodKind {
 pub(crate) struct FoodDescription(String);
 
 impl FoodDescription {
-    /// Returns the description as text.
-    #[cfg(test)]
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-
     fn from_json(value: RawFoodDescription) -> Result<Self, RecordError> {
         if value.trim().is_empty() {
             return Err(RecordError::BlankDescription);
@@ -137,14 +125,6 @@ impl fmt::Display for FoodDescription {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FoodCategory(String);
 
-impl FoodCategory {
-    /// Returns the category as text.
-    #[cfg(test)]
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
 impl fmt::Display for FoodCategory {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
@@ -156,12 +136,6 @@ impl fmt::Display for FoodCategory {
 pub(crate) struct RecordPosition(NonZeroUsize);
 
 impl RecordPosition {
-    /// Returns the position as a one-based number.
-    #[cfg(test)]
-    pub(crate) const fn get(self) -> usize {
-        self.0.get()
-    }
-
     const fn first() -> Self {
         Self(NonZeroUsize::MIN)
     }

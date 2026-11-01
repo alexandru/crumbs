@@ -642,6 +642,34 @@ fn streams_all_records_from_large_input() -> Result<(), Box<dyn StdError>> {
     Ok(())
 }
 
+impl FdcId {
+    /// Returns the identifier as text.
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FoodDescription {
+    /// Returns the description as text.
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FoodCategory {
+    /// Returns the category as text.
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl RecordPosition {
+    /// Returns the position as a one-based number.
+    const fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
 fn document(root: &str, records: &[&str]) -> String {
     let mut input = String::from("{\"");
     input.push_str(root);

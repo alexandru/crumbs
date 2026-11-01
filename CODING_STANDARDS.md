@@ -38,6 +38,14 @@ fn parse(input: &str) -> Result<Vec<u8>, FromHexError> {
 
 Files MUST start with the most important definitions: public types, their impls, and public functions. Private items follow, so the file reads from most important to least important.
 
+## Test compilation
+
+Rust production code under crate-local `src/` MUST NOT use `#[cfg(not(test))]`. `#[cfg(test)]` is permitted under `src/` ONLY on module declarations that load mirrored crate-local `unit-tests/` modules through the required relative `#[path]`.
+
+Production implementations MUST be the same in test and non-test builds. Test-only helpers MUST live in `unit-tests/`, not `src/`. Equivalent test-dependent `cfg`, `cfg_attr`, or `cfg!` forms MUST NOT bypass this rule.
+
+Code reviews MUST explicitly verify compliance.
+
 ## Comments
 
 Comments MUST explain what the code does not make obvious and MUST NOT restate signatures or logic. Comments explaining non-obvious constructs (e.g., concurrency or lifecycle issues) to a Rust advanced-beginner are encouraged (assume expertise in Scala).
