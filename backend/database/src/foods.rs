@@ -5,9 +5,10 @@ use std::error::Error as StdError;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 
-use serde_json::value::RawValue;
 use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
+
+use crate::nutrition::FoodData;
 
 mod sqlite;
 
@@ -43,8 +44,8 @@ pub struct Food {
     pub food_type: FoodType,
     pub description: FoodDescription,
     pub category: Option<FoodCategory>,
-    /// Original source JSON, including its original numeric spelling.
-    pub source_data: Box<RawValue>,
+    /// Shared Crumbs model parsed from the source record.
+    pub parsed_data: FoodData,
 }
 
 /// Local food identity, independent of source identifiers.

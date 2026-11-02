@@ -27,7 +27,8 @@ fn preserves_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
         food.category.as_ref().map(FoodCategory::as_str),
         Some("Human milk")
     );
-    assert_eq!(food.raw.get(), SURVEY_RECORD);
+    assert_eq!(food.parsed_data.nutrition, None);
+    assert!(food.parsed_data.serving_sizes.is_empty());
     Ok(())
 }
 
@@ -114,7 +115,7 @@ fn ignores_wweia_metadata_for_other_food_kinds() -> Result<(), Box<dyn StdError>
 }
 
 #[test]
-fn streams_foundation_foods_and_preserves_raw_payload() -> Result<(), Box<dyn StdError>> {
+fn streams_foundation_foods_and_preserves_header_metadata() -> Result<(), Box<dyn StdError>> {
     let input = document(
         "FoundationFoods",
         &[FOUNDATION_RECORD, FOUNDATION_RECORD_NULL_CATEGORY],
@@ -133,7 +134,8 @@ fn streams_foundation_foods_and_preserves_raw_payload() -> Result<(), Box<dyn St
         Some("Legumes and Legume Products")
     );
     assert_eq!(first.position.get(), 1);
-    assert_eq!(first.raw.get(), FOUNDATION_RECORD);
+    assert_eq!(first.parsed_data.nutrition, None);
+    assert!(first.parsed_data.serving_sizes.is_empty());
 
     let second = foods
         .get(1)
@@ -142,7 +144,8 @@ fn streams_foundation_foods_and_preserves_raw_payload() -> Result<(), Box<dyn St
     assert_eq!(second.kind, FoodKind::Foundation);
     assert_eq!(second.category, None);
     assert_eq!(second.position.get(), 2);
-    assert_eq!(second.raw.get(), FOUNDATION_RECORD_NULL_CATEGORY);
+    assert_eq!(second.parsed_data.nutrition, None);
+    assert!(second.parsed_data.serving_sizes.is_empty());
     Ok(())
 }
 
@@ -162,11 +165,21 @@ fn streams_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn StdError
         food.category.as_ref().map(FoodCategory::as_str),
         Some("Cereal")
     );
-    assert_eq!(food.raw.get(), BRANDED_RECORD);
-    assert!(
-        food.raw.get().contains(r#""gtinUpc":"001633636543505""#),
-        "gtinUpc was not preserved as text: {}",
-        food.raw.get()
+    assert_eq!(food.parsed_data.nutrition, None);
+    assert_eq!(food.parsed_data.serving_sizes.len(), 1);
+    assert_eq!(
+        food.parsed_data
+            .serving_sizes
+            .first()
+            .map(|serving| serving.name.as_str()),
+        Some("0.25 cup")
+    );
+    assert_eq!(
+        food.parsed_data
+            .serving_sizes
+            .first()
+            .map(|serving| serving.quantity.to_string()),
+        Some("28 g".to_owned())
     );
     Ok(())
 }

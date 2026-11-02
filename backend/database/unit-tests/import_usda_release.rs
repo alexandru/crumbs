@@ -6,15 +6,19 @@ use std::error::Error as StdError;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde::Deserialize;
+use serde_json::value::RawValue;
 use sqlx::{SqlitePool, query, query_scalar};
 
+use crate::nutrition::{FoodData, Mass};
 use crate::{Database, DatabaseConfig, TagName};
 
 const RELEASE_JSON_ENV: &str = "USDA_FOUNDATION_JSON";
 const ENV_HELP: &str = "USDA_FOUNDATION_JSON must point at the official 2026-10-29 Foundation JSON";
 const PINNED_RELEASE: ReleaseDate = "2026-10-29";
 const FOUNDATION_FOOD_COUNT: FoodCount = 424;
+const COMMITTED_PREFIX_COUNT: FoodCount = 314;
+const REJECTED_FOOD_ID: SourceFoodIdRef<'_> = "2727566";
 const EXPECTED_SOURCE: SourceRef<'_> = "usda";
 const EXPECTED_FOOD_TYPE: FoodTypeRef<'_> = "Foundation";
 
@@ -23,18 +27,63 @@ type ReleaseDate = &'static str;
 type FoodCount = usize;
 type SourceRef<'a> = &'a str;
 type FoodTypeRef<'a> = &'a str;
+type SourceFoodIdRef<'a> = &'a str;
 type FtsQuery<'a> = &'a str;
 type FtsPhrase = String;
 type MigrationCount = i64;
 type Source = String;
 type SourceFoodId = String;
+type RawFdcId = i64;
+type RawNutrientId = i64;
 type FoodType = String;
 type FoodDescription = String;
 type FoodCategory = String;
 type FoodTags = String;
-type SourceData = String;
-type ReferenceFoods = BTreeMap<SourceFoodId, Value>;
+type ParsedData = String;
 type TestResult = Result<(), Box<dyn StdError>>;
+
+struct ReferenceFoods {
+    by_id: BTreeMap<SourceFoodId, ReferenceFood>,
+    order: Vec<SourceFoodId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FoundationFoodsArchive {
+    #[serde(rename = "FoundationFoods")]
+    foods: Vec<ReferenceFood>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReferenceFood {
+    #[serde(rename = "fdcId")]
+    fdc_id: RawFdcId,
+    description: FoodDescription,
+    #[serde(default, rename = "foodCategory")]
+    food_category: Option<ReferenceFoodCategory>,
+    #[serde(default, rename = "foodNutrients")]
+    food_nutrients: Vec<ReferenceFoodNutrient>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReferenceFoodCategory {
+    description: Option<FoodCategory>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReferenceFoodNutrient {
+    #[serde(default)]
+    amount: Option<Box<RawValue>>,
+    #[serde(default)]
+    nutrient: Option<ReferenceNutrient>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReferenceNutrient {
+    #[serde(default)]
+    id: Option<RawNutrientId>,
+    #[serde(default, rename = "unitName")]
+    unit_name: Option<String>,
+}
 
 #[derive(Debug, PartialEq, sqlx::FromRow)]
 struct StoredFood {
@@ -46,12 +95,12 @@ struct StoredFood {
     description: FoodDescription,
     category: Option<FoodCategory>,
     tags: FoodTags,
-    source_data: SourceData,
+    parsed_data: ParsedData,
 }
 
 #[tokio::test]
 #[ignore = "requires USDA_FOUNDATION_JSON pointing to the official October 2026 Foundation download"]
-async fn imports_full_october_2026_foundation_release_idempotently() -> TestResult {
+async fn rejects_negative_fooddata_amount_and_preserves_committed_prefix_on_retry() -> TestResult {
     let json_path = foundation_json_path()?;
     let reference = load_reference(&json_path)?;
 
@@ -61,14 +110,15 @@ async fn imports_full_october_2026_foundation_release_idempotently() -> TestResu
     let applied_before = applied_migrations(&database.pool).await?;
     assert!(applied_before > 0, "no applied migration");
 
-    let first_report = crate::import_usda(&database, json_path.as_path()).await?;
-    assert_eq!(
-        first_report.committed().get(),
-        FOUNDATION_FOOD_COUNT,
-        "first import count"
-    );
+    let first_error = require_rejected_release_import(&database, &json_path).await?;
+    verify_rejection(&first_error);
     let mut first = read_stored(&database).await?;
     verify_reference(&first, &reference)?;
+    assert!(
+        first.iter().all(|food| food.tags.is_empty()),
+        "initial import assigned tags"
+    );
+    assert_food_absent(&database, REJECTED_FOOD_ID).await?;
     let reviewed_tag = TagName::new("Reviewed")?;
     let (reviewed_food_id, reviewed_food_local_id) = match first.first_mut() {
         Some(food) => {
@@ -90,14 +140,12 @@ async fn imports_full_october_2026_foundation_release_idempotently() -> TestResu
     let applied_after_reopen = applied_migrations(&reopened.pool).await?;
     assert_eq!(applied_after_reopen, applied_before, "reopen migrations");
 
-    let second_report = crate::import_usda(&reopened, json_path.as_path()).await?;
-    assert_eq!(
-        second_report.committed().get(),
-        FOUNDATION_FOOD_COUNT,
-        "reimport count"
-    );
+    let second_error = require_rejected_release_import(&reopened, &json_path).await?;
+    verify_rejection(&second_error);
     let second = read_stored(&reopened).await?;
     assert_eq!(first, second, "reimport changed stored foods");
+    verify_reference(&second, &reference)?;
+    assert_food_absent(&reopened, REJECTED_FOOD_ID).await?;
     verify_fts(&reopened.pool, &second).await?;
     let tag_matches = matching_rowids(&reopened.pool, "tags:reviewed").await?;
     assert_eq!(
@@ -124,34 +172,33 @@ fn load_reference(path: &Path) -> Result<ReferenceFoods, Box<dyn StdError>> {
     let bytes = std::fs::read(path).map_err(|error| {
         io::Error::new(error.kind(), format!("read {}: {error}", path.display()))
     })?;
-    let mut root: Value = serde_json::from_slice(&bytes).map_err(|error| {
+    let archive: FoundationFoodsArchive = serde_json::from_slice(&bytes).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("parse {}: {error}", path.display()),
         )
     })?;
-    let foods = root
-        .as_object_mut()
-        .and_then(|root| root.get_mut("FoundationFoods"))
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| invalid_data("root must contain a FoundationFoods array"))?;
-    if foods.len() != FOUNDATION_FOOD_COUNT {
+    if archive.foods.len() != FOUNDATION_FOOD_COUNT {
         return Err(invalid_data(format!(
             "expected {FOUNDATION_FOOD_COUNT} FoundationFoods for {PINNED_RELEASE}, found {}",
-            foods.len()
+            archive.foods.len()
         )));
     }
 
-    let mut reference = BTreeMap::new();
-    for food in foods.drain(..) {
-        let source_food_id = food
-            .get("fdcId")
-            .and_then(Value::as_i64)
-            .ok_or_else(|| invalid_data("missing fdcId"))?
-            .to_string();
-        if reference.insert(source_food_id.clone(), food).is_some() {
+    let mut reference = ReferenceFoods {
+        by_id: BTreeMap::new(),
+        order: Vec::with_capacity(archive.foods.len()),
+    };
+    for food in archive.foods {
+        let source_food_id = food.fdc_id.to_string();
+        if reference
+            .by_id
+            .insert(source_food_id.clone(), food)
+            .is_some()
+        {
             return Err(invalid_data(format!("duplicate fdcId {source_food_id}")));
         }
+        reference.order.push(source_food_id);
     }
     Ok(reference)
 }
@@ -159,7 +206,7 @@ fn load_reference(path: &Path) -> Result<ReferenceFoods, Box<dyn StdError>> {
 async fn read_stored(database: &Database) -> Result<Vec<StoredFood>, sqlx::Error> {
     sqlx::query_as::<_, StoredFood>(
         "SELECT f.id, f.source, f.source_food_id, f.food_type, f.description, f.category,
-                s.tags AS tags, f.source_data
+                s.tags AS tags, f.parsed_data
          FROM crumbs_foods AS f
          JOIN crumbs_foods_search_content AS s ON s.id = f.id
          ORDER BY f.id",
@@ -169,28 +216,28 @@ async fn read_stored(database: &Database) -> Result<Vec<StoredFood>, sqlx::Error
 }
 
 fn verify_reference(stored: &[StoredFood], reference: &ReferenceFoods) -> TestResult {
-    assert_eq!(stored.len(), FOUNDATION_FOOD_COUNT, "row count");
-    for food in stored {
+    assert_eq!(stored.len(), COMMITTED_PREFIX_COUNT, "row count");
+    for (food, expected_source_food_id) in stored
+        .iter()
+        .zip(reference.order.iter().take(COMMITTED_PREFIX_COUNT))
+    {
         let source_food_id = food.source_food_id.as_str();
-        let Some(expected) = reference.get(source_food_id) else {
+        assert_eq!(
+            &food.source_food_id, expected_source_food_id,
+            "committed source-food prefix"
+        );
+        let Some(expected) = reference.by_id.get(source_food_id) else {
             return Err(invalid_data(format!("unknown {source_food_id}")));
         };
-        let description = expected
-            .get("description")
-            .and_then(Value::as_str)
-            .ok_or_else(|| invalid_data(format!("no description for {source_food_id}")))?;
-        let category = match expected.get("foodCategory") {
-            None | Some(Value::Null) => None,
-            Some(category) => category
-                .get("description")
-                .and_then(Value::as_str)
-                .map(Some)
-                .ok_or_else(|| invalid_data(format!("bad category for {source_food_id}")))?,
-        };
+        let description = &expected.description;
+        let category = expected
+            .food_category
+            .as_ref()
+            .and_then(|category| category.description.as_deref());
         assert_eq!(food.source, EXPECTED_SOURCE, "source {source_food_id}");
         assert_eq!(food.food_type, EXPECTED_FOOD_TYPE, "type {source_food_id}");
         assert_eq!(
-            food.description, description,
+            food.description, *description,
             "description {source_food_id}"
         );
         assert_eq!(
@@ -198,15 +245,110 @@ fn verify_reference(stored: &[StoredFood], reference: &ReferenceFoods) -> TestRe
             category,
             "category {source_food_id}"
         );
-        assert!(food.tags.is_empty(), "tags {source_food_id}");
-        let stored_value: Value = serde_json::from_str(&food.source_data).map_err(|error| {
+        let parsed_data: FoodData = serde_json::from_str(&food.parsed_data).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("invalid source_data {source_food_id}: {error}"),
+                format!("invalid parsed_data {source_food_id}: {error}"),
             )
         })?;
-        assert!(stored_value == *expected, "source_data {source_food_id}");
+        verify_protein(&parsed_data, expected, source_food_id)?;
     }
+    Ok(())
+}
+
+async fn require_rejected_release_import(
+    database: &Database,
+    path: &Path,
+) -> Result<crate::ImportError, Box<dyn StdError>> {
+    match crate::import_usda(database, path).await {
+        Ok(report) => Err(invalid_data(format!(
+            "full release import unexpectedly succeeded with {} commits",
+            report.committed().get()
+        ))),
+        Err(error) => Ok(error),
+    }
+}
+
+fn verify_rejection(error: &crate::ImportError) {
+    let message = error_chain(error);
+    assert!(message.contains("record 315"), "{message}");
+    assert!(message.contains("committed 314 foods"), "{message}");
+    assert!(message.contains("-0.475 g"), "{message}");
+    assert!(
+        message.contains("measurements must not be negative"),
+        "{message}"
+    );
+}
+
+fn error_chain(error: &dyn StdError) -> String {
+    let mut messages = Vec::new();
+    let mut source = Some(error);
+    while let Some(error) = source {
+        messages.push(error.to_string());
+        source = error.source();
+    }
+    messages.join(": ")
+}
+
+async fn assert_food_absent(
+    database: &Database,
+    source_food_id: SourceFoodIdRef<'_>,
+) -> Result<(), sqlx::Error> {
+    let count: i64 =
+        query_scalar("SELECT COUNT(*) FROM crumbs_foods WHERE source = ? AND source_food_id = ?")
+            .bind(EXPECTED_SOURCE)
+            .bind(source_food_id)
+            .fetch_one(&database.pool)
+            .await?;
+    assert_eq!(count, 0, "rejected food {source_food_id} was stored");
+    Ok(())
+}
+
+fn verify_protein(
+    parsed_data: &FoodData,
+    expected: &ReferenceFood,
+    source_food_id: &str,
+) -> TestResult {
+    let expected_food_nutrient = expected.food_nutrients.iter().find(|food_nutrient| {
+        food_nutrient
+            .nutrient
+            .as_ref()
+            .and_then(|nutrient| nutrient.id)
+            == Some(1003)
+    });
+    let expected_protein = match expected_food_nutrient {
+        Some(food_nutrient) => match food_nutrient.amount.as_ref() {
+            Some(amount) => {
+                let nutrient = food_nutrient.nutrient.as_ref().ok_or_else(|| {
+                    invalid_data(format!("protein nutrient has no ID {source_food_id}"))
+                })?;
+                let unit = nutrient.unit_name.as_deref().ok_or_else(|| {
+                    invalid_data(format!("protein nutrient has no unit {source_food_id}"))
+                })?;
+                let amount =
+                    format!("{} {unit}", amount.get())
+                        .parse::<Mass>()
+                        .map_err(|source| {
+                            invalid_data(format!(
+                                "invalid reference protein {source_food_id}: {source}"
+                            ))
+                        })?;
+                Some(amount.to_string())
+            }
+            None => None,
+        },
+        None => None,
+    };
+    let actual_protein = parsed_data
+        .nutrition
+        .as_ref()
+        .and_then(|profile| profile.protein.as_ref())
+        .map(ToString::to_string);
+    assert_eq!(
+        actual_protein.as_deref(),
+        expected_protein.as_deref(),
+        "protein {source_food_id}"
+    );
     Ok(())
 }
 

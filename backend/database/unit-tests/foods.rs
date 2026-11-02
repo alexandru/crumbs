@@ -4,8 +4,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde_json::value::RawValue;
-
 use super::*;
 use crate::{Database, DatabaseConfig};
 
@@ -23,7 +21,7 @@ async fn upsert_foods_are_scoped_by_provider_and_keep_opaque_ids() -> Result<(),
         "External",
         "Original food",
         Some("Original category"),
-        r#"{"revision":1}"#,
+        r#"{"nutrition":null,"serving_sizes":[]}"#,
     )?;
 
     let first_id = database.upsert_food(&initial).await?;
@@ -33,7 +31,7 @@ async fn upsert_foods_are_scoped_by_provider_and_keep_opaque_ids() -> Result<(),
         "External",
         "Updated food",
         Some("Updated category"),
-        r#"{"revision":2}"#,
+        r#"{"nutrition":{"per":"100 g"},"serving_sizes":[]}"#,
     )?;
     let updated_id = database.upsert_food(&updated).await?;
 
@@ -43,6 +41,18 @@ async fn upsert_foods_are_scoped_by_provider_and_keep_opaque_ids() -> Result<(),
     assert_eq!(summary.source_food_id, source_food_id);
     assert_eq!(summary.description, "Updated food");
     assert_eq!(summary.category.as_deref(), Some("Updated category"));
+    let parsed_data_json: String = sqlx::query_scalar(
+        "SELECT parsed_data FROM crumbs_foods WHERE source = ? AND source_food_id = ?",
+    )
+    .bind(source.as_ref())
+    .bind(&source_food_id)
+    .fetch_one(&database.pool)
+    .await?;
+    let parsed_data: crate::nutrition::FoodData = serde_json::from_str(&parsed_data_json)?;
+    assert_eq!(
+        parsed_data.nutrition.map(|profile| profile.per),
+        Some(crate::nutrition::NutritionBasis::Per100Grams)
+    );
 
     let other_source = Source::Owned("another catalog".to_owned());
     let same_source_id = make_food(
@@ -334,7 +344,7 @@ fn make_food(
     food_type: &'static str,
     description: &str,
     category: Option<&str>,
-    source_data: &str,
+    parsed_data: &str,
 ) -> Result<Food, Box<dyn StdError>> {
     Ok(Food {
         source,
@@ -342,7 +352,7 @@ fn make_food(
         food_type: Cow::Borrowed(food_type),
         description: description.to_owned(),
         category: category.map(str::to_owned),
-        source_data: serde_json::from_str::<Box<RawValue>>(source_data)?,
+        parsed_data: serde_json::from_str(parsed_data)?,
     })
 }
 

@@ -10,6 +10,7 @@ use std::time::Duration;
 use sqlx::{FromRow, query, query_scalar};
 
 use super::ImportError;
+use crate::nutrition::{FoodData, NutritionBasis, ServingSize};
 use crate::{
     Database, DatabaseConfig, Food, FoodCategory, FoodDescription, FoodId, FoodWriter,
     SourceFoodId, TagName, import_usda,
@@ -32,12 +33,12 @@ async fn persists_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
     assert_eq!(report.committed().get(), 1);
     let food = food_row(&database, "usda", "2705383").await?;
     assert_eq!(food.category.as_deref(), Some("Human milk"));
-    assert_eq!(food.source_data, record);
+    assert_eq!(food.parsed_data()?, FoodData::default());
     Ok(())
 }
 
 #[tokio::test]
-async fn imports_foundation_foods_and_preserves_source_details() -> Result<(), Box<dyn StdError>> {
+async fn imports_foundation_foods_with_typed_data() -> Result<(), Box<dyn StdError>> {
     let (directory, database) = open_database().await?;
     let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
 
@@ -55,20 +56,25 @@ async fn imports_foundation_foods_and_preserves_source_details() -> Result<(), B
         Some("Legumes and Legume Products")
     );
     assert!(database.list_tags().await?.is_empty());
-    assert!(food.source_data.contains(r#""unitName": "µg""#));
-    assert!(food.source_data.contains(r#""amount": 3.0"#));
-    assert!(food.source_data.contains(r#""name": "tablespoon""#));
-    assert!(food.source_data.contains(r#""abbreviation": "tbsp""#));
-    assert!(food.source_data.contains(r#""gramWeight": 33.9"#));
-    assert!(
-        food.source_data
-            .contains(r#""publicationDate": "4/1/2019""#)
+    let parsed_data = food.parsed_data()?;
+    assert_eq!(parsed_data.nutrition, None);
+    assert_eq!(parsed_data.serving_sizes.len(), 1);
+    assert_eq!(
+        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        "33.9 g"
+    );
+    let food = food_row(&database, "usda", "321360").await?;
+    let parsed_data = food.parsed_data()?;
+    assert_eq!(parsed_data.serving_sizes.len(), 1);
+    assert_eq!(
+        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        "49.7 g"
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn imports_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn StdError>> {
+async fn imports_branded_food_with_typed_data() -> Result<(), Box<dyn StdError>> {
     let (directory, database) = open_database().await?;
     let path = write_input(directory.path(), "branded.json", BRANDED_JSON)?;
 
@@ -81,12 +87,194 @@ async fn imports_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn St
     assert_eq!(food.description, "GRANOLA, CINNAMON, RAISIN");
     assert_eq!(food.category.as_deref(), Some("Cereal"));
     assert!(database.list_tags().await?.is_empty());
-    assert!(food.source_data.contains(r#""gtinUpc": "001633636543505""#));
-    assert!(
-        food.source_data
-            .contains(r#""publicationDate": "11/13/2020""#)
+    let parsed_data = food.parsed_data()?;
+    assert_eq!(parsed_data.serving_sizes.len(), 1);
+    assert_eq!(
+        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        "28 g"
     );
-    assert!(food.source_data.contains(r#""labelNutrients""#));
+    Ok(())
+}
+
+#[tokio::test]
+async fn imports_typed_nutrition_for_all_supported_usda_food_kinds() -> Result<(), Box<dyn StdError>>
+{
+    let (directory, database) = open_database().await?;
+    let high_precision_protein = "7.1234567890123456789012345678";
+    let foundation_energy = vec![
+        nutrient(2048, "2048", "Atwater Specific Factors", "kcal", "91"),
+        nutrient(2047, "2047", "Atwater General Factors", "kcal", "92"),
+        nutrient(1008, "208", "Energy", "kcal", "93"),
+        nutrient(1062, "268", "Energy", "kJ", "389"),
+    ];
+    let legacy_energy = vec![
+        nutrient(2047, "2047", "Atwater General Factors", "kcal", "81"),
+        nutrient(1008, "208", "Energy", "kcal", "82"),
+        nutrient(1062, "268", "Energy", "kJ", "342"),
+    ];
+    let survey_energy = vec![
+        nutrient(1008, "208", "Energy", "kcal", "71"),
+        nutrient(1062, "268", "Energy", "kJ", "300"),
+    ];
+    let branded_energy = vec![nutrient(1062, "268", "Energy", "kJ", "44")];
+    let branded_volume_energy = vec![nutrient(1062, "268", "Energy", "kJ", "55.4")];
+    let foundation_portions = format!(
+        r#","foodPortions":[{},{}]"#,
+        food_portion(1, "cup", "100.25"),
+        food_portion(2, "tablespoon", "33.9"),
+    );
+    let cases = [
+        NutritionImportCase {
+            root: "FoundationFoods",
+            data_type: "Foundation",
+            fdc_id: 9401,
+            nutrients: test_nutrients(&foundation_energy, high_precision_protein, Some("1.25")),
+            extra: foundation_portions,
+            expected_basis: NutritionBasis::Per100Grams,
+            expected_energy: "91 kcal",
+            expected_protein: "7.1234567890123456789012345678 g",
+            expected_lactose: Some("1.25 g"),
+            expected_servings: vec!["100.25 g", "33.9 g"],
+        },
+        NutritionImportCase {
+            root: "SRLegacyFoods",
+            data_type: "SR Legacy",
+            fdc_id: 9402,
+            nutrients: test_nutrients(&legacy_energy, "0", None),
+            extra: String::new(),
+            expected_basis: NutritionBasis::Per100Grams,
+            expected_energy: "81 kcal",
+            expected_protein: "0 g",
+            expected_lactose: None,
+            expected_servings: Vec::new(),
+        },
+        NutritionImportCase {
+            root: "SurveyFoods",
+            data_type: "Survey (FNDDS)",
+            fdc_id: 9403,
+            nutrients: test_nutrients(&survey_energy, "2.5", None),
+            extra: String::new(),
+            expected_basis: NutritionBasis::Per100Grams,
+            expected_energy: "71 kcal",
+            expected_protein: "2.5 g",
+            expected_lactose: None,
+            expected_servings: Vec::new(),
+        },
+        NutritionImportCase {
+            root: "BrandedFoods",
+            data_type: "Branded",
+            fdc_id: 9404,
+            nutrients: test_nutrients(&branded_energy, "7.5", None),
+            extra: r#","servingSize":28,"servingSizeUnit":"g","householdServingFullText":"1 bar","labelNutrients":{"protein":{"value":999}}"#.to_owned(),
+            expected_basis: NutritionBasis::Per100Grams,
+            expected_energy: "44 kJ",
+            expected_protein: "7.5 g",
+            expected_lactose: None,
+            expected_servings: vec!["28 g"],
+        },
+        NutritionImportCase {
+            root: "BrandedFoods",
+            data_type: "Branded",
+            fdc_id: 9405,
+            nutrients: test_nutrients(&branded_volume_energy, "8", None),
+            extra: r#","servingSize":30.5,"servingSizeUnit":"ml","householdServingFullText":"2 tbsp","labelNutrients":{"protein":{"value":888}}"#.to_owned(),
+            expected_basis: NutritionBasis::Per100Millilitres,
+            expected_energy: "55.4 kJ",
+            expected_protein: "8 g",
+            expected_lactose: None,
+            expected_servings: vec!["30.5 ml"],
+        },
+    ];
+
+    for case in cases {
+        let record = food_record(case.fdc_id, case.data_type, &case.nutrients, &case.extra);
+        let input = food_document(case.root, &[record]);
+        let path = write_input(directory.path(), &format!("{}.json", case.fdc_id), &input)?;
+        let report = import_usda(&database, &path).await?;
+        assert_eq!(report.committed().get(), 1);
+
+        let row = food_row(&database, "usda", &case.fdc_id.to_string()).await?;
+        let parsed_data = row.parsed_data()?;
+        let profile = parsed_data
+            .nutrition
+            .as_ref()
+            .ok_or_else(|| io::Error::other("import did not persist a nutrition profile"))?;
+        assert_eq!(profile.per, case.expected_basis);
+        assert_eq!(
+            profile.energy.as_ref().map(ToString::to_string).as_deref(),
+            Some(case.expected_energy)
+        );
+        assert_eq!(
+            profile.protein.as_ref().map(ToString::to_string).as_deref(),
+            Some(case.expected_protein)
+        );
+        assert_eq!(
+            profile.sodium.as_ref().map(ToString::to_string).as_deref(),
+            Some("1.234 mg")
+        );
+        assert_eq!(
+            profile
+                .carbohydrates
+                .including_fibre
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("4.5 g")
+        );
+        assert_eq!(profile.carbohydrates.excluding_fibre, None);
+        assert_eq!(
+            profile
+                .carbohydrates
+                .sugars
+                .lactose
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            case.expected_lactose
+        );
+        assert_eq!(
+            parsed_data.serving_sizes.len(),
+            case.expected_servings.len()
+        );
+        for (index, expected) in case.expected_servings.iter().enumerate() {
+            assert_eq!(
+                serving_size_at(&parsed_data, index)?.quantity.to_string(),
+                *expected
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn nutrition_parse_error_on_second_record_reports_committed_progress()
+-> Result<(), Box<dyn StdError>> {
+    let (directory, database) = open_database().await?;
+    let first_nutrients = test_nutrients(&[], "3.25", None);
+    let first = food_record(9501, "Foundation", &first_nutrients, "");
+    let invalid_nutrient = nutrient(1003, "203", "Protein", "oz", "1");
+    let second = food_record(9502, "Foundation", &[invalid_nutrient], "");
+    let input = food_document("FoundationFoods", &[first, second]);
+    let path = write_input(directory.path(), "invalid-nutrition.json", &input)?;
+
+    let error = require_import_error(&database, &path).await?;
+
+    assert!(error.to_string().contains("record 2"), "{error}");
+    assert!(error.to_string().contains("committed 1 foods"), "{error}");
+    assert_eq!(food_count(&database).await?, 1);
+    let first_food = food_row(&database, "usda", "9501").await?;
+    assert_eq!(
+        first_food
+            .parsed_data()?
+            .nutrition
+            .as_ref()
+            .and_then(|profile| profile.protein.as_ref())
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("3.25 g")
+    );
+    assert_row_absent(&database, "usda", "9502").await?;
     Ok(())
 }
 
@@ -96,10 +284,14 @@ async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<d
     let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
     import_usda(&database, &path).await?;
     let id_before = food_row(&database, "usda", "321358").await?.id;
+    let reviewed_tag = TagName::new("Nutrition reviewed")?;
+    database
+        .set_food_tags(FoodId(id_before), std::slice::from_ref(&reviewed_tag))
+        .await?;
 
     query(
         "UPDATE crumbs_foods
-         SET description = 'stale', category = NULL, source_data = '{\"stale\":true}'
+         SET description = 'stale', category = NULL, parsed_data = '{\"nutrition\":null,\"serving_sizes\":[]}'
          WHERE source = 'usda' AND source_food_id = '321358'",
     )
     .execute(&database.pool)
@@ -116,7 +308,21 @@ async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<d
         food.category.as_deref(),
         Some("Legumes and Legume Products")
     );
-    assert!(food.source_data.contains(r#""unitName": "µg""#));
+    let parsed_data = food.parsed_data()?;
+    assert_eq!(parsed_data.serving_sizes.len(), 1);
+    assert_eq!(
+        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        "33.9 g"
+    );
+    let tagged_food_ids: Vec<RowId> = query_scalar(
+        "SELECT ft.food_id FROM crumbs_food_tags AS ft
+         JOIN crumbs_tags AS t ON t.id = ft.tag_id
+         WHERE t.name = ? ORDER BY ft.food_id",
+    )
+    .bind(reviewed_tag.as_str())
+    .fetch_all(&database.pool)
+    .await?;
+    assert_eq!(tagged_food_ids, vec![id_before]);
     Ok(())
 }
 
@@ -130,7 +336,7 @@ async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>
         .await?;
     let other_food_id: RowId = query_scalar(
         "INSERT INTO crumbs_foods (
-            source, source_food_id, food_type, description, category, source_data, created_at
+            source, source_food_id, food_type, description, category, parsed_data, created_at
          ) VALUES ('other', '321358', 'Foundation', 'Other source food', NULL, '{}', 0)
          RETURNING id",
     )
@@ -146,7 +352,10 @@ async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>
     let other = food_row(&database, "other", "321358").await?;
     assert_eq!(other.source, "other");
     assert_eq!(other.description, "Other source food");
-    assert_eq!(other.source_data, "{}");
+    assert_eq!(
+        serde_json::from_str::<FoodData>(&other.parsed_data)?,
+        FoodData::default()
+    );
     let tagged_foods: Vec<RowId> = query_scalar(
         "SELECT ft.food_id FROM crumbs_food_tags ft
          JOIN crumbs_tags t ON t.id = ft.tag_id
@@ -382,8 +591,7 @@ async fn missing_input_reports_path_and_zero_committed() -> Result<(), Box<dyn S
 }
 
 #[tokio::test]
-async fn imports_into_generic_food_writer_and_preserves_raw_json() -> Result<(), Box<dyn StdError>>
-{
+async fn imports_into_generic_food_writer_and_passes_typed_data() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let first_record = r#"{"fdcId":7301, "description":"Alternative food", "dataType":"Foundation", "foodCategory":{"description":"Shelf Stable"}, "details":{"measurement":1.00}}"#;
     let first_input = format!(r#"{{"FoundationFoods":[{first_record}]}}"#);
@@ -402,7 +610,7 @@ async fn imports_into_generic_food_writer_and_preserves_raw_json() -> Result<(),
     assert_eq!(first_food.food_type, "Foundation");
     assert_eq!(first_food.description, "Alternative food");
     assert_eq!(first_food.category.as_deref(), Some("Shelf Stable"));
-    assert_eq!(first_food.source_data, first_record);
+    assert_eq!(first_food.parsed_data, FoodData::default());
 
     let second_record = r#"{"fdcId":7301, "description":"Updated alternative food", "dataType":"Foundation", "foodCategory":{"description":"Shelf Stable"}, "details":{"measurement":2.00}}"#;
     let second_input = format!(r#"{{"FoundationFoods":[{second_record}]}}"#);
@@ -417,7 +625,7 @@ async fn imports_into_generic_food_writer_and_preserves_raw_json() -> Result<(),
         .ok_or_else(|| io::Error::other("recording store lost the food"))?;
     assert_eq!(updated_food.id, first_food.id);
     assert_eq!(updated_food.description, "Updated alternative food");
-    assert_eq!(updated_food.source_data, second_record);
+    assert_eq!(updated_food.parsed_data, FoodData::default());
     assert_eq!(store.snapshot()?.len(), 1);
     Ok(())
 }
@@ -537,7 +745,9 @@ async fn food_count(database: &Database) -> Result<FoodCount, sqlx::Error> {
 
 type SourceText = String;
 type FoodTypeText = String;
-type SourceDataText = String;
+type ParsedDataText = String;
+type RawFdcId = u64;
+type RawNutrientId = u16;
 type RowId = i64;
 type FoodCount = i64;
 type WriteCount = usize;
@@ -549,7 +759,13 @@ struct FoodRow {
     food_type: FoodTypeText,
     description: FoodDescription,
     category: Option<FoodCategory>,
-    source_data: SourceDataText,
+    parsed_data: ParsedDataText,
+}
+
+impl FoodRow {
+    fn parsed_data(&self) -> Result<FoodData, serde_json::Error> {
+        serde_json::from_str(&self.parsed_data)
+    }
 }
 
 async fn food_row(
@@ -558,7 +774,7 @@ async fn food_row(
     source_food_id: &str,
 ) -> Result<FoodRow, sqlx::Error> {
     sqlx::query_as(
-        "SELECT id, source, food_type, description, category, source_data
+        "SELECT id, source, food_type, description, category, parsed_data
          FROM crumbs_foods
          WHERE source = ? AND source_food_id = ?",
     )
@@ -566,6 +782,70 @@ async fn food_row(
     .bind(source_food_id)
     .fetch_one(&database.pool)
     .await
+}
+
+struct NutritionImportCase {
+    root: &'static str,
+    data_type: &'static str,
+    fdc_id: RawFdcId,
+    nutrients: Vec<String>,
+    extra: String,
+    expected_basis: NutritionBasis,
+    expected_energy: &'static str,
+    expected_protein: &'static str,
+    expected_lactose: Option<&'static str>,
+    expected_servings: Vec<&'static str>,
+}
+
+fn nutrient(id: RawNutrientId, number: &str, name: &str, unit: &str, amount: &str) -> String {
+    format!(
+        r#"{{"nutrient":{{"id":{id},"number":"{number}","name":"{name}","unitName":"{unit}"}},"amount":{amount}}}"#
+    )
+}
+
+fn test_nutrients(
+    energy: &[String],
+    protein_amount: &str,
+    lactose_amount: Option<&str>,
+) -> Vec<String> {
+    let mut nutrients = energy.to_vec();
+    nutrients.push(nutrient(1003, "203", "Protein", "g", protein_amount));
+    nutrients.push(nutrient(
+        1005,
+        "205",
+        "Carbohydrate, by difference",
+        "g",
+        "4.5",
+    ));
+    nutrients.push(nutrient(1093, "307", "Sodium, Na", "mg", "1.234"));
+    if let Some(amount) = lactose_amount {
+        nutrients.push(nutrient(1013, "213", "Lactose", "g", amount));
+    }
+    nutrients
+}
+
+fn food_portion(sequence: usize, name: &str, gram_weight: &str) -> String {
+    format!(
+        r#"{{"id":{sequence},"value":1.0,"measureUnit":{{"id":1001,"name":"{name}","abbreviation":"{name}"}},"modifier":"","gramWeight":{gram_weight},"sequenceNumber":{sequence},"amount":1.0}}"#
+    )
+}
+
+fn food_record(fdc_id: RawFdcId, data_type: &str, nutrients: &[String], extra: &str) -> String {
+    format!(
+        r#"{{"fdcId":{fdc_id},"description":"Nutrition test food {fdc_id}","dataType":"{data_type}","foodNutrients":[{}]{extra}}}"#,
+        nutrients.join(",")
+    )
+}
+
+fn food_document(root: &str, foods: &[String]) -> String {
+    format!(r#"{{"{root}":[{}]}}"#, foods.join(","))
+}
+
+fn serving_size_at(food_data: &FoodData, index: usize) -> Result<&ServingSize, io::Error> {
+    food_data
+        .serving_sizes
+        .get(index)
+        .ok_or_else(|| io::Error::other(format!("missing serving size at position {index}")))
 }
 
 #[derive(Default)]
@@ -589,7 +869,7 @@ struct RecordedFood {
     food_type: FoodTypeText,
     description: FoodDescription,
     category: Option<FoodCategory>,
-    source_data: SourceDataText,
+    parsed_data: FoodData,
 }
 
 impl RecordingFoodWriter {
@@ -644,7 +924,7 @@ impl FoodWriter for RecordingFoodWriter {
             food_type: food.food_type.to_string(),
             description: food.description.clone(),
             category: food.category.clone(),
-            source_data: food.source_data.get().to_owned(),
+            parsed_data: food.parsed_data.clone(),
         };
 
         state.foods.insert(key, recorded_food);
