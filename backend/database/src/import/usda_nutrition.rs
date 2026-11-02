@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::str::FromStr;
 
 use serde::Deserialize;
@@ -48,7 +49,7 @@ pub(super) fn parse_food_data(raw: &str, kind: FoodKind) -> Result<FoodData, Nut
     let food_nutrients = record.food_nutrients.as_deref().unwrap_or(&[]);
     let recognized = food_nutrients.iter().any(|nutrient| {
         nutrient.nutrient.as_ref().is_some_and(|metadata| {
-            is_supported_nutrient(metadata.id)
+            ClassifiedNutrient::from_id(metadata.id).is_some()
                 && (nutrient.amount.is_some() || nutrient.loq.is_some())
         })
     });
@@ -62,83 +63,86 @@ pub(super) fn parse_food_data(raw: &str, kind: FoodKind) -> Result<FoodData, Nut
 
     let mut profile = NutritionProfile::empty(basis);
     let mut has_amount = false;
-    let mut energy_candidates: Vec<(NutrientId, Reported<Energy>)> = Vec::new();
-    let mut total_sugar_candidates: Vec<(NutrientId, Reported<Mass>)> = Vec::new();
+    let mut energy_candidates: Vec<(EnergyMethod, Reported<Energy>)> = Vec::new();
+    let mut total_sugar_candidates: Vec<(SugarMethod, Reported<Mass>)> = Vec::new();
     for nutrient in food_nutrients {
         let Some(metadata) = nutrient.nutrient.as_ref() else {
             continue;
         };
-        let id = metadata.id;
-        if !is_supported_nutrient(id) {
+        let Some(classified) = ClassifiedNutrient::from_id(metadata.id) else {
             continue;
-        }
+        };
         if nutrient.amount.is_none() && nutrient.loq.is_none() {
             continue;
         }
         let unit = metadata.unit_name.as_deref().map(raw_scalar).transpose()?;
-        let unit = unit
-            .as_deref()
-            .ok_or(NutritionError::MissingUnit { nutrient_id: id })?;
-        if is_energy(id) {
-            let Some(energy) = parse_energy_amount(
-                nutrient.amount.as_deref(),
-                nutrient.loq.as_deref(),
-                unit,
-                id,
-            )?
-            else {
-                continue;
-            };
-            let expected = match id {
-                ATWATER_SPECIFIC | ATWATER_GENERAL | ENERGY_KILOCALORIES => "kcal",
-                ENERGY_KILOJOULES => "kJ",
-                _ => {
+        let unit = unit.as_deref().ok_or(NutritionError::MissingUnit {
+            nutrient_id: metadata.id,
+        })?;
+        match classified {
+            ClassifiedNutrient::Energy(method) => {
+                let Some(energy) = parse_energy_amount(
+                    nutrient.amount.as_deref(),
+                    nutrient.loq.as_deref(),
+                    unit,
+                    metadata.id,
+                )?
+                else {
+                    continue;
+                };
+                if energy_unit(energy.amount) != method.expected_unit() {
                     return Err(NutritionError::IncompatibleUnit {
-                        nutrient_id: id,
+                        nutrient_id: metadata.id,
                         unit: unit.to_owned(),
                     });
                 }
-            };
-            if energy_unit(energy.amount) != expected {
-                return Err(NutritionError::IncompatibleUnit {
-                    nutrient_id: id,
-                    unit: unit.to_owned(),
-                });
+                energy_candidates.push((method, energy));
             }
-            energy_candidates.push((id, energy));
-            continue;
-        }
-        let Some(amount) = parse_mass_amount(
-            nutrient.amount.as_deref(),
-            nutrient.loq.as_deref(),
-            unit,
-            id,
-        )?
-        else {
-            continue;
-        };
-        has_amount = true;
-        if is_total_sugar(id) {
-            if total_sugar_candidates
-                .iter()
-                .any(|(candidate_id, _)| *candidate_id == id)
-            {
-                return Err(NutritionError::DuplicateNutrient { nutrient_id: id });
+            ClassifiedNutrient::TotalSugar(method) => {
+                let Some(amount) = parse_mass_amount(
+                    nutrient.amount.as_deref(),
+                    nutrient.loq.as_deref(),
+                    unit,
+                    metadata.id,
+                )?
+                else {
+                    continue;
+                };
+                has_amount = true;
+                if total_sugar_candidates
+                    .iter()
+                    .any(|(candidate, _)| *candidate == method)
+                {
+                    return Err(NutritionError::DuplicateNutrient {
+                        nutrient_id: metadata.id,
+                    });
+                }
+                total_sugar_candidates.push((method, amount));
             }
-            total_sugar_candidates.push((id, amount));
-        } else {
-            assign_nutrient(&mut profile, id, amount)?;
+            ClassifiedNutrient::Mass(nutrient_type) => {
+                let Some(amount) = parse_mass_amount(
+                    nutrient.amount.as_deref(),
+                    nutrient.loq.as_deref(),
+                    unit,
+                    metadata.id,
+                )?
+                else {
+                    continue;
+                };
+                has_amount = true;
+                assign_nutrient(&mut profile, nutrient_type, amount)?;
+            }
         }
     }
 
     // Prefer source ID 1063 over 2000 and never sum the two source values.
     profile.carbohydrates.sugars.total = total_sugar_candidates
         .iter()
-        .find(|(id, _)| *id == SUGARS_TOTAL_NLEA)
+        .find(|(method, _)| *method == SugarMethod::TotalNlea)
         .or_else(|| {
             total_sugar_candidates
                 .iter()
-                .find(|(id, _)| *id == SUGARS_TOTAL)
+                .find(|(method, _)| *method == SugarMethod::Total)
         })
         .map(|(_, amount)| amount.clone());
     profile.energy = select_energy(energy_candidates)?;
@@ -171,6 +175,118 @@ const POLYUNSATURATED_FAT: NutrientId = 1293;
 const SUGARS_TOTAL: NutrientId = 2000;
 const ATWATER_GENERAL: NutrientId = 2047;
 const ATWATER_SPECIFIC: NutrientId = 2048;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClassifiedNutrient {
+    Energy(EnergyMethod),
+    TotalSugar(SugarMethod),
+    Mass(MassNutrient),
+}
+
+impl ClassifiedNutrient {
+    fn from_id(id: NutrientId) -> Option<Self> {
+        match id {
+            ATWATER_SPECIFIC => Some(Self::Energy(EnergyMethod::AtwaterSpecific)),
+            ATWATER_GENERAL => Some(Self::Energy(EnergyMethod::AtwaterGeneral)),
+            ENERGY_KILOCALORIES => Some(Self::Energy(EnergyMethod::FoodEnergyKcal)),
+            ENERGY_KILOJOULES => Some(Self::Energy(EnergyMethod::FoodEnergyKj)),
+            SUGARS_TOTAL_NLEA => Some(Self::TotalSugar(SugarMethod::TotalNlea)),
+            SUGARS_TOTAL => Some(Self::TotalSugar(SugarMethod::Total)),
+            PROTEIN => Some(Self::Mass(MassNutrient::Protein)),
+            TOTAL_FAT => Some(Self::Mass(MassNutrient::TotalFat)),
+            CARBOHYDRATE_BY_DIFFERENCE => Some(Self::Mass(MassNutrient::CarbohydrateByDifference)),
+            STARCH => Some(Self::Mass(MassNutrient::Starch)),
+            LACTOSE => Some(Self::Mass(MassNutrient::Lactose)),
+            FIBRE => Some(Self::Mass(MassNutrient::Fibre)),
+            SODIUM => Some(Self::Mass(MassNutrient::Sodium)),
+            ADDED_SUGARS => Some(Self::Mass(MassNutrient::AddedSugars)),
+            CHOLESTEROL => Some(Self::Mass(MassNutrient::Cholesterol)),
+            TRANS_FAT => Some(Self::Mass(MassNutrient::TransFat)),
+            SATURATED_FAT => Some(Self::Mass(MassNutrient::SaturatedFat)),
+            MONOUNSATURATED_FAT => Some(Self::Mass(MassNutrient::MonounsaturatedFat)),
+            POLYUNSATURATED_FAT => Some(Self::Mass(MassNutrient::PolyunsaturatedFat)),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnergyMethod {
+    AtwaterSpecific,
+    AtwaterGeneral,
+    FoodEnergyKcal,
+    FoodEnergyKj,
+}
+
+impl EnergyMethod {
+    fn id(self) -> NutrientId {
+        match self {
+            Self::AtwaterSpecific => ATWATER_SPECIFIC,
+            Self::AtwaterGeneral => ATWATER_GENERAL,
+            Self::FoodEnergyKcal => ENERGY_KILOCALORIES,
+            Self::FoodEnergyKj => ENERGY_KILOJOULES,
+        }
+    }
+
+    fn expected_unit(self) -> &'static str {
+        match self {
+            Self::AtwaterSpecific | Self::AtwaterGeneral | Self::FoodEnergyKcal => "kcal",
+            Self::FoodEnergyKj => "kJ",
+        }
+    }
+
+    fn priority(self) -> EnergyPriority {
+        match self {
+            Self::AtwaterSpecific => 0,
+            Self::AtwaterGeneral => 1,
+            Self::FoodEnergyKcal => 2,
+            Self::FoodEnergyKj => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SugarMethod {
+    TotalNlea,
+    Total,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MassNutrient {
+    Protein,
+    TotalFat,
+    CarbohydrateByDifference,
+    Starch,
+    Lactose,
+    Fibre,
+    Sodium,
+    AddedSugars,
+    Cholesterol,
+    TransFat,
+    SaturatedFat,
+    MonounsaturatedFat,
+    PolyunsaturatedFat,
+}
+
+impl MassNutrient {
+    fn id(self) -> NutrientId {
+        match self {
+            Self::Protein => PROTEIN,
+            Self::TotalFat => TOTAL_FAT,
+            Self::CarbohydrateByDifference => CARBOHYDRATE_BY_DIFFERENCE,
+            Self::Starch => STARCH,
+            Self::Lactose => LACTOSE,
+            Self::Fibre => FIBRE,
+            Self::Sodium => SODIUM,
+            Self::AddedSugars => ADDED_SUGARS,
+            Self::Cholesterol => CHOLESTEROL,
+            Self::TransFat => TRANS_FAT,
+            Self::SaturatedFat => SATURATED_FAT,
+            Self::MonounsaturatedFat => MONOUNSATURATED_FAT,
+            Self::PolyunsaturatedFat => POLYUNSATURATED_FAT,
+        }
+    }
+}
 
 fn nutrition_basis(
     record: &NutritionRecord,
@@ -295,18 +411,7 @@ fn parse_mass_amount(
         nutrient_id,
         unit: unit.to_owned(),
     })?;
-    let parsed = amount
-        .map(raw_scalar)
-        .transpose()?
-        .map(|source| reported_with_unit::<Mass>(&source, unit))
-        .transpose()?;
-    let loq = loq
-        .map(raw_scalar)
-        .transpose()?
-        .map(|source| reported_with_unit::<Mass>(&source, unit))
-        .transpose()?;
-    ensure_exact_limit(loq.as_ref())?;
-    Ok(with_limit_of_quantification(parsed, loq, mass_is_zero))
+    parse_amount_and_limit(amount, loq, unit, mass_is_zero)
 }
 
 fn parse_energy_amount(
@@ -325,23 +430,43 @@ fn parse_energy_amount(
             });
         }
     };
+    parse_amount_and_limit(amount, loq, normalized, energy_is_zero)
+}
+
+fn parse_amount_and_limit<T>(
+    amount: Option<&RawValue>,
+    limit: Option<&RawValue>,
+    unit: &str,
+    is_zero: impl Fn(&T) -> bool,
+) -> Result<Option<Reported<T>>, NutritionError>
+where
+    T: FromStr<Err = QuantityError>,
+{
     let parsed = amount
         .map(raw_scalar)
         .transpose()?
-        .map(|source| reported_with_unit::<Energy>(&source, normalized))
+        .map(|source| reported_with_unit::<T>(&source, unit))
         .transpose()?;
-    let loq = loq
+    let limit = limit
         .map(raw_scalar)
         .transpose()?
-        .map(|source| reported_with_unit::<Energy>(&source, normalized))
+        .map(|source| reported_with_unit::<T>(&source, unit))
         .transpose()?;
-    ensure_exact_limit(loq.as_ref())?;
-    Ok(with_limit_of_quantification(parsed, loq, energy_is_zero))
+    let limit = limit
+        .map(|limit| {
+            if limit.qualifier == Qualifier::Exact {
+                Ok(limit.amount)
+            } else {
+                Err(NutritionError::QualifiedLimitOfQuantification)
+            }
+        })
+        .transpose()?;
+    Ok(with_limit_of_quantification(parsed, limit, is_zero))
 }
 
 fn with_limit_of_quantification<T>(
     amount: Option<Reported<T>>,
-    limit: Option<Reported<T>>,
+    limit: Option<T>,
     is_zero: impl Fn(&T) -> bool,
 ) -> Option<Reported<T>> {
     let Some(limit) = limit else {
@@ -353,7 +478,7 @@ fn with_limit_of_quantification<T>(
     if below_limit {
         Some(Reported {
             qualifier: Qualifier::LessThan,
-            amount: limit.amount,
+            amount: limit,
         })
     } else {
         amount
@@ -368,13 +493,6 @@ fn energy_is_zero(amount: &Energy) -> bool {
     amount.is_zero()
 }
 
-fn ensure_exact_limit<T>(limit: Option<&Reported<T>>) -> Result<(), NutritionError> {
-    if limit.is_some_and(|limit| limit.qualifier != Qualifier::Exact) {
-        return Err(NutritionError::QualifiedLimitOfQuantification);
-    }
-    Ok(())
-}
-
 fn reported_with_unit<T: FromStr<Err = QuantityError>>(
     value: &str,
     unit: &str,
@@ -386,12 +504,14 @@ fn reported_with_unit<T: FromStr<Err = QuantityError>>(
         .map_err(|source| NutritionError::Amount { value, source })
 }
 
-fn raw_scalar(raw: &RawValue) -> Result<String, NutritionError> {
+fn raw_scalar(raw: &RawValue) -> Result<Cow<'_, str>, NutritionError> {
     let value = raw.get().trim();
     if value.starts_with('"') {
-        serde_json::from_str(value).map_err(NutritionError::Scalar)
+        serde_json::from_str(value)
+            .map(Cow::Owned)
+            .map_err(NutritionError::Scalar)
     } else {
-        Ok(value.to_owned())
+        Ok(Cow::Borrowed(value))
     }
 }
 
@@ -412,22 +532,18 @@ fn energy_unit(energy: Energy) -> &'static str {
 }
 
 fn select_energy(
-    candidates: Vec<(NutrientId, Reported<Energy>)>,
+    candidates: Vec<(EnergyMethod, Reported<Energy>)>,
 ) -> Result<Option<Reported<Energy>>, NutritionError> {
     let mut selected: Option<(EnergyPriority, Reported<Energy>)> = None;
     let mut seen = Vec::new();
-    for (id, value) in candidates {
-        let priority = match id {
-            ATWATER_SPECIFIC => 0,
-            ATWATER_GENERAL => 1,
-            ENERGY_KILOCALORIES => 2,
-            ENERGY_KILOJOULES => 3,
-            _ => continue,
-        };
-        if seen.contains(&id) {
-            return Err(NutritionError::DuplicateNutrient { nutrient_id: id });
+    for (method, value) in candidates {
+        if seen.contains(&method) {
+            return Err(NutritionError::DuplicateNutrient {
+                nutrient_id: method.id(),
+            });
         }
-        seen.push(id);
+        seen.push(method);
+        let priority = method.priority();
         if selected
             .as_ref()
             .is_none_or(|(selected_priority, _)| priority < *selected_priority)
@@ -440,66 +556,31 @@ fn select_energy(
 
 fn assign_nutrient(
     profile: &mut NutritionProfile,
-    id: NutrientId,
+    nutrient: MassNutrient,
     amount: Reported<Mass>,
 ) -> Result<(), NutritionError> {
-    let slot = match id {
-        PROTEIN => &mut profile.protein,
-        TOTAL_FAT => &mut profile.fat.total,
-        CARBOHYDRATE_BY_DIFFERENCE => &mut profile.carbohydrates.including_fibre,
-        STARCH => &mut profile.carbohydrates.starch,
-        LACTOSE => &mut profile.carbohydrates.sugars.lactose,
-        FIBRE => &mut profile.fibre,
-        SODIUM => &mut profile.sodium,
-        CHOLESTEROL => &mut profile.cholesterol,
-        TRANS_FAT => &mut profile.fat.trans,
-        SATURATED_FAT => &mut profile.fat.saturated,
-        MONOUNSATURATED_FAT => &mut profile.fat.monounsaturated,
-        POLYUNSATURATED_FAT => &mut profile.fat.polyunsaturated,
-        ADDED_SUGARS => &mut profile.carbohydrates.sugars.added,
-        _ => return Ok(()),
+    let slot = match nutrient {
+        MassNutrient::Protein => &mut profile.protein,
+        MassNutrient::TotalFat => &mut profile.fat.total,
+        MassNutrient::CarbohydrateByDifference => &mut profile.carbohydrates.including_fibre,
+        MassNutrient::Starch => &mut profile.carbohydrates.starch,
+        MassNutrient::Lactose => &mut profile.carbohydrates.sugars.lactose,
+        MassNutrient::Fibre => &mut profile.fibre,
+        MassNutrient::Sodium => &mut profile.sodium,
+        MassNutrient::AddedSugars => &mut profile.carbohydrates.sugars.added,
+        MassNutrient::Cholesterol => &mut profile.cholesterol,
+        MassNutrient::TransFat => &mut profile.fat.trans,
+        MassNutrient::SaturatedFat => &mut profile.fat.saturated,
+        MassNutrient::MonounsaturatedFat => &mut profile.fat.monounsaturated,
+        MassNutrient::PolyunsaturatedFat => &mut profile.fat.polyunsaturated,
     };
     if slot.is_some() {
-        return Err(NutritionError::DuplicateNutrient { nutrient_id: id });
+        return Err(NutritionError::DuplicateNutrient {
+            nutrient_id: nutrient.id(),
+        });
     }
     *slot = Some(amount);
     Ok(())
-}
-
-fn is_supported_nutrient(id: NutrientId) -> bool {
-    matches!(
-        id,
-        PROTEIN
-            | TOTAL_FAT
-            | CARBOHYDRATE_BY_DIFFERENCE
-            | STARCH
-            | LACTOSE
-            | SUGARS_TOTAL_NLEA
-            | FIBRE
-            | SODIUM
-            | ADDED_SUGARS
-            | CHOLESTEROL
-            | TRANS_FAT
-            | SATURATED_FAT
-            | MONOUNSATURATED_FAT
-            | POLYUNSATURATED_FAT
-            | SUGARS_TOTAL
-            | ENERGY_KILOCALORIES
-            | ENERGY_KILOJOULES
-            | ATWATER_GENERAL
-            | ATWATER_SPECIFIC
-    )
-}
-
-fn is_energy(id: NutrientId) -> bool {
-    matches!(
-        id,
-        ATWATER_SPECIFIC | ATWATER_GENERAL | ENERGY_KILOCALORIES | ENERGY_KILOJOULES
-    )
-}
-
-fn is_total_sugar(id: NutrientId) -> bool {
-    matches!(id, SUGARS_TOTAL_NLEA | SUGARS_TOTAL)
 }
 
 #[derive(Debug, Deserialize)]

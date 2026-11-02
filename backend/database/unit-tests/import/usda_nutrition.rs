@@ -337,6 +337,171 @@ fn rejects_invalid_units_and_duplicate_same_id_values() -> Result<(), Box<dyn Er
     Ok(())
 }
 
+#[test]
+fn preserves_measurement_error_order_and_text() -> Result<(), Box<dyn Error>> {
+    let invalid_amount_and_limit = parse_error(
+        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":"bad","loq":"also bad"}]}"#,
+    )?;
+    assert!(matches!(
+        &invalid_amount_and_limit,
+        NutritionError::Amount {
+            value,
+            source: QuantityError::Decimal(source),
+        } if value == "bad g" && source == "bad"
+    ));
+    assert_eq!(
+        invalid_amount_and_limit.to_string(),
+        "nutrient amount \"bad g\" is invalid: invalid decimal or unsupported precision/range: bad"
+    );
+
+    let invalid_unit_and_amount = parse_error(
+        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"stone"},"amount":"bad"}]}"#,
+    )?;
+    assert!(matches!(
+        &invalid_unit_and_amount,
+        NutritionError::IncompatibleUnit { nutrient_id: 1003, unit } if unit == "stone"
+    ));
+    assert_eq!(
+        invalid_unit_and_amount.to_string(),
+        "nutrient 1003 has incompatible unit \"stone\""
+    );
+
+    let invalid_limit_with_positive_amount = parse_error(
+        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1.5,"loq":"bad"}]}"#,
+    )?;
+    assert!(matches!(
+        &invalid_limit_with_positive_amount,
+        NutritionError::Amount {
+            value,
+            source: QuantityError::Decimal(source),
+        } if value == "bad g" && source == "bad"
+    ));
+    assert_eq!(
+        invalid_limit_with_positive_amount.to_string(),
+        "nutrient amount \"bad g\" is invalid: invalid decimal or unsupported precision/range: bad"
+    );
+
+    let qualified_limit_with_positive_amount = parse_error(
+        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1.5,"loq":"~ 0.5"}]}"#,
+    )?;
+    assert!(matches!(
+        qualified_limit_with_positive_amount,
+        NutritionError::QualifiedLimitOfQuantification
+    ));
+    assert_eq!(
+        "limit of quantification must be an exact measured amount",
+        NutritionError::QualifiedLimitOfQuantification.to_string()
+    );
+    Ok(())
+}
+
+#[test]
+fn defers_energy_duplicates_but_rejects_sugar_duplicates_during_parsing()
+-> Result<(), Box<dyn Error>> {
+    let duplicate_energy_then_invalid_mass = parse_error(
+        r#"{"foodNutrients":[
+          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":1},
+          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":2},
+          {"nutrient":{"id":1003,"unitName":"g"},"amount":"bad"}
+        ]}"#,
+    )?;
+    assert!(matches!(
+        duplicate_energy_then_invalid_mass,
+        NutritionError::Amount { .. }
+    ));
+
+    let duplicate_energy = parse_error(
+        r#"{"foodNutrients":[
+          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":1},
+          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":2},
+          {"nutrient":{"id":1003,"unitName":"g"},"amount":3}
+        ]}"#,
+    )?;
+    assert!(matches!(
+        duplicate_energy,
+        NutritionError::DuplicateNutrient { nutrient_id: 2048 }
+    ));
+    assert_eq!(
+        "multiple source values map to nutrient 2048",
+        NutritionError::DuplicateNutrient { nutrient_id: 2048 }.to_string()
+    );
+
+    let duplicate_sugar_before_invalid_mass = parse_error(
+        r#"{"foodNutrients":[
+          {"nutrient":{"id":1063,"unitName":"g"},"amount":1},
+          {"nutrient":{"id":1063,"unitName":"g"},"amount":2},
+          {"nutrient":{"id":1003,"unitName":"g"},"amount":"bad"}
+        ]}"#,
+    )?;
+    assert!(matches!(
+        duplicate_sugar_before_invalid_mass,
+        NutritionError::DuplicateNutrient { nutrient_id: 1063 }
+    ));
+
+    let mixed_duplicates = parse_error(
+        r#"{"foodNutrients":[
+          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":1},
+          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":2},
+          {"nutrient":{"id":1063,"unitName":"g"},"amount":1},
+          {"nutrient":{"id":1063,"unitName":"g"},"amount":2}
+        ]}"#,
+    )?;
+    assert!(matches!(
+        mixed_duplicates,
+        NutritionError::DuplicateNutrient { nutrient_id: 1063 }
+    ));
+    Ok(())
+}
+
+#[test]
+fn accepts_numeric_escaped_and_whitespace_source_scalars() -> Result<(), Box<dyn Error>> {
+    let numeric = parse_food_data(
+        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":0.5}]}"#,
+        FoodKind::Foundation,
+    )?;
+    let numeric_amount = numeric
+        .nutrition
+        .as_ref()
+        .and_then(|profile| profile.protein.as_ref())
+        .map(ToString::to_string);
+    assert_eq!(numeric_amount, Some("0.5 g".to_owned()));
+
+    let escaped = parse_food_data(
+        r#"{"foodNutrients":[{"nutrient":{"id":1093,"unitName":"m\u0067"},"amount":"  \u003c 0.500  "}]}"#,
+        FoodKind::Foundation,
+    )?;
+    let escaped_amount = escaped
+        .nutrition
+        .as_ref()
+        .and_then(|profile| profile.sodium.as_ref())
+        .map(ToString::to_string);
+    assert_eq!(escaped_amount, Some("< 0.500 mg".to_owned()));
+
+    let whitespace = parse_food_data(
+        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":"  ~ 0.500  "}]}"#,
+        FoodKind::Foundation,
+    )?;
+    let whitespace_amount = whitespace
+        .nutrition
+        .as_ref()
+        .and_then(|profile| profile.protein.as_ref())
+        .map(ToString::to_string);
+    assert_eq!(whitespace_amount, Some("~ 0.500 g".to_owned()));
+
+    let unsupported = parse_food_data(
+        r#"{"foodNutrients":[{"nutrient":{"id":999999,"unitName":{"ignored":true}},"amount":"invalid"}]}"#,
+        FoodKind::Foundation,
+    )?;
+    assert_eq!(unsupported.nutrition, None);
+    Ok(())
+}
+
+fn parse_error(input: &str) -> Result<NutritionError, Box<dyn Error>> {
+    parse_food_data(input, FoodKind::Foundation)
+        .err()
+        .ok_or_else(|| io::Error::other("input unexpectedly parsed successfully").into())
+}
+
 fn amount_text<T: std::fmt::Display>(amount: &Option<Reported<T>>) -> Option<String> {
     amount.as_ref().map(ToString::to_string)
 }
