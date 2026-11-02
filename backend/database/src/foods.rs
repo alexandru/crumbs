@@ -5,7 +5,6 @@ use std::error::Error as StdError;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 
-use serde_json::value::RawValue;
 use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
 
@@ -43,15 +42,14 @@ pub struct Food {
     pub food_type: FoodType,
     pub description: FoodDescription,
     pub category: Option<FoodCategory>,
-    /// Original source JSON, including its original numeric spelling.
-    pub source_data: Box<RawValue>,
+    pub parsed_data: crate::nutrition::FoodData,
 }
 
 /// Local food identity, independent of source identifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FoodId(pub i64);
 
-/// Food metadata returned by source-identity lookup, without loading the source document.
+/// Food metadata returned by source-identity lookup, without loading parsed food details.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FoodSummary {
     pub id: FoodId,

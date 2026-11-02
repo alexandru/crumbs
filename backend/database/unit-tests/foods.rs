@@ -4,8 +4,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde_json::value::RawValue;
-
 use super::*;
 use crate::{Database, DatabaseConfig};
 
@@ -23,7 +21,6 @@ async fn upsert_foods_are_scoped_by_provider_and_keep_opaque_ids() -> Result<(),
         "External",
         "Original food",
         Some("Original category"),
-        r#"{"revision":1}"#,
     )?;
 
     let first_id = database.upsert_food(&initial).await?;
@@ -33,7 +30,6 @@ async fn upsert_foods_are_scoped_by_provider_and_keep_opaque_ids() -> Result<(),
         "External",
         "Updated food",
         Some("Updated category"),
-        r#"{"revision":2}"#,
     )?;
     let updated_id = database.upsert_food(&updated).await?;
 
@@ -51,7 +47,6 @@ async fn upsert_foods_are_scoped_by_provider_and_keep_opaque_ids() -> Result<(),
         "Remote",
         "Other provider food",
         None,
-        "{}",
     )?;
     let other_id = database.upsert_food(&same_source_id).await?;
     assert_ne!(other_id, first_id);
@@ -65,7 +60,6 @@ async fn upsert_foods_are_scoped_by_provider_and_keep_opaque_ids() -> Result<(),
         "External",
         "Leading zero identifier",
         None,
-        "{}",
     )?;
     let leading_zero_food_id = database.upsert_food(&leading_zero_food).await?;
     let leading_zero_summary = find_food(&database, &source, leading_zero_id).await?;
@@ -86,7 +80,6 @@ async fn tag_membership_uses_casefolded_exact_names_and_keeps_first_spelling()
         "Community",
         "Oat drink",
         None,
-        "{}",
     )?;
     let food_id = database.upsert_food(&food).await?;
     let vegan = TagName::new(" Vegan ")?;
@@ -128,7 +121,6 @@ async fn tag_names_fold_unicode_case_without_removing_accents() -> Result<(), Bo
         "Community",
         "Romanian food",
         None,
-        "{}",
     )?;
     let food_id = database.upsert_food(&food).await?;
     let strasse = TagName::new("Straße")?;
@@ -195,7 +187,6 @@ async fn food_upserts_and_usda_reimports_preserve_tag_assignments() -> Result<()
         "Foundation",
         "Manual description",
         Some("Manual category"),
-        r#"{"origin":"manual"}"#,
     )?;
     let initial_id = database.upsert_food(&initial).await?;
     let favorite = TagName::new("Favorite")?;
@@ -209,7 +200,6 @@ async fn food_upserts_and_usda_reimports_preserve_tag_assignments() -> Result<()
         "Foundation",
         "Updated manual description",
         Some("Updated manual category"),
-        r#"{"origin":"updated"}"#,
     )?;
     let update_id = database.upsert_food(&update).await?;
     assert_eq!(update_id, initial_id);
@@ -249,7 +239,6 @@ async fn clearing_assignments_keeps_catalog_and_unknown_food_does_not_change_it(
         "Community",
         "Tagged food",
         None,
-        "{}",
     )?;
     let food_id = database.upsert_food(&food).await?;
     let existing = TagName::new("Seasonal")?;
@@ -283,7 +272,6 @@ async fn failed_tag_replacement_rolls_back_assignments_and_catalog_rows()
         "Community",
         "Stable food",
         None,
-        "{}",
     )?;
     let food_id = database.upsert_food(&food).await?;
     let existing = TagName::new("Existing")?;
@@ -334,7 +322,6 @@ fn make_food(
     food_type: &'static str,
     description: &str,
     category: Option<&str>,
-    source_data: &str,
 ) -> Result<Food, Box<dyn StdError>> {
     Ok(Food {
         source,
@@ -342,7 +329,7 @@ fn make_food(
         food_type: Cow::Borrowed(food_type),
         description: description.to_owned(),
         category: category.map(str::to_owned),
-        source_data: serde_json::from_str::<Box<RawValue>>(source_data)?,
+        parsed_data: crate::nutrition::FoodData::default(),
     })
 }
 

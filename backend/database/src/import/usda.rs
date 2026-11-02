@@ -15,11 +15,13 @@ use serde_json::Deserializer;
 use serde_json::value::RawValue;
 use tokio::sync::mpsc;
 
+use crate::nutrition::FoodData;
 use crate::{Food, Source};
 
+#[path = "usda_nutrition.rs"]
+mod nutrition;
+
 /// A validated food record ready for persistence.
-///
-/// `raw` holds the original JSON object exactly as it appeared in the archive.
 #[derive(Debug)]
 pub(crate) struct PreparedFood {
     /// Positive FoodData Central identifier, converted to decimal text.
@@ -31,8 +33,8 @@ pub(crate) struct PreparedFood {
     /// Optional category text from `foodCategory.description`,
     /// `wweiaFoodCategory.wweiaFoodCategoryDescription`, or `brandedFoodCategory`.
     pub(crate) category: Option<FoodCategory>,
-    /// Original record object, including every detail field and number spelling.
-    pub(crate) raw: Box<RawValue>,
+    /// Source-independent nutrition and measured serving definitions.
+    pub(crate) parsed_data: FoodData,
     /// One-based position of the record within the root array.
     pub(crate) position: RecordPosition,
 }
@@ -45,7 +47,7 @@ impl PreparedFood {
             food_type: self.kind.as_str().into(),
             description: self.description.0,
             category: self.category.map(|category| category.0),
-            source_data: self.raw,
+            parsed_data: self.parsed_data,
         }
     }
 }
@@ -211,6 +213,9 @@ impl ParseError {
 /// Details of reading or validating a food record.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RecordError {
+    /// The supplied nutrition or measured serving data cannot be represented.
+    #[error("invalid nutrition: {0}")]
+    Nutrition(#[from] nutrition::NutritionError),
     /// The record is not a valid header object. Serde's line and column are
     /// relative to the start of the record object.
     #[error("malformed food header: {0}")]
@@ -245,7 +250,7 @@ pub(crate) enum RecordError {
 ///
 /// The input must be a single top-level object with exactly one recognized
 /// array: `FoundationFoods`, `SRLegacyFoods`, `SurveyFoods`, or `BrandedFoods`.
-/// The parser validates each header, forwards the original record, and never
+/// The parser validates each header, maps nutrition and servings, and never
 /// collects the array.
 ///
 /// The function uses [`mpsc::Sender::blocking_send`], so it must run on a
@@ -421,7 +426,7 @@ impl<'de> Visitor<'de> for FoodListVisitor<'_> {
                 }
             };
 
-            let food = match prepare_food(raw, root_kind, position) {
+            let food = match prepare_food(&raw, root_kind, position) {
                 Ok(food) => food,
                 Err(source) => {
                     *state = StreamState::Failure(ParseError::Record { position, source });
@@ -459,7 +464,7 @@ fn food_kind_for_root(root: &str) -> Option<FoodKind> {
 }
 
 fn prepare_food(
-    raw: Box<RawValue>,
+    raw: &RawValue,
     root_kind: FoodKind,
     position: RecordPosition,
 ) -> Result<PreparedFood, RecordError> {
@@ -478,6 +483,7 @@ fn prepare_food(
 
     let fdc_id = FdcId::from_json(header.fdc_id)?;
     let description = FoodDescription::from_json(header.description)?;
+    let parsed_data = nutrition::parse(raw.get(), header.data_type)?;
     let category = match header.data_type {
         FoodKind::Branded => header.branded_food_category.map(FoodCategory),
         FoodKind::Foundation | FoodKind::SrLegacy => header
@@ -496,7 +502,7 @@ fn prepare_food(
         kind: header.data_type,
         description,
         category,
-        raw,
+        parsed_data,
         position,
     })
 }

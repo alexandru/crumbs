@@ -5,9 +5,11 @@ use std::thread;
 
 use tokio::sync::mpsc;
 
+use crate::nutrition::NutritionBasis;
+
 use super::*;
 
-const FOUNDATION_RECORD: &str = r#"{"fdcId": 321358, "description": "Hummus, commercial", "dataType": "Foundation", "foodCategory": {"description": "Legumes and Legume Products"}, "publicationDate": "4/1/2019", "foodNutrients": [{"nutrient": {"number": "334", "unitName": "µg"}, "amount": 1.00, "ratio": 1e+3}], "scientificName": "Solanum lycopersicum", "unknown": {"nested": [true, null, "µg"]}}"#;
+const FOUNDATION_RECORD: &str = r#"{"fdcId": 321358, "description": "Hummus, commercial", "dataType": "Foundation", "foodCategory": {"description": "Legumes and Legume Products"}, "publicationDate": "4/1/2019", "foodNutrients": [{"nutrient": {"id": 2048, "unitName": "kcal"}, "amount": 166}, {"nutrient": {"id": 1003, "unitName": "g"}, "amount": 7.90}, {"nutrient": {"id": 1004, "unitName": "g"}, "amount": 9.60}, {"nutrient": {"id": 1005, "unitName": "g"}, "amount": 14.29}, {"nutrient": {"id": 1079, "unitName": "g"}, "amount": 6.0}, {"nutrient": {"id": 1093, "unitName": "mg"}, "amount": 379}], "foodPortions": [{"amount": 2.0, "measureUnit": {"name": "tablespoon"}, "gramWeight": 33.9}], "scientificName": "Solanum lycopersicum", "unknown": {"nested": [true, null, "µg"]}}"#;
 const FOUNDATION_RECORD_NULL_CATEGORY: &str = r#"{"fdcId":321360,"description":"Tomatoes, grape, raw","dataType":"Foundation","foodCategory":null}"#;
 const BRANDED_RECORD: &str = r#"{"foodClass":"Branded","description":"GRANOLA, CINNAMON, RAISIN","foodNutrients":[],"publicationDate":"11/13/2020","brandOwner":"MICHELE'S","gtinUpc":"001633636543505","dataSource":"LI","servingSize":28,"servingSizeUnit":"g","householdServingFullText":"0.25 cup","brandedFoodCategory":"Cereal","modifiedDate":"4/26/2020","availableDate":"4/26/2020","dataType":"Branded","fdcId":1106281,"labelNutrients":{"calories":{"value":120}}}"#;
 const SURVEY_RECORD: &str = r#"{"fdcId":2705383,"description":"Milk, human","dataType":"Survey (FNDDS)","wweiaFoodCategory":{"wweiaFoodCategoryDescription":"Human milk","wweiaFoodCategoryCode":3298314}}"#;
@@ -27,7 +29,8 @@ fn preserves_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
         food.category.as_ref().map(FoodCategory::as_str),
         Some("Human milk")
     );
-    assert_eq!(food.raw.get(), SURVEY_RECORD);
+    assert_eq!(food.parsed_data.nutrition, None);
+    assert!(food.parsed_data.serving_sizes.is_empty());
     Ok(())
 }
 
@@ -114,7 +117,7 @@ fn ignores_wweia_metadata_for_other_food_kinds() -> Result<(), Box<dyn StdError>
 }
 
 #[test]
-fn streams_foundation_foods_and_preserves_raw_payload() -> Result<(), Box<dyn StdError>> {
+fn streams_foundation_foods_and_parses_typed_nutrition() -> Result<(), Box<dyn StdError>> {
     let input = document(
         "FoundationFoods",
         &[FOUNDATION_RECORD, FOUNDATION_RECORD_NULL_CATEGORY],
@@ -133,7 +136,47 @@ fn streams_foundation_foods_and_preserves_raw_payload() -> Result<(), Box<dyn St
         Some("Legumes and Legume Products")
     );
     assert_eq!(first.position.get(), 1);
-    assert_eq!(first.raw.get(), FOUNDATION_RECORD);
+    let profile = first
+        .parsed_data
+        .nutrition
+        .as_ref()
+        .ok_or_else(|| io::Error::other("Foundation nutrition was not parsed"))?;
+    assert_eq!(profile.per, NutritionBasis::Per100Grams);
+    assert_eq!(
+        profile.energy.as_ref().map(ToString::to_string).as_deref(),
+        Some("166 kcal")
+    );
+    assert_eq!(
+        profile.protein.as_ref().map(ToString::to_string).as_deref(),
+        Some("7.90 g")
+    );
+    assert_eq!(
+        profile
+            .fat
+            .total
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("9.60 g")
+    );
+    assert_eq!(
+        profile
+            .carbohydrates
+            .including_fibre
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("14.29 g")
+    );
+    assert_eq!(
+        profile.fibre.as_ref().map(ToString::to_string).as_deref(),
+        Some("6.0 g")
+    );
+    assert_eq!(
+        profile.sodium.as_ref().map(ToString::to_string).as_deref(),
+        Some("379 mg")
+    );
+    assert_eq!(first.parsed_data.serving_sizes.len(), 1);
 
     let second = foods
         .get(1)
@@ -142,12 +185,13 @@ fn streams_foundation_foods_and_preserves_raw_payload() -> Result<(), Box<dyn St
     assert_eq!(second.kind, FoodKind::Foundation);
     assert_eq!(second.category, None);
     assert_eq!(second.position.get(), 2);
-    assert_eq!(second.raw.get(), FOUNDATION_RECORD_NULL_CATEGORY);
+    assert_eq!(second.parsed_data.nutrition, None);
+    assert!(second.parsed_data.serving_sizes.is_empty());
     Ok(())
 }
 
 #[test]
-fn streams_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn StdError>> {
+fn streams_branded_food_and_preserves_measured_serving() -> Result<(), Box<dyn StdError>> {
     let input = document("BrandedFoods", &[BRANDED_RECORD]);
 
     let (result, foods) = collect(input.as_bytes(), 1);
@@ -162,12 +206,14 @@ fn streams_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn StdError
         food.category.as_ref().map(FoodCategory::as_str),
         Some("Cereal")
     );
-    assert_eq!(food.raw.get(), BRANDED_RECORD);
-    assert!(
-        food.raw.get().contains(r#""gtinUpc":"001633636543505""#),
-        "gtinUpc was not preserved as text: {}",
-        food.raw.get()
-    );
+    assert_eq!(food.parsed_data.nutrition, None);
+    assert_eq!(food.parsed_data.serving_sizes.len(), 1);
+    let serving = food
+        .parsed_data
+        .serving_sizes
+        .first()
+        .ok_or_else(|| io::Error::other("Branded serving was not parsed"))?;
+    assert_eq!(serving.quantity.to_string(), "28 g");
     Ok(())
 }
 

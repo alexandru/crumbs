@@ -744,7 +744,7 @@ async fn transaction_rollback_restores_food_and_index() -> Result<(), Box<dyn St
     let mut insert = database.pool.begin().await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, source_data, created_at)
+            (id, source, source_food_id, food_type, description, category, parsed_data, created_at)
          VALUES (3, 'usda', 'rolled-insert', 'Foundation', 'Rolled back insert', NULL, '{}', 0)",
     )
     .execute(&mut *insert)
@@ -816,7 +816,7 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         .await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, source_data, created_at)
+            (id, source, source_food_id, food_type, description, category, parsed_data, created_at)
          VALUES
             (1, 'usda', 'old-1', 'Foundation', 'Roșii coapte', 'Legume', '{}', 0),
             (2, 'usda', 'old-2', 'Foundation', 'Cheddar Cheese', 'Dairy', '{}', 0)",
@@ -894,7 +894,7 @@ async fn insert_food(
         .await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, source_data, created_at)
+            (id, source, source_food_id, food_type, description, category, parsed_data, created_at)
          VALUES (?, ?, ?, 'Foundation', ?, ?, '{}', 0)",
     )
     .bind(id)

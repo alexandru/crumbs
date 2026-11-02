@@ -5,7 +5,7 @@ CREATE TABLE crumbs_foods (
     food_type TEXT NOT NULL,
     description TEXT NOT NULL CHECK (length(trim(description)) > 0),
     category TEXT,
-    source_data TEXT NOT NULL CHECK (json_valid(source_data)),
+    parsed_data TEXT NOT NULL CHECK (json_valid(parsed_data)),
     created_at INTEGER NOT NULL,
     updated_at INTEGER,
     UNIQUE (source, source_food_id)

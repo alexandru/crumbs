@@ -3,7 +3,6 @@ use std::error::Error as StdError;
 use std::io;
 use std::time::{Duration, SystemTime};
 
-use serde_json::value::RawValue;
 use sqlx::{FromRow, query_scalar};
 
 use crate::clock::{Clock, UnixMillis};
@@ -17,6 +16,13 @@ async fn inserts_application_timestamps_and_leaves_updates_empty() -> Result<(),
     let food_id = database
         .upsert_food(&make_food("usda", "1", "Inserted food")?)
         .await?;
+    let parsed_data_json: String =
+        query_scalar("SELECT parsed_data FROM crumbs_foods WHERE id = ?")
+            .bind(food_id.0)
+            .fetch_one(&database.pool)
+            .await?;
+    let parsed_data: crate::nutrition::FoodData = serde_json::from_str(&parsed_data_json)?;
+    assert_eq!(parsed_data, crate::nutrition::FoodData::default());
     let tag = TagName::new("Fresh")?;
     set_clock(&mut database, at(1_500)?);
     database
@@ -367,7 +373,7 @@ fn make_food(
         food_type: Cow::Borrowed("Foundation"),
         description: description.to_owned(),
         category: None,
-        source_data: serde_json::from_str::<Box<RawValue>>("{}")?,
+        parsed_data: crate::nutrition::FoodData::default(),
     })
 }
 

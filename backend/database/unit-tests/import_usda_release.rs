@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use sqlx::{SqlitePool, query, query_scalar};
 
+use crate::measurements::{Reported, SignedMass};
+use crate::nutrition::{FoodData, NutritionBasis};
 use crate::{Database, DatabaseConfig, TagName};
 
 const RELEASE_JSON_ENV: &str = "USDA_FOUNDATION_JSON";
@@ -32,7 +34,7 @@ type FoodType = String;
 type FoodDescription = String;
 type FoodCategory = String;
 type FoodTags = String;
-type SourceData = String;
+type ParsedData = String;
 type ReferenceFoods = BTreeMap<SourceFoodId, Value>;
 type TestResult = Result<(), Box<dyn StdError>>;
 
@@ -46,7 +48,7 @@ struct StoredFood {
     description: FoodDescription,
     category: Option<FoodCategory>,
     tags: FoodTags,
-    source_data: SourceData,
+    parsed_data: ParsedData,
 }
 
 #[tokio::test]
@@ -159,7 +161,7 @@ fn load_reference(path: &Path) -> Result<ReferenceFoods, Box<dyn StdError>> {
 async fn read_stored(database: &Database) -> Result<Vec<StoredFood>, sqlx::Error> {
     sqlx::query_as::<_, StoredFood>(
         "SELECT f.id, f.source, f.source_food_id, f.food_type, f.description, f.category,
-                s.tags AS tags, f.source_data
+                s.tags AS tags, f.parsed_data
          FROM crumbs_foods AS f
          JOIN crumbs_foods_search_content AS s ON s.id = f.id
          ORDER BY f.id",
@@ -199,15 +201,104 @@ fn verify_reference(stored: &[StoredFood], reference: &ReferenceFoods) -> TestRe
             "category {source_food_id}"
         );
         assert!(food.tags.is_empty(), "tags {source_food_id}");
-        let stored_value: Value = serde_json::from_str(&food.source_data).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid source_data {source_food_id}: {error}"),
-            )
-        })?;
-        assert!(stored_value == *expected, "source_data {source_food_id}");
+        verify_parsed_nutrition(food, expected)?;
     }
     Ok(())
+}
+
+fn verify_parsed_nutrition(food: &StoredFood, expected: &Value) -> TestResult {
+    let parsed_data: FoodData = serde_json::from_str(&food.parsed_data).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid parsed_data {}: {error}", food.source_food_id),
+        )
+    })?;
+    if let Some(profile) = parsed_data.nutrition.as_ref() {
+        assert_eq!(
+            profile.per,
+            NutritionBasis::Per100Grams,
+            "nutrition basis {}",
+            food.source_food_id
+        );
+    }
+
+    for (id, field) in [
+        (1003, "protein"),
+        (1004, "total fat"),
+        (1005, "carbohydrates including fibre"),
+    ] {
+        let Some(expected_amount) = source_nutrient_quantity(expected, id) else {
+            continue;
+        };
+        let profile = parsed_data.nutrition.as_ref().ok_or_else(|| {
+            invalid_data(format!("missing nutrition profile {}", food.source_food_id))
+        })?;
+        let actual_text = match id {
+            1003 => profile.protein.as_ref().map(ToString::to_string),
+            1004 => profile.fat.total.as_ref().map(ToString::to_string),
+            1005 => profile
+                .carbohydrates
+                .including_fibre
+                .as_ref()
+                .map(ToString::to_string),
+            _ => None,
+        };
+        let actual = actual_text
+            .as_deref()
+            .map(str::parse::<Reported<SignedMass>>)
+            .transpose()?;
+        let expected_amount = expected_amount.parse::<Reported<SignedMass>>()?;
+        assert_eq!(
+            actual,
+            Some(expected_amount),
+            "{field} {}",
+            food.source_food_id
+        );
+    }
+    Ok(())
+}
+
+fn source_nutrient_quantity(food: &Value, nutrient_id: u64) -> Option<String> {
+    let nutrients = food.get("foodNutrients")?.as_array()?;
+    for food_nutrient in nutrients {
+        let Some(nutrient) = food_nutrient.get("nutrient") else {
+            continue;
+        };
+        if nutrient.get("id").and_then(Value::as_u64) != Some(nutrient_id) {
+            continue;
+        }
+        let Some(unit) = nutrient.get("unitName").and_then(Value::as_str) else {
+            continue;
+        };
+        let unit = match unit {
+            "G" => "g",
+            "MG" => "mg",
+            "UG" => "µg",
+            other => other,
+        };
+        if let Some(Value::Number(limit)) = food_nutrient.get("loq") {
+            let limit_text = limit.to_string();
+            if !decimal_is_zero(&limit_text) {
+                return Some(format!("< {limit_text} {unit}"));
+            }
+        }
+        if let Some(Value::Number(amount)) = food_nutrient.get("amount") {
+            return Some(format!("{amount} {unit}"));
+        }
+    }
+    None
+}
+
+fn decimal_is_zero(input: &str) -> bool {
+    for byte in input
+        .bytes()
+        .take_while(|byte| !matches!(*byte, b'e' | b'E'))
+    {
+        if byte.is_ascii_digit() && byte != b'0' {
+            return false;
+        }
+    }
+    true
 }
 
 async fn verify_fts(pool: &SqlitePool, foods: &[StoredFood]) -> TestResult {

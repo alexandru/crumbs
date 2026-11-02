@@ -55,6 +55,69 @@
           },
           "median": 0.0,
           "amount": 0.0
+        },
+        {
+          "type": "FoodNutrient",
+          "nutrient": {
+            "id": 2048,
+            "name": "Energy (Atwater Specific Factors)",
+            "unitName": "kcal"
+          },
+          "amount": 166
+        },
+        {
+          "type": "FoodNutrient",
+          "nutrient": {
+            "id": 1003,
+            "name": "Protein",
+            "unitName": "g"
+          },
+          "amount": 7.90
+        },
+        {
+          "type": "FoodNutrient",
+          "nutrient": {
+            "id": 1004,
+            "name": "Total lipid (fat)",
+            "unitName": "g"
+          },
+          "amount": 9.60
+        },
+        {
+          "type": "FoodNutrient",
+          "nutrient": {
+            "id": 1005,
+            "name": "Carbohydrate, by difference",
+            "unitName": "g"
+          },
+          "amount": 14.29
+        },
+        {
+          "type": "FoodNutrient",
+          "nutrient": {
+            "id": 1079,
+            "name": "Fiber, total dietary",
+            "unitName": "g"
+          },
+          "amount": 6.0
+        },
+        {
+          "type": "FoodNutrient",
+          "nutrient": {
+            "id": 1093,
+            "name": "Sodium, Na",
+            "unitName": "mg"
+          },
+          "amount": 379
+        },
+        {
+          "type": "FoodNutrient",
+          "nutrient": {
+            "id": 2000,
+            "name": "Sugars, total including NLEA",
+            "unitName": "g"
+          },
+          "amount": 0.0
         }
       ],
       "foodPortions": [
@@ -71,6 +134,20 @@
           "sequenceNumber": 1,
           "minYearAcquired": 2015,
           "amount": 2.0
+        },
+        {
+          "id": 118805,
+          "value": 1.0,
+          "measureUnit": {
+            "id": 1001,
+            "name": "tablespoon",
+            "abbreviation": "tbsp"
+          },
+          "modifier": "",
+          "gramWeight": 16.95,
+          "sequenceNumber": 2,
+          "minYearAcquired": 2015,
+          "amount": 1.0
         }
       ]
     },
