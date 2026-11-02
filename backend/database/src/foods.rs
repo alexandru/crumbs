@@ -5,7 +5,6 @@ use std::error::Error as StdError;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 
-use serde_json::value::RawValue;
 use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
 
@@ -35,7 +34,7 @@ pub type FoodDescription = String;
 /// Optional display category supplied by a source.
 pub type FoodCategory = String;
 
-/// A complete food entry supplied by any source.
+/// A complete food entry with source-independent, owned parsed data.
 #[derive(Debug)]
 pub struct Food {
     pub source: Source,
@@ -43,8 +42,8 @@ pub struct Food {
     pub food_type: FoodType,
     pub description: FoodDescription,
     pub category: Option<FoodCategory>,
-    /// Original source JSON, including its original numeric spelling.
-    pub source_data: Box<RawValue>,
+    /// Parsed nutrition values and serving sizes owned by this food.
+    pub parsed_data: crate::nutrition::ParsedFoodData,
 }
 
 /// Local food identity, independent of source identifiers.

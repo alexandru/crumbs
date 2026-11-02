@@ -55,6 +55,27 @@
           },
           "median": 0.0,
           "amount": 0.0
+        },
+        {
+          "type": "FoodNutrient",
+          "id": 2219813,
+          "nutrient": {
+            "id": 1063,
+            "number": "269.3",
+            "name": "Sugars, Total",
+            "rank": 1500,
+            "unitName": "g"
+          },
+          "foodNutrientDerivation": {
+            "code": "AS",
+            "description": "Summed",
+            "foodNutrientSource": {
+              "id": 1,
+              "code": "1",
+              "description": "Analytical or derived from analytical"
+            }
+          },
+          "amount": 0.340
         }
       ],
       "foodPortions": [

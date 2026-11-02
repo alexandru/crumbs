@@ -1,8 +1,9 @@
 //! Streaming parser for the official USDA FoodData Central JSON archives.
 //!
 //! The archives wrap a single array under one root key. This module validates
-//! the root and each food header while forwarding every record as a
-//! [`PreparedFood`] without collecting the array or a `serde_json::Value`.
+//! the root and each food header, parses nutrition data, and forwards each
+//! record as a [`PreparedFood`] without collecting the array or a
+//! `serde_json::Value`.
 
 use std::fmt;
 use std::io::Read;
@@ -17,9 +18,9 @@ use tokio::sync::mpsc;
 
 use crate::{Food, Source};
 
+mod nutrition;
+
 /// A validated food record ready for persistence.
-///
-/// `raw` holds the original JSON object exactly as it appeared in the archive.
 #[derive(Debug)]
 pub(crate) struct PreparedFood {
     /// Positive FoodData Central identifier, converted to decimal text.
@@ -31,8 +32,8 @@ pub(crate) struct PreparedFood {
     /// Optional category text from `foodCategory.description`,
     /// `wweiaFoodCategory.wweiaFoodCategoryDescription`, or `brandedFoodCategory`.
     pub(crate) category: Option<FoodCategory>,
-    /// Original record object, including every detail field and number spelling.
-    pub(crate) raw: Box<RawValue>,
+    /// Owned, typed nutrition data parsed from the record.
+    pub(crate) parsed_data: crate::nutrition::ParsedFoodData,
     /// One-based position of the record within the root array.
     pub(crate) position: RecordPosition,
 }
@@ -45,7 +46,7 @@ impl PreparedFood {
             food_type: self.kind.as_str().into(),
             description: self.description.0,
             category: self.category.map(|category| category.0),
-            source_data: self.raw,
+            parsed_data: self.parsed_data,
         }
     }
 }
@@ -174,8 +175,8 @@ pub(crate) enum ParseError {
         #[source]
         source: serde_json::Error,
     },
-    /// A food record cannot be read or is invalid. `source` identifies the read
-    /// or field problem.
+    /// A food record cannot be read, validated, or parsed. `source` identifies
+    /// the record-level problem.
     #[error("invalid USDA FoodData Central record {position}: {source}")]
     Record {
         /// One-based record position.
@@ -208,7 +209,7 @@ impl ParseError {
     }
 }
 
-/// Details of reading or validating a food record.
+/// Details of reading, validating, or parsing a food record.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RecordError {
     /// The record is not a valid header object. Serde's line and column are
@@ -231,6 +232,9 @@ pub(crate) enum RecordError {
     /// `description` was whitespace-only.
     #[error("description must not be blank")]
     BlankDescription,
+    /// Nutrition data could not be parsed into the typed representation.
+    #[error("invalid nutrition data: {0}")]
+    Nutrition(#[from] nutrition::NutritionError),
     /// The root key and `dataType` disagree.
     #[error("dataType {data_type} does not match the {root} root")]
     KindMismatch {
@@ -245,8 +249,8 @@ pub(crate) enum RecordError {
 ///
 /// The input must be a single top-level object with exactly one recognized
 /// array: `FoundationFoods`, `SRLegacyFoods`, `SurveyFoods`, or `BrandedFoods`.
-/// The parser validates each header, forwards the original record, and never
-/// collects the array.
+/// The parser validates each header, parses nutrition data, forwards owned
+/// records, and never collects the array.
 ///
 /// The function uses [`mpsc::Sender::blocking_send`], so it must run on a
 /// blocking thread, such as one created by [`tokio::task::spawn_blocking`],
@@ -421,7 +425,7 @@ impl<'de> Visitor<'de> for FoodListVisitor<'_> {
                 }
             };
 
-            let food = match prepare_food(raw, root_kind, position) {
+            let food = match prepare_food(raw.as_ref(), root_kind, position) {
                 Ok(food) => food,
                 Err(source) => {
                     *state = StreamState::Failure(ParseError::Record { position, source });
@@ -459,7 +463,7 @@ fn food_kind_for_root(root: &str) -> Option<FoodKind> {
 }
 
 fn prepare_food(
-    raw: Box<RawValue>,
+    raw: &RawValue,
     root_kind: FoodKind,
     position: RecordPosition,
 ) -> Result<PreparedFood, RecordError> {
@@ -490,13 +494,14 @@ fn prepare_food(
             .or_else(|| survey_category(raw.get()))
             .map(FoodCategory),
     };
+    let parsed_data = nutrition::parse(raw.get(), header.data_type)?;
 
     Ok(PreparedFood {
         fdc_id,
         kind: header.data_type,
         description,
         category,
-        raw,
+        parsed_data,
         position,
     })
 }

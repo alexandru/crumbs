@@ -14,6 +14,8 @@ impl FoodWriter for Database {
 
     async fn upsert_food(&self, food: &Food) -> Result<FoodId, Self::Error> {
         let now: UnixMillis = self.clock.now()?;
+        let parsed_data = serde_json::to_string(&food.parsed_data)
+            .map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO crumbs_sources (id, created_at) VALUES (?, ?)
@@ -25,13 +27,13 @@ impl FoodWriter for Database {
         .await?;
         let id = sqlx::query_scalar(
             "INSERT INTO crumbs_foods (
-                source, source_food_id, food_type, description, category, source_data, created_at
+                source, source_food_id, food_type, description, category, parsed_data, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (source, source_food_id) DO UPDATE SET
                 food_type = excluded.food_type,
                 description = excluded.description,
                 category = excluded.category,
-                source_data = excluded.source_data,
+                parsed_data = excluded.parsed_data,
                 updated_at = ?
             RETURNING id",
         )
@@ -40,7 +42,7 @@ impl FoodWriter for Database {
         .bind(food.food_type.as_ref())
         .bind(&food.description)
         .bind(food.category.as_deref())
-        .bind(food.source_data.get())
+        .bind(parsed_data)
         .bind(now)
         .bind(now)
         .fetch_one(&mut *transaction)

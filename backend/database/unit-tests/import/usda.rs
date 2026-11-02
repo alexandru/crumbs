@@ -9,7 +9,7 @@ use super::*;
 
 const FOUNDATION_RECORD: &str = r#"{"fdcId": 321358, "description": "Hummus, commercial", "dataType": "Foundation", "foodCategory": {"description": "Legumes and Legume Products"}, "publicationDate": "4/1/2019", "foodNutrients": [{"nutrient": {"number": "334", "unitName": "µg"}, "amount": 1.00, "ratio": 1e+3}], "scientificName": "Solanum lycopersicum", "unknown": {"nested": [true, null, "µg"]}}"#;
 const FOUNDATION_RECORD_NULL_CATEGORY: &str = r#"{"fdcId":321360,"description":"Tomatoes, grape, raw","dataType":"Foundation","foodCategory":null}"#;
-const BRANDED_RECORD: &str = r#"{"foodClass":"Branded","description":"GRANOLA, CINNAMON, RAISIN","foodNutrients":[],"publicationDate":"11/13/2020","brandOwner":"MICHELE'S","gtinUpc":"001633636543505","dataSource":"LI","servingSize":28,"servingSizeUnit":"g","householdServingFullText":"0.25 cup","brandedFoodCategory":"Cereal","modifiedDate":"4/26/2020","availableDate":"4/26/2020","dataType":"Branded","fdcId":1106281,"labelNutrients":{"calories":{"value":120}}}"#;
+const BRANDED_RECORD: &str = r#"{"foodClass":"Branded","description":"GRANOLA, CINNAMON, RAISIN","foodNutrients":[],"publicationDate":"11/13/2020","brandOwner":"MICHELE'S","gtinUpc":"001633636543505","dataSource":"LI","servingSize":28,"servingSizeUnit":"g","householdServingFullText":"0.25 cup","brandedFoodCategory":"Cereal","modifiedDate":"4/26/2020","availableDate":"4/26/2020","dataType":"Branded","fdcId":1106281,"labelNutrients":{"calories":{"value":126}}}"#;
 const SURVEY_RECORD: &str = r#"{"fdcId":2705383,"description":"Milk, human","dataType":"Survey (FNDDS)","wweiaFoodCategory":{"wweiaFoodCategoryDescription":"Human milk","wweiaFoodCategoryCode":3298314}}"#;
 const IO_FAILURE_FIRST_RECORD: &str =
     r#"{"fdcId":1,"description":"First record","dataType":"Foundation"}"#;
@@ -27,7 +27,8 @@ fn preserves_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
         food.category.as_ref().map(FoodCategory::as_str),
         Some("Human milk")
     );
-    assert_eq!(food.raw.get(), SURVEY_RECORD);
+    assert!(food.parsed_data.nutrition.is_none());
+    assert!(food.parsed_data.serving_sizes.is_empty());
     Ok(())
 }
 
@@ -114,7 +115,7 @@ fn ignores_wweia_metadata_for_other_food_kinds() -> Result<(), Box<dyn StdError>
 }
 
 #[test]
-fn streams_foundation_foods_and_preserves_raw_payload() -> Result<(), Box<dyn StdError>> {
+fn streams_foundation_foods_with_owned_parsed_data() -> Result<(), Box<dyn StdError>> {
     let input = document(
         "FoundationFoods",
         &[FOUNDATION_RECORD, FOUNDATION_RECORD_NULL_CATEGORY],
@@ -133,7 +134,8 @@ fn streams_foundation_foods_and_preserves_raw_payload() -> Result<(), Box<dyn St
         Some("Legumes and Legume Products")
     );
     assert_eq!(first.position.get(), 1);
-    assert_eq!(first.raw.get(), FOUNDATION_RECORD);
+    assert!(first.parsed_data.nutrition.is_none());
+    assert!(first.parsed_data.serving_sizes.is_empty());
 
     let second = foods
         .get(1)
@@ -142,12 +144,13 @@ fn streams_foundation_foods_and_preserves_raw_payload() -> Result<(), Box<dyn St
     assert_eq!(second.kind, FoodKind::Foundation);
     assert_eq!(second.category, None);
     assert_eq!(second.position.get(), 2);
-    assert_eq!(second.raw.get(), FOUNDATION_RECORD_NULL_CATEGORY);
+    assert!(second.parsed_data.nutrition.is_none());
+    assert!(second.parsed_data.serving_sizes.is_empty());
     Ok(())
 }
 
 #[test]
-fn streams_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn StdError>> {
+fn streams_branded_food_with_owned_nutrition_and_serving_data() -> Result<(), Box<dyn StdError>> {
     let input = document("BrandedFoods", &[BRANDED_RECORD]);
 
     let (result, foods) = collect(input.as_bytes(), 1);
@@ -162,12 +165,19 @@ fn streams_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn StdError
         food.category.as_ref().map(FoodCategory::as_str),
         Some("Cereal")
     );
-    assert_eq!(food.raw.get(), BRANDED_RECORD);
-    assert!(
-        food.raw.get().contains(r#""gtinUpc":"001633636543505""#),
-        "gtinUpc was not preserved as text: {}",
-        food.raw.get()
-    );
+    let nutrition = food
+        .parsed_data
+        .nutrition
+        .as_ref()
+        .ok_or_else(|| io::Error::other("branded label nutrition was not parsed"))?;
+    assert!(nutrition.energy.is_some());
+    let serving = food
+        .parsed_data
+        .serving_sizes
+        .first()
+        .ok_or_else(|| io::Error::other("branded serving size was not parsed"))?;
+    assert_eq!(serving.name, "0.25 cup");
+    assert_eq!(serving.quantity.to_string(), "28 g");
     Ok(())
 }
 
@@ -531,6 +541,43 @@ fn rejects_root_and_data_type_mismatch() -> Result<(), Box<dyn StdError>> {
         }
         other => return Err(io::Error::other(format!("unexpected error: {other}")).into()),
     }
+    Ok(())
+}
+
+#[test]
+fn reports_nutrition_parse_error_with_record_position_and_source() -> Result<(), Box<dyn StdError>>
+{
+    let invalid_nutrition = r#"{"fdcId":3,"description":"Invalid nutrition","dataType":"Foundation","foodNutrients":[{"nutrient":{"id":1003,"number":"203","name":"Protein","unitName":"g"},"amount":"invalid"}]}"#;
+    let input = document(
+        "FoundationFoods",
+        &[FOUNDATION_RECORD_NULL_CATEGORY, invalid_nutrition],
+    );
+
+    let (result, foods) = collect(input.as_bytes(), 1);
+
+    assert_eq!(
+        foods.len(),
+        1,
+        "the preceding valid record was not delivered"
+    );
+    assert_eq!(first_food(&foods)?.fdc_id.as_str(), "321360");
+    let error = error(result)?;
+    assert!(
+        matches!(
+            &error,
+            ParseError::Record {
+                position,
+                source: RecordError::Nutrition(_),
+            } if position.get() == 2
+        ),
+        "nutrition failure lost its record context: {error}"
+    );
+    let record_error = StdError::source(&error)
+        .ok_or_else(|| io::Error::other("record error source was not preserved"))?;
+    assert!(
+        StdError::source(record_error).is_some(),
+        "nutrition error source was not preserved"
+    );
     Ok(())
 }
 

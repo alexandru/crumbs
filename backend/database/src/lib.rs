@@ -22,6 +22,7 @@ mod config;
 mod foods;
 mod fts;
 mod import;
+pub mod nutrition;
 
 pub use cli::{DbArgs, DbCommand};
 pub use config::{DatabaseConfig, DatabasePath};
