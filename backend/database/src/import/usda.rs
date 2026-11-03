@@ -895,15 +895,22 @@ fn sr_legacy_servings(portions: &[RawPortion]) -> Vec<ServingSize> {
         .collect()
 }
 
-/// Builds an SR Legacy serving name from a portion's description fields.
+/// Builds an SR Legacy serving name from a portion's count and description.
+///
+/// SR Legacy portions carry their measure in `modifier` — either a bare unit
+/// word such as `oz` or `cup`, or a fuller description such as
+/// `serving 1 roll with icing` — while the portion count is a separate
+/// `value`. The count always precedes the measure so servings of different
+/// counts stay distinct; the `measureUnit` of every portion is the
+/// placeholder `undetermined`.
 fn sr_legacy_portion_name(portion: &RawPortion) -> Option<String> {
     if let Some(description) = trimmed_nonblank(portion.portion_description.as_deref()) {
         return Some(description.to_owned());
     }
-    if let Some(modifier) = trimmed_nonblank(portion.modifier.as_deref()) {
-        return Some(modifier.to_owned());
-    }
     let count = portion.measure_count()?.normalize();
+    if let Some(modifier) = trimmed_nonblank(portion.modifier.as_deref()) {
+        return Some(format!("{count} {modifier}"));
+    }
     let unit = portion.measure_unit_name()?;
     Some(format!("{count} {unit}"))
 }
@@ -929,19 +936,20 @@ fn survey_servings(portions: &[RawPortion]) -> Vec<ServingSize> {
 
 /// Parses a Branded record into parsed food data.
 ///
-/// Branded label nutrients are per serving, and the serving size with its
-/// unit is the evidence for the profile basis. Without a positive serving
-/// size in a supported unit there is no basis, and no nutrition is
-/// manufactured from the label values.
+/// Current archives publish standardized nutrient values for the record's
+/// basis in `foodNutrients`, so those values take precedence per concept;
+/// per-serving `labelNutrients` fill the gaps. The serving size with its unit
+/// is the evidence for the profile basis, and without a positive serving size
+/// in a supported unit there is no basis, and no nutrition is manufactured.
 fn branded_data(header: &Header) -> Result<ParsedFoodData, RecordError> {
     let serving = branded_serving(header);
     let serving_sizes = match serving.as_ref() {
         Some(size) => vec![size.clone()],
         None => Vec::new(),
     };
-    let nutrition = match (serving, header.label_nutrients.as_ref()) {
-        (Some(serving), Some(labels)) => branded_profile(labels, &serving)?,
-        _ => None,
+    let nutrition = match serving.as_ref() {
+        Some(serving) => branded_profile(header, serving)?,
+        None => None,
     };
     Ok(ParsedFoodData {
         nutrition,
@@ -966,16 +974,19 @@ fn branded_serving(header: &Header) -> Option<ServingSize> {
     })
 }
 
-/// Builds a Branded nutrition profile normalized to its 100 g or 100 ml basis.
+/// Builds a Branded nutrition profile on the serving's 100 g or 100 ml basis.
 ///
-/// `labelNutrients` values are per serving in label units: kcal for energy,
-/// g for fat, fatty acids, carbohydrate, fibre, sugars, and protein, and mg
-/// for sodium and cholesterol. Each value is normalized by exact
-/// multiplication by 100 followed by one fixed-point division, which rounds
-/// half to even at the maximum representable precision; no other rounding is
-/// applied. Label carbohydrates include fibre, following the US label.
+/// Standardized `foodNutrients` values are used per concept where the record
+/// publishes them, including the energy selection order. Concepts without a
+/// standardized value fall back to the record's per-serving label values in
+/// label units: kcal for energy, g for fat, fatty acids, carbohydrate,
+/// fibre, sugars, and protein, and mg for sodium and cholesterol. Each
+/// fallback value is normalized by exact multiplication by 100 followed by
+/// one fixed-point division, which rounds half to even at the maximum
+/// representable precision; no other rounding is applied. Label
+/// carbohydrates include fibre, following the US label.
 fn branded_profile(
-    labels: &RawLabelNutrients,
+    header: &Header,
     serving: &ServingSize,
 ) -> Result<Option<NutritionProfile>, RecordError> {
     let basis = match serving.quantity {
@@ -983,66 +994,110 @@ fn branded_profile(
         MeasuredQuantity::Volume(_) => NutritionBasis::Per100Millilitres,
     };
     let reference = serving.quantity.value();
-    let normalized =
-        |label: &'static str, value: Option<&JsonNumber>| -> Result<Option<Decimal>, RecordError> {
-            let Some(value) = value else {
-                return Ok(None);
-            };
-            let per_serving = decimal_from_json_number(value)
-                .map_err(|source| RecordError::LabelNutrient { label, source })?;
-            Ok(Some(per_serving * Decimal::ONE_HUNDRED / reference))
+    let standardized = collect_covered_nutrients(&header.food_nutrients)?;
+    let labels = header.label_nutrients.as_ref();
+    let label = |name: &'static str,
+                 value: Option<&RawLabelValue>|
+     -> Result<Option<Decimal>, RecordError> {
+        let Some(value) = label_number(value) else {
+            return Ok(None);
         };
+        let per_serving =
+            decimal_from_json_number(value).map_err(|source| RecordError::LabelNutrient {
+                label: name,
+                source,
+            })?;
+        per_serving
+            .checked_mul(Decimal::ONE_HUNDRED)
+            .and_then(|scaled| scaled.checked_div(reference))
+            .ok_or(RecordError::LabelNutrient {
+                label: name,
+                source: MeasureError::ConversionOverflow,
+            })
+            .map(Some)
+    };
 
-    let energy = normalized("calories", label_number(labels.calories.as_ref()))?;
-    let fat_total = normalized("fat", label_number(labels.fat.as_ref()))?;
-    let saturated_fat = normalized("saturatedFat", label_number(labels.saturated_fat.as_ref()))?;
-    let trans_fat = normalized("transFat", label_number(labels.trans_fat.as_ref()))?;
-    let cholesterol = normalized("cholesterol", label_number(labels.cholesterol.as_ref()))?;
-    let sodium = normalized("sodium", label_number(labels.sodium.as_ref()))?;
-    let carbohydrates = normalized("carbohydrates", label_number(labels.carbohydrates.as_ref()))?;
-    let fibre = normalized("fiber", label_number(labels.fiber.as_ref()))?;
-    let sugars = normalized("sugars", label_number(labels.sugars.as_ref()))?;
-    let added_sugars = normalized("addedSugar", label_number(labels.added_sugar.as_ref()))?;
-    let protein = normalized("protein", label_number(labels.protein.as_ref()))?;
+    let calories = label(
+        "calories",
+        labels.and_then(|labels| labels.calories.as_ref()),
+    )?;
+    let fat_total = label("fat", labels.and_then(|labels| labels.fat.as_ref()))?;
+    let saturated_fat = label(
+        "saturatedFat",
+        labels.and_then(|labels| labels.saturated_fat.as_ref()),
+    )?;
+    let trans_fat = label(
+        "transFat",
+        labels.and_then(|labels| labels.trans_fat.as_ref()),
+    )?;
+    let cholesterol = label(
+        "cholesterol",
+        labels.and_then(|labels| labels.cholesterol.as_ref()),
+    )?;
+    let sodium = label("sodium", labels.and_then(|labels| labels.sodium.as_ref()))?;
+    let carbohydrates = label(
+        "carbohydrates",
+        labels.and_then(|labels| labels.carbohydrates.as_ref()),
+    )?;
+    let fibre = label("fiber", labels.and_then(|labels| labels.fiber.as_ref()))?;
+    let sugars = label("sugars", labels.and_then(|labels| labels.sugars.as_ref()))?;
+    let added_sugars = label(
+        "addedSugar",
+        labels.and_then(|labels| labels.added_sugar.as_ref()),
+    )?;
+    let protein = label("protein", labels.and_then(|labels| labels.protein.as_ref()))?;
 
-    let grams = |value: Option<Decimal>| value.map(|value| Mass::Grams(Grams::new(value, None)));
-    let milligrams =
-        |value: Option<Decimal>| value.map(|value| Mass::Milligrams(Milligrams::new(value, None)));
     let profile = NutritionProfile {
         per: basis,
-        energy: energy.map(|value| Energy::Kilocalories(Kilocalories::new(value, None))),
+        energy: select_energy(&standardized)?
+            .or(calories.map(|value| Energy::Kilocalories(Kilocalories::new(value, None)))),
         fat: Fat {
-            total: grams(fat_total),
-            saturated: grams(saturated_fat),
+            total: mass_amount(&standardized, MassConcept::TotalFat)?.or(fat_total.map(grams)),
+            saturated: mass_amount(&standardized, MassConcept::SaturatedFat)?
+                .or(saturated_fat.map(grams)),
             // Labels carry no fatty-acid breakdown beyond saturated and trans.
-            monounsaturated: None,
-            polyunsaturated: None,
-            trans: grams(trans_fat),
+            monounsaturated: mass_amount(&standardized, MassConcept::MonounsaturatedFat)?,
+            polyunsaturated: mass_amount(&standardized, MassConcept::PolyunsaturatedFat)?,
+            trans: mass_amount(&standardized, MassConcept::TransFat)?.or(trans_fat.map(grams)),
         },
         carbohydrates: Carbohydrates {
-            including_fibre: grams(carbohydrates),
+            including_fibre: mass_amount(&standardized, MassConcept::CarbohydrateIncludingFibre)?
+                .or(carbohydrates.map(grams)),
+            // Neither source reports a fibre-free carbohydrate measure.
             excluding_fibre: None,
             sugars: Sugars {
-                total: grams(sugars),
-                added: grams(added_sugars),
+                total: mass_amount(&standardized, MassConcept::TotalSugars)?.or(sugars.map(grams)),
+                // No current USDA archive reports added sugars; labels do.
+                added: added_sugars.map(grams),
                 // Labels carry no lactose.
-                lactose: None,
+                lactose: mass_amount(&standardized, MassConcept::Lactose)?,
             },
             // Labels carry no starch.
-            starch: None,
+            starch: mass_amount(&standardized, MassConcept::Starch)?,
         },
-        fibre: grams(fibre),
-        protein: grams(protein),
-        sodium: milligrams(sodium),
-        // Labels carry no salt.
+        fibre: mass_amount(&standardized, MassConcept::Fibre)?.or(fibre.map(grams)),
+        protein: mass_amount(&standardized, MassConcept::Protein)?.or(protein.map(grams)),
+        sodium: mass_amount(&standardized, MassConcept::Sodium)?.or(sodium.map(milligrams)),
+        // Neither source reports salt.
         salt: None,
-        cholesterol: milligrams(cholesterol),
+        cholesterol: mass_amount(&standardized, MassConcept::Cholesterol)?
+            .or(cholesterol.map(milligrams)),
     };
     if reports_any_amount(&profile) {
         Ok(Some(profile))
     } else {
         Ok(None)
     }
+}
+
+/// Builds a mass amount in grams from a normalized label amount.
+fn grams(value: Decimal) -> Mass {
+    Mass::Grams(Grams::new(value, None))
+}
+
+/// Builds a mass amount in milligrams from a normalized label amount.
+fn milligrams(value: Decimal) -> Mass {
+    Mass::Milligrams(Milligrams::new(value, None))
 }
 
 /// Returns a label nutrient's value, when the key and its value are present.

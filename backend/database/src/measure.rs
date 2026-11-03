@@ -544,6 +544,9 @@ pub enum MeasureError {
         #[source]
         source: rust_decimal::Error,
     },
+    /// An arithmetic conversion does not fit the fixed-point decimal range.
+    #[error("conversion overflowed the fixed-point decimal range")]
+    ConversionOverflow,
     /// A measured quantity must be positive.
     #[error("measured quantity must be positive, found {found}")]
     NotPositive {
@@ -659,18 +662,99 @@ fn reject_qualifier(qualifier: Option<Qualifier>, text: &str) -> Result<(), Meas
 
 /// Parses an exact fixed-point decimal, supporting scientific notation.
 ///
-/// Plain decimals must fit the representation exactly; exponent notation is
-/// parsed by the scientific parser, which also rejects unrepresentable
-/// precision rather than rounding. The scientific fallback lowercases the
-/// exponent marker, so USDA spellings such as `4.10E+3` parse exactly.
+/// Plain decimals must fit the representation exactly. Exponent notation is
+/// first shifted into its plain decimal form, so the same exactness rule
+/// applies to the shifted value; a spelling that does not fit is rejected
+/// instead of rounded, which a direct scientific parse would silently do.
 fn parse_decimal(text: &str) -> Result<Decimal, MeasureError> {
     if text.contains('e') || text.contains('E') {
-        Decimal::from_scientific(text)
-            .or_else(|_| Decimal::from_scientific(&text.to_ascii_lowercase()))
+        Decimal::from_str_exact(&shift_scientific(text)?)
     } else {
         Decimal::from_str_exact(text)
     }
     .map_err(|source| MeasureError::Amount { source })
+}
+
+/// Longest shifted digit string built before rejecting the value; any longer
+/// integer cannot fit the 96-bit mantissa and any larger scale cannot fit the
+/// 28 fractional digits.
+const MAX_SHIFTED_DIGITS: i64 = 64;
+
+/// Shifts a scientific-notation spelling into its plain decimal form.
+///
+/// `4.10E+3` becomes `4100` and `5e-2` becomes `0.05`, with the sign kept.
+/// Extreme exponents are rejected before strings are built, so no input can
+/// force unbounded output.
+fn shift_scientific(text: &str) -> Result<String, MeasureError> {
+    let (coefficient, exponent) = text
+        .split_once('e')
+        .or_else(|| text.split_once('E'))
+        .ok_or_else(|| MeasureError::Malformed {
+            text: text.to_owned(),
+        })?;
+    let (sign, coefficient) = match coefficient.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", coefficient.strip_prefix('+').unwrap_or(coefficient)),
+    };
+    let (integer, fraction) = match coefficient.split_once('.') {
+        Some((integer, fraction)) => (integer, fraction),
+        None => (coefficient, ""),
+    };
+    let decimal_digits = |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+    if !decimal_digits(integer) || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(MeasureError::Malformed {
+            text: text.to_owned(),
+        });
+    }
+    let exponent = parse_exponent(exponent)?;
+    let digits = format!("{integer}{fraction}");
+    let shift = exponent - fraction.len() as i64;
+    if shift >= 0 {
+        // The point moves past the digits; the result is an integer.
+        if digits.len() as i64 + shift > MAX_SHIFTED_DIGITS {
+            return Err(out_of_range());
+        }
+        return Ok(format!("{sign}{digits}{}", "0".repeat(shift as usize)));
+    }
+    // The point moves left, within or before the digits.
+    let point = digits.len() as i64 + shift;
+    if -shift > MAX_SHIFTED_DIGITS {
+        return Err(out_of_range());
+    }
+    if point > 0 {
+        let (head, tail) = digits.split_at(point as usize);
+        return Ok(format!("{sign}{head}.{tail}"));
+    }
+    Ok(format!("{sign}0.{}{digits}", "0".repeat((-point) as usize)))
+}
+
+/// Parses a scientific exponent, rejecting absurd magnitudes early.
+fn parse_exponent(text: &str) -> Result<i64, MeasureError> {
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(MeasureError::Malformed {
+            text: text.to_owned(),
+        });
+    }
+    let magnitude = digits
+        .parse::<i64>()
+        .map_err(|_| out_of_range())
+        .and_then(|magnitude| {
+            (magnitude <= MAX_SHIFTED_DIGITS)
+                .then_some(magnitude)
+                .ok_or_else(out_of_range)
+        })?;
+    Ok(if negative { -magnitude } else { magnitude })
+}
+
+/// Returns the out-of-range amount error for unrepresentable shifts.
+fn out_of_range() -> MeasureError {
+    MeasureError::Amount {
+        source: rust_decimal::Error::ExceedsMaximumPossibleValue,
+    }
 }
 
 /// Deserializes a quantity from its unit-bearing string form.

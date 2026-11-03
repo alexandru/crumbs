@@ -121,6 +121,33 @@ fn parses_scientific_notation_amounts() -> TestResult {
 }
 
 #[test]
+fn scientific_notation_stays_exact_or_fails() -> TestResult {
+    // A 29-fraction-digit coefficient with a +1 exponent shifts to a
+    // representable value and must keep every digit.
+    let shifted = Micrograms::parse("0.12345678901234567890123456789e1 µg")?;
+    assert_eq!(shifted.to_string(), "1.2345678901234567890123456789 µg");
+
+    // The same coefficient without the shift is unrepresentable and must be
+    // rejected instead of silently rounded to 28 fractional digits.
+    let unrepresentable = Micrograms::parse("0.12345678901234567890123456789e0 µg");
+    expect_amount_error(unrepresentable)?;
+
+    // Extreme exponents are rejected before any string is built.
+    for text in [
+        "1e+999999999 g",
+        "1e-999999999 g",
+        "1e29 g",
+        "1e-29 g",
+        "1e g",
+        "1e2.5 g",
+    ] {
+        let rejected = Grams::parse(text);
+        assert!(rejected.is_err(), "{text} was accepted");
+    }
+    Ok(())
+}
+
+#[test]
 fn accepts_microgram_spellings() -> TestResult {
     // The micro sign, the Greek mu, and ASCII spellings all mean micrograms
     // and serialize to the canonical micro-sign spelling.

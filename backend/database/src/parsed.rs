@@ -106,21 +106,6 @@ impl<'de> Deserialize<'de> for NutritionBasis {
     }
 }
 
-/// Deserializes a nutrition basis from its unit-bearing form.
-struct BasisVisitor;
-
-impl<'de> Visitor<'de> for BasisVisitor {
-    type Value = NutritionBasis;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a nutrition basis, `100 g` or `100 ml`")
-    }
-
-    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<NutritionBasis, E> {
-        NutritionBasis::parse(value).map_err(serde::de::Error::custom)
-    }
-}
-
 /// Fat amounts for a nutrition profile.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fat {
@@ -227,6 +212,26 @@ impl<'de> Deserialize<'de> for ServingName {
     }
 }
 
+/// Serving names cannot be blank.
+#[derive(Debug, thiserror::Error)]
+#[error("serving name must not be blank")]
+pub struct InvalidServingName;
+
+/// Deserializes a nutrition basis from its unit-bearing form.
+struct BasisVisitor;
+
+impl<'de> Visitor<'de> for BasisVisitor {
+    type Value = NutritionBasis;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a nutrition basis, `100 g` or `100 ml`")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<NutritionBasis, E> {
+        NutritionBasis::parse(value).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Deserializes a serving name, rejecting blank names.
 struct ServingNameVisitor;
 
@@ -241,11 +246,6 @@ impl<'de> Visitor<'de> for ServingNameVisitor {
         ServingName::new(value).map_err(serde::de::Error::custom)
     }
 }
-
-/// Serving names cannot be blank.
-#[derive(Debug, thiserror::Error)]
-#[error("serving name must not be blank")]
-pub struct InvalidServingName;
 
 /// Reports whether a profile carries at least one nutrient amount.
 pub(crate) fn reports_any_amount(profile: &NutritionProfile) -> bool {

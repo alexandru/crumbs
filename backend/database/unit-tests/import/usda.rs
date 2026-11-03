@@ -495,14 +495,18 @@ fn parses_foundation_portions_into_servings() -> Result<(), Box<dyn StdError>> {
 
 #[test]
 fn parses_sr_legacy_portions_from_their_modifiers() -> Result<(), Box<dyn StdError>> {
-    // SR Legacy portions carry their description in `modifier`; the measure
-    // unit is the placeholder `undetermined` for every portion.
+    // SR Legacy portions carry their measure in `modifier` — a bare unit word
+    // or a fuller description — while the count is a separate `value`; the
+    // measure unit is the placeholder `undetermined` for every portion.
     let input = document(
         "SRLegacyFoods",
         &[
             r#"{"fdcId":167512,"description":"Biscuits","dataType":"SR Legacy","foodPortions":[
             {"id":1,"value":1.0,"amount":1.0,"measureUnit":{"id":9999,"name":"undetermined","abbreviation":"undetermined"},"modifier":"serving 1 roll with icing","gramWeight":44.0,"sequenceNumber":1},
-            {"id":2,"value":1.0,"amount":1.0,"measureUnit":{"id":9999,"name":"undetermined","abbreviation":"undetermined"},"modifier":"serving","gramWeight":30,"sequenceNumber":2}
+            {"id":2,"value":1.0,"amount":1.0,"measureUnit":{"id":9999,"name":"undetermined","abbreviation":"undetermined"},"modifier":"serving","gramWeight":30,"sequenceNumber":2},
+            {"id":3,"value":4.0,"amount":4.0,"measureUnit":{"id":9999,"name":"undetermined","abbreviation":"undetermined"},"modifier":"oz","gramWeight":113,"sequenceNumber":3},
+            {"id":4,"value":1.5,"amount":1.5,"measureUnit":{"id":9999,"name":"undetermined","abbreviation":"undetermined"},"modifier":"oz","gramWeight":42.0,"sequenceNumber":4},
+            {"id":5,"value":1.0,"amount":1.0,"measureUnit":{"id":9999,"name":"undetermined","abbreviation":"undetermined"},"modifier":"oz","gramWeight":28.35,"sequenceNumber":5}
         ]}"#,
         ],
     );
@@ -511,8 +515,11 @@ fn parses_sr_legacy_portions_from_their_modifiers() -> Result<(), Box<dyn StdErr
     assert_eq!(
         first_food(&foods)?.parsed.serving_sizes,
         vec![
-            serving("serving 1 roll with icing", "44.0 g")?,
-            serving("serving", "30 g")?,
+            serving("1 serving 1 roll with icing", "44.0 g")?,
+            serving("1 serving", "30 g")?,
+            serving("4 oz", "113 g")?,
+            serving("1.5 oz", "42.0 g")?,
+            serving("1 oz", "28.35 g")?,
         ]
     );
     Ok(())
@@ -607,6 +614,89 @@ fn normalizes_branded_label_nutrients_to_the_basis() -> Result<(), Box<dyn StdEr
     assert_eq!(profile.fat.monounsaturated, None);
     assert_eq!(profile.fat.polyunsaturated, None);
     assert_eq!(profile.salt, None);
+    Ok(())
+}
+
+#[test]
+fn prefers_branded_standardized_nutrients_over_labels() -> Result<(), Box<dyn StdError>> {
+    // Current archives publish standardized per-basis values in
+    // `foodNutrients`; those values win over re-derived label amounts, and
+    // the energy selection order applies.
+    let record = r#"{"fdcId":1106281,"description":"GRANOLA","dataType":"Branded","servingSize":28,"servingSizeUnit":"g","householdServingFullText":"0.25 cup","foodNutrients":[
+        {"nutrient":{"id":2048,"unitName":"kcal"},"amount":45.9},
+        {"nutrient":{"id":1008,"unitName":"kcal"},"amount":44.0},
+        {"nutrient":{"id":1003,"unitName":"g"},"amount":10.7},
+        {"nutrient":{"id":1093,"unitName":"mg"},"amount":161},
+        {"nutrient":{"id":1292,"unitName":"g"},"amount":7.6}
+    ],"labelNutrients":{"calories":{"value":140},"protein":{"value":3.0},"sodium":{"value":45.1}}}"#;
+    let input = document("BrandedFoods", &[record]);
+    let (result, foods) = collect(input.as_bytes(), 1);
+    result?;
+    let profile = match first_food(&foods)?.parsed.nutrition.as_ref() {
+        Some(profile) => profile,
+        None => return Err(io::Error::other("branded nutrition is missing").into()),
+    };
+    assert_eq!(profile.per, NutritionBasis::Per100Grams);
+    assert_eq!(profile.energy, Some(Energy::parse("45.9 kcal")?));
+    assert_eq!(profile.protein, Some(Mass::parse("10.7 g")?));
+    assert_eq!(profile.sodium, Some(Mass::parse("161 mg")?));
+    // Labels carry no monounsaturated fat, but the standardized value does.
+    assert_eq!(profile.fat.monounsaturated, Some(Mass::parse("7.6 g")?));
+    Ok(())
+}
+
+#[test]
+fn branded_labels_fill_concepts_without_standardized_values() -> Result<(), Box<dyn StdError>> {
+    // The record publishes only protein as a standardized value; the missing
+    // energy and cholesterol come from its per-serving label values.
+    let record = r#"{"fdcId":1106304,"description":"Cereal","dataType":"Branded","servingSize":25,"servingSizeUnit":"g","householdServingFullText":"0.25 cup","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":10.7}],"labelNutrients":{"calories":{"value":50},"cholesterol":{"value":5.0}}}"#;
+    let input = document("BrandedFoods", &[record]);
+    let (result, foods) = collect(input.as_bytes(), 1);
+    result?;
+    let profile = match first_food(&foods)?.parsed.nutrition.as_ref() {
+        Some(profile) => profile,
+        None => return Err(io::Error::other("branded nutrition is missing").into()),
+    };
+    assert_eq!(profile.protein, Some(Mass::parse("10.7 g")?));
+    assert_eq!(profile.energy, Some(Energy::parse("200 kcal")?));
+    assert_eq!(profile.cholesterol, Some(Mass::parse("20 mg")?));
+    assert_eq!(profile.fat.total, None);
+    Ok(())
+}
+
+#[test]
+fn branded_standardized_nutrients_survive_without_labels() -> Result<(), Box<dyn StdError>> {
+    let record = r#"{"fdcId":1106304,"description":"Cereal","dataType":"Branded","servingSize":28,"servingSizeUnit":"g","foodNutrients":[{"nutrient":{"id":1008,"unitName":"kcal"},"amount":500},{"nutrient":{"id":1003,"unitName":"g"},"amount":10.7}]}"#;
+    let input = document("BrandedFoods", &[record]);
+    let (result, foods) = collect(input.as_bytes(), 1);
+    result?;
+    let profile = match first_food(&foods)?.parsed.nutrition.as_ref() {
+        Some(profile) => profile,
+        None => return Err(io::Error::other("branded nutrition is missing").into()),
+    };
+    assert_eq!(profile.energy, Some(Energy::parse("500 kcal")?));
+    assert_eq!(profile.protein, Some(Mass::parse("10.7 g")?));
+    Ok(())
+}
+
+#[test]
+fn rejects_branded_label_amounts_that_overflow_the_decimal_range() -> Result<(), Box<dyn StdError>>
+{
+    // Normalization uses checked arithmetic; a label amount whose scaled
+    // value overflows fails its record instead of panicking the worker.
+    let record = r#"{"fdcId":1,"description":"A","dataType":"Branded","servingSize":100,"servingSizeUnit":"g","labelNutrients":{"calories":{"value":1e27}}}"#;
+    let input = document("BrandedFoods", &[record]);
+    match single_record_error(input)? {
+        RecordError::LabelNutrient { label, .. } => assert_eq!(label, "calories"),
+        other => return Err(io::Error::other(format!("unexpected error: {other}")).into()),
+    }
+
+    let divided = r#"{"fdcId":2,"description":"B","dataType":"Branded","servingSize":0.0000000000000000000000000001,"servingSizeUnit":"g","labelNutrients":{"calories":{"value":8}}}"#;
+    let input = document("BrandedFoods", &[divided]);
+    match single_record_error(input)? {
+        RecordError::LabelNutrient { label, .. } => assert_eq!(label, "calories"),
+        other => return Err(io::Error::other(format!("unexpected error: {other}")).into()),
+    }
     Ok(())
 }
 
