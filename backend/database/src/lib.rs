@@ -22,6 +22,8 @@ mod config;
 mod foods;
 mod fts;
 mod import;
+mod measure;
+mod parsed;
 
 pub use cli::{DbArgs, DbCommand};
 pub use config::{DatabaseConfig, DatabasePath};
@@ -30,6 +32,14 @@ pub use foods::{
     Source, SourceFoodId, Tag, TagId, TagName,
 };
 pub use import::{ImportError, ImportReport, ImportedFoods, import_usda};
+pub use measure::{
+    Decimal, Energy, Grams, Mass, MassUnit, MeasureError, MeasuredMass, MeasuredQuantity,
+    MeasuredVolume, Micrograms, Milligrams, Qualifier,
+};
+pub use parsed::{
+    Carbohydrates, Fat, InvalidServingName, NutritionBasis, NutritionProfile, ParsedFoodData,
+    ServingName, ServingSize, Sugars,
+};
 
 /// Handle to the application database.
 ///

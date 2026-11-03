@@ -3,11 +3,12 @@ use std::error::Error as StdError;
 use std::io;
 use std::time::{Duration, SystemTime};
 
-use serde_json::value::RawValue;
 use sqlx::{FromRow, query_scalar};
 
 use crate::clock::{Clock, UnixMillis};
-use crate::{Database, DatabaseConfig, Food, FoodId, FoodWriter, Source, Tag, TagName};
+use crate::{
+    Database, DatabaseConfig, Food, FoodId, FoodWriter, ParsedFoodData, Source, Tag, TagName,
+};
 
 #[tokio::test]
 async fn inserts_application_timestamps_and_leaves_updates_empty() -> Result<(), Box<dyn StdError>>
@@ -367,7 +368,7 @@ fn make_food(
         food_type: Cow::Borrowed("Foundation"),
         description: description.to_owned(),
         category: None,
-        source_data: serde_json::from_str::<Box<RawValue>>("{}")?,
+        parsed_data: ParsedFoodData::default(),
     })
 }
 

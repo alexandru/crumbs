@@ -11,8 +11,9 @@ use sqlx::{FromRow, query, query_scalar};
 
 use super::ImportError;
 use crate::{
-    Database, DatabaseConfig, Food, FoodCategory, FoodDescription, FoodId, FoodWriter,
-    SourceFoodId, TagName, import_usda,
+    Database, DatabaseConfig, Energy, Food, FoodCategory, FoodDescription, FoodId, FoodWriter,
+    MeasuredQuantity, NutritionBasis, ParsedFoodData, ServingName, ServingSize, SourceFoodId,
+    TagName, import_usda,
 };
 
 const FOUNDATION_JSON: &str = include_str!("../../test-fixtures/foundation.json");
@@ -32,7 +33,8 @@ async fn persists_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
     assert_eq!(report.committed().get(), 1);
     let food = food_row(&database, "usda", "2705383").await?;
     assert_eq!(food.category.as_deref(), Some("Human milk"));
-    assert_eq!(food.source_data, record);
+    let parsed: ParsedFoodData = serde_json::from_str(&food.parsed_data)?;
+    assert_eq!(parsed, ParsedFoodData::default());
     Ok(())
 }
 
@@ -55,20 +57,31 @@ async fn imports_foundation_foods_and_preserves_source_details() -> Result<(), B
         Some("Legumes and Legume Products")
     );
     assert!(database.list_tags().await?.is_empty());
-    assert!(food.source_data.contains(r#""unitName": "µg""#));
-    assert!(food.source_data.contains(r#""amount": 3.0"#));
-    assert!(food.source_data.contains(r#""name": "tablespoon""#));
-    assert!(food.source_data.contains(r#""abbreviation": "tbsp""#));
-    assert!(food.source_data.contains(r#""gramWeight": 33.9"#));
-    assert!(
-        food.source_data
-            .contains(r#""publicationDate": "4/1/2019""#)
+    let parsed: ParsedFoodData = serde_json::from_str(&food.parsed_data)?;
+    assert_eq!(parsed.nutrition, None);
+    assert_eq!(
+        parsed.serving_sizes,
+        vec![ServingSize {
+            name: ServingName::new("2 tablespoon")?,
+            quantity: MeasuredQuantity::parse("33.9 g")?,
+        }]
+    );
+
+    let tomatoes = food_row(&database, "usda", "321360").await?;
+    let tomato_parsed: ParsedFoodData = serde_json::from_str(&tomatoes.parsed_data)?;
+    assert_eq!(tomato_parsed.nutrition, None);
+    assert_eq!(
+        tomato_parsed.serving_sizes,
+        vec![ServingSize {
+            name: ServingName::new("5 tomatoes")?,
+            quantity: MeasuredQuantity::parse("49.7 g")?,
+        }]
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn imports_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn StdError>> {
+async fn imports_branded_food_and_normalizes_label_nutrients() -> Result<(), Box<dyn StdError>> {
     let (directory, database) = open_database().await?;
     let path = write_input(directory.path(), "branded.json", BRANDED_JSON)?;
 
@@ -81,12 +94,22 @@ async fn imports_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn St
     assert_eq!(food.description, "GRANOLA, CINNAMON, RAISIN");
     assert_eq!(food.category.as_deref(), Some("Cereal"));
     assert!(database.list_tags().await?.is_empty());
-    assert!(food.source_data.contains(r#""gtinUpc": "001633636543505""#));
-    assert!(
-        food.source_data
-            .contains(r#""publicationDate": "11/13/2020""#)
+    let parsed: ParsedFoodData = serde_json::from_str(&food.parsed_data)?;
+    let nutrition = parsed
+        .nutrition
+        .ok_or_else(|| io::Error::other("branded food lost its nutrition profile"))?;
+    assert_eq!(nutrition.per, NutritionBasis::Per100Grams);
+    assert_eq!(
+        nutrition.energy,
+        Some(Energy::parse("428.57142857142857142857142857 kcal")?)
     );
-    assert!(food.source_data.contains(r#""labelNutrients""#));
+    assert_eq!(
+        parsed.serving_sizes,
+        vec![ServingSize {
+            name: ServingName::new("0.25 cup")?,
+            quantity: MeasuredQuantity::parse("28 g")?,
+        }]
+    );
     Ok(())
 }
 
@@ -99,7 +122,8 @@ async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<d
 
     query(
         "UPDATE crumbs_foods
-         SET description = 'stale', category = NULL, source_data = '{\"stale\":true}'
+         SET description = 'stale', category = NULL,
+             parsed_data = '{\"nutrition\":null,\"serving_sizes\":[]}'
          WHERE source = 'usda' AND source_food_id = '321358'",
     )
     .execute(&database.pool)
@@ -116,7 +140,14 @@ async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<d
         food.category.as_deref(),
         Some("Legumes and Legume Products")
     );
-    assert!(food.source_data.contains(r#""unitName": "µg""#));
+    let parsed: ParsedFoodData = serde_json::from_str(&food.parsed_data)?;
+    assert_eq!(
+        parsed.serving_sizes,
+        vec![ServingSize {
+            name: ServingName::new("2 tablespoon")?,
+            quantity: MeasuredQuantity::parse("33.9 g")?,
+        }]
+    );
     Ok(())
 }
 
@@ -130,8 +161,9 @@ async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>
         .await?;
     let other_food_id: RowId = query_scalar(
         "INSERT INTO crumbs_foods (
-            source, source_food_id, food_type, description, category, source_data, created_at
-         ) VALUES ('other', '321358', 'Foundation', 'Other source food', NULL, '{}', 0)
+            source, source_food_id, food_type, description, category, parsed_data, created_at
+         ) VALUES ('other', '321358', 'Foundation', 'Other source food', NULL,
+            '{\"nutrition\":null,\"serving_sizes\":[]}', 0)
          RETURNING id",
     )
     .fetch_one(&database.pool)
@@ -146,7 +178,10 @@ async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>
     let other = food_row(&database, "other", "321358").await?;
     assert_eq!(other.source, "other");
     assert_eq!(other.description, "Other source food");
-    assert_eq!(other.source_data, "{}");
+    assert_eq!(
+        other.parsed_data,
+        r#"{"nutrition":null,"serving_sizes":[]}"#
+    );
     let tagged_foods: Vec<RowId> = query_scalar(
         "SELECT ft.food_id FROM crumbs_food_tags ft
          JOIN crumbs_tags t ON t.id = ft.tag_id
@@ -382,7 +417,7 @@ async fn missing_input_reports_path_and_zero_committed() -> Result<(), Box<dyn S
 }
 
 #[tokio::test]
-async fn imports_into_generic_food_writer_and_preserves_raw_json() -> Result<(), Box<dyn StdError>>
+async fn imports_into_generic_food_writer_and_records_parsed_data() -> Result<(), Box<dyn StdError>>
 {
     let directory = tempfile::tempdir()?;
     let first_record = r#"{"fdcId":7301, "description":"Alternative food", "dataType":"Foundation", "foodCategory":{"description":"Shelf Stable"}, "details":{"measurement":1.00}}"#;
@@ -402,7 +437,7 @@ async fn imports_into_generic_food_writer_and_preserves_raw_json() -> Result<(),
     assert_eq!(first_food.food_type, "Foundation");
     assert_eq!(first_food.description, "Alternative food");
     assert_eq!(first_food.category.as_deref(), Some("Shelf Stable"));
-    assert_eq!(first_food.source_data, first_record);
+    assert_eq!(first_food.parsed_data, ParsedFoodData::default());
 
     let second_record = r#"{"fdcId":7301, "description":"Updated alternative food", "dataType":"Foundation", "foodCategory":{"description":"Shelf Stable"}, "details":{"measurement":2.00}}"#;
     let second_input = format!(r#"{{"FoundationFoods":[{second_record}]}}"#);
@@ -417,7 +452,7 @@ async fn imports_into_generic_food_writer_and_preserves_raw_json() -> Result<(),
         .ok_or_else(|| io::Error::other("recording store lost the food"))?;
     assert_eq!(updated_food.id, first_food.id);
     assert_eq!(updated_food.description, "Updated alternative food");
-    assert_eq!(updated_food.source_data, second_record);
+    assert_eq!(updated_food.parsed_data, ParsedFoodData::default());
     assert_eq!(store.snapshot()?.len(), 1);
     Ok(())
 }
@@ -537,7 +572,7 @@ async fn food_count(database: &Database) -> Result<FoodCount, sqlx::Error> {
 
 type SourceText = String;
 type FoodTypeText = String;
-type SourceDataText = String;
+type ParsedDataText = String;
 type RowId = i64;
 type FoodCount = i64;
 type WriteCount = usize;
@@ -549,7 +584,7 @@ struct FoodRow {
     food_type: FoodTypeText,
     description: FoodDescription,
     category: Option<FoodCategory>,
-    source_data: SourceDataText,
+    parsed_data: ParsedDataText,
 }
 
 async fn food_row(
@@ -558,7 +593,7 @@ async fn food_row(
     source_food_id: &str,
 ) -> Result<FoodRow, sqlx::Error> {
     sqlx::query_as(
-        "SELECT id, source, food_type, description, category, source_data
+        "SELECT id, source, food_type, description, category, parsed_data
          FROM crumbs_foods
          WHERE source = ? AND source_food_id = ?",
     )
@@ -589,7 +624,7 @@ struct RecordedFood {
     food_type: FoodTypeText,
     description: FoodDescription,
     category: Option<FoodCategory>,
-    source_data: SourceDataText,
+    parsed_data: ParsedFoodData,
 }
 
 impl RecordingFoodWriter {
@@ -644,7 +679,7 @@ impl FoodWriter for RecordingFoodWriter {
             food_type: food.food_type.to_string(),
             description: food.description.clone(),
             category: food.category.clone(),
-            source_data: food.source_data.get().to_owned(),
+            parsed_data: food.parsed_data.clone(),
         };
 
         state.foods.insert(key, recorded_food);

@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use sqlx::{SqlitePool, query, query_scalar};
 
-use crate::{Database, DatabaseConfig, TagName};
+use crate::{
+    Database, DatabaseConfig, Energy, Mass, MassUnit, MeasuredMass, MeasuredQuantity,
+    NutritionBasis, ParsedFoodData, TagName,
+};
 
 const RELEASE_JSON_ENV: &str = "USDA_FOUNDATION_JSON";
 const ENV_HELP: &str = "USDA_FOUNDATION_JSON must point at the official 2026-10-29 Foundation JSON";
@@ -17,6 +20,15 @@ const PINNED_RELEASE: ReleaseDate = "2026-10-29";
 const FOUNDATION_FOOD_COUNT: FoodCount = 424;
 const EXPECTED_SOURCE: SourceRef<'_> = "usda";
 const EXPECTED_FOOD_TYPE: FoodTypeRef<'_> = "Foundation";
+/// USDA nutrient identifiers, from the Foundation archive, used to verify the
+/// stored model against the reference records.
+const ENERGY_ATWATER_SPECIFIC: NutrientId = 2048;
+const ENERGY_ATWATER_GENERAL: NutrientId = 2047;
+const ENERGY_KCAL: NutrientId = 1008;
+const ENERGY_KJ: NutrientId = 1062;
+const PROTEIN: NutrientId = 1003;
+const CARBOHYDRATE_BY_DIFFERENCE: NutrientId = 1005;
+const TOTAL_LIPID: NutrientId = 1004;
 
 type FoodId = i64;
 type ReleaseDate = &'static str;
@@ -26,13 +38,14 @@ type FoodTypeRef<'a> = &'a str;
 type FtsQuery<'a> = &'a str;
 type FtsPhrase = String;
 type MigrationCount = i64;
+type NutrientId = u64;
 type Source = String;
 type SourceFoodId = String;
 type FoodType = String;
 type FoodDescription = String;
 type FoodCategory = String;
 type FoodTags = String;
-type SourceData = String;
+type ParsedData = String;
 type ReferenceFoods = BTreeMap<SourceFoodId, Value>;
 type TestResult = Result<(), Box<dyn StdError>>;
 
@@ -46,7 +59,7 @@ struct StoredFood {
     description: FoodDescription,
     category: Option<FoodCategory>,
     tags: FoodTags,
-    source_data: SourceData,
+    parsed_data: ParsedData,
 }
 
 #[tokio::test]
@@ -68,7 +81,7 @@ async fn imports_full_october_2026_foundation_release_idempotently() -> TestResu
         "first import count"
     );
     let mut first = read_stored(&database).await?;
-    verify_reference(&first, &reference)?;
+    verify_parsed_against_reference(&first, &reference)?;
     let reviewed_tag = TagName::new("Reviewed")?;
     let (reviewed_food_id, reviewed_food_local_id) = match first.first_mut() {
         Some(food) => {
@@ -159,7 +172,7 @@ fn load_reference(path: &Path) -> Result<ReferenceFoods, Box<dyn StdError>> {
 async fn read_stored(database: &Database) -> Result<Vec<StoredFood>, sqlx::Error> {
     sqlx::query_as::<_, StoredFood>(
         "SELECT f.id, f.source, f.source_food_id, f.food_type, f.description, f.category,
-                s.tags AS tags, f.source_data
+                s.tags AS tags, f.parsed_data
          FROM crumbs_foods AS f
          JOIN crumbs_foods_search_content AS s ON s.id = f.id
          ORDER BY f.id",
@@ -168,7 +181,18 @@ async fn read_stored(database: &Database) -> Result<Vec<StoredFood>, sqlx::Error
     .await
 }
 
-fn verify_reference(stored: &[StoredFood], reference: &ReferenceFoods) -> TestResult {
+/// Verifies the stored parsed data against the reference archive records.
+///
+/// Every stored `parsed_data` must deserialize into the shared model, and the
+/// typed amounts must match the reference's selected values: energy follows
+/// the 2048, 2047, 1008, 1062 priority, protein keeps nutrient 1003,
+/// carbohydrate keeps nutrient 1005 including its negative by-difference
+/// values, and every reference portion with a positive gram weight becomes
+/// one serving with that weight.
+fn verify_parsed_against_reference(
+    stored: &[StoredFood],
+    reference: &ReferenceFoods,
+) -> TestResult {
     assert_eq!(stored.len(), FOUNDATION_FOOD_COUNT, "row count");
     for food in stored {
         let source_food_id = food.source_food_id.as_str();
@@ -199,13 +223,146 @@ fn verify_reference(stored: &[StoredFood], reference: &ReferenceFoods) -> TestRe
             "category {source_food_id}"
         );
         assert!(food.tags.is_empty(), "tags {source_food_id}");
-        let stored_value: Value = serde_json::from_str(&food.source_data).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid source_data {source_food_id}: {error}"),
-            )
+
+        let parsed: ParsedFoodData = serde_json::from_str(&food.parsed_data).map_err(|error| {
+            invalid_data(format!("invalid parsed_data {source_food_id}: {error}"))
         })?;
-        assert!(stored_value == *expected, "source_data {source_food_id}");
+        let profile = match parsed.nutrition.as_ref() {
+            Some(profile) => profile,
+            None => {
+                assert!(
+                    reference_energy(expected, source_food_id)?.is_none()
+                        && reference_mass(expected, PROTEIN)?.is_none()
+                        && reference_mass(expected, CARBOHYDRATE_BY_DIFFERENCE)?.is_none()
+                        && reference_mass(expected, TOTAL_LIPID)?.is_none(),
+                    "profile is absent for {source_food_id} but the reference reports values"
+                );
+                continue;
+            }
+        };
+        assert_eq!(
+            profile.per,
+            NutritionBasis::Per100Grams,
+            "basis {source_food_id}"
+        );
+        assert_eq!(
+            profile.energy,
+            reference_energy(expected, source_food_id)?,
+            "energy {source_food_id}"
+        );
+        assert_eq!(
+            profile.protein,
+            reference_mass(expected, PROTEIN)?,
+            "protein {source_food_id}"
+        );
+        assert_eq!(
+            profile.carbohydrates.including_fibre,
+            reference_mass(expected, CARBOHYDRATE_BY_DIFFERENCE)?,
+            "carbohydrate {source_food_id}"
+        );
+        verify_servings(&parsed, expected, source_food_id)?;
+    }
+    Ok(())
+}
+
+/// Selects the reference energy following the project priority order.
+fn reference_energy(
+    food: &Value,
+    source_food_id: &str,
+) -> Result<Option<Energy>, Box<dyn StdError>> {
+    for nutrient_id in [
+        ENERGY_ATWATER_SPECIFIC,
+        ENERGY_ATWATER_GENERAL,
+        ENERGY_KCAL,
+        ENERGY_KJ,
+    ] {
+        if let Some((amount, unit)) = reference_nutrient(food, nutrient_id) {
+            let amount = crate::measure::decimal_from_json_number(&amount)
+                .map_err(|error| invalid_data(format!("energy {source_food_id}: {error}")))?;
+            let energy = Energy::from_parts(&unit, amount, None)
+                .map_err(|error| invalid_data(format!("energy {source_food_id}: {error}")))?;
+            return Ok(Some(energy));
+        }
+    }
+    Ok(None)
+}
+
+/// Returns the reference amount of a mass nutrient, when the food reports it.
+fn reference_mass(
+    food: &Value,
+    nutrient_id: NutrientId,
+) -> Result<Option<Mass>, Box<dyn StdError>> {
+    let Some((amount, unit)) = reference_nutrient(food, nutrient_id) else {
+        return Ok(None);
+    };
+    let amount = crate::measure::decimal_from_json_number(&amount)
+        .map_err(|error| invalid_data(format!("nutrient {nutrient_id}: {error}")))?;
+    let mass = Mass::from_parts(&unit, amount, None)
+        .map_err(|error| invalid_data(format!("nutrient {nutrient_id}: {error}")))?;
+    Ok(Some(mass))
+}
+
+/// Returns a nutrient entry's exact amount and unit, when it reports one.
+fn reference_nutrient(
+    food: &Value,
+    nutrient_id: NutrientId,
+) -> Option<(serde_json::Number, String)> {
+    let entry = food
+        .get("foodNutrients")?
+        .as_array()?
+        .iter()
+        .find(|entry| {
+            entry
+                .get("nutrient")
+                .and_then(|nutrient| nutrient.get("id"))
+                .and_then(Value::as_u64)
+                .is_some_and(|id| id == nutrient_id)
+        })?;
+    let amount = entry.get("amount")?.as_number()?.clone();
+    let unit = entry
+        .get("nutrient")
+        .and_then(|nutrient| nutrient.get("unitName"))
+        .and_then(Value::as_str)?
+        .to_owned();
+    Some((amount, unit))
+}
+
+/// Verifies that every reference portion with a positive gram weight became
+/// one serving carrying exactly that weight.
+fn verify_servings(parsed: &ParsedFoodData, expected: &Value, source_food_id: &str) -> TestResult {
+    let portions = match expected.get("foodPortions") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(portions)) => portions.clone(),
+        Some(other) => {
+            return Err(invalid_data(format!(
+                "bad foodPortions for {source_food_id}: {other:?}"
+            )));
+        }
+    };
+    let mut expected_weights = Vec::new();
+    for portion in &portions {
+        let weight = match portion.get("gramWeight").and_then(Value::as_number) {
+            Some(weight) => crate::measure::decimal_from_json_number(weight)
+                .map_err(|error| invalid_data(format!("gramWeight {source_food_id}: {error}")))?,
+            None => continue,
+        };
+        if weight <= rust_decimal::Decimal::ZERO {
+            continue;
+        }
+        expected_weights.push(weight);
+    }
+    assert_eq!(
+        parsed.serving_sizes.len(),
+        expected_weights.len(),
+        "serving count {source_food_id}"
+    );
+    for (serving, weight) in parsed.serving_sizes.iter().zip(expected_weights) {
+        let quantity = MeasuredMass::new(MassUnit::Gram, weight)?;
+        assert_eq!(
+            serving.quantity,
+            MeasuredQuantity::Mass(quantity),
+            "serving weight {source_food_id}"
+        );
     }
     Ok(())
 }
