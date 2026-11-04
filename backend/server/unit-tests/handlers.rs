@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::error::Error;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::body::to_bytes;
 use axum::extract::{Query, State};
 use axum::http::{StatusCode, Uri};
@@ -9,6 +10,17 @@ use crumbs_database::{Database, DatabaseConfig, Food, FoodWriter, SearchLimit, S
 use serde_json::{Value, json};
 
 use super::*;
+
+#[tokio::test]
+async fn root_handler_serializes_greeting() -> Result<(), serde_json::Error> {
+    let Json(greeting) = hello().await;
+
+    assert_eq!(
+        serde_json::to_value(greeting)?,
+        serde_json::json!({ "greeting": "Hello, world!" })
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn search_handler_returns_food_nutrition_and_reports_invalid_fts_syntax()
@@ -39,7 +51,7 @@ async fn search_handler_returns_food_nutrition_and_reports_invalid_fts_syntax()
         })
         .await?;
 
-    let response = handler(
+    let response = search_foods(
         State(Arc::clone(&database)),
         Ok(Query(SearchRequest {
             query: SearchQuery::new("hummus")?,
@@ -62,7 +74,7 @@ async fn search_handler_returns_food_nutrition_and_reports_invalid_fts_syntax()
         json!("30 g")
     );
 
-    let response = handler(
+    let response = search_foods(
         State(Arc::clone(&database)),
         Ok(Query(SearchRequest {
             query: SearchQuery::new("(milk OR cheese")?,
@@ -81,7 +93,7 @@ async fn search_handler_returns_food_nutrition_and_reports_invalid_fts_syntax()
     );
 
     let uri: Uri = "/foods/search?query=".parse()?;
-    let response = handler(
+    let response = search_foods(
         State(Arc::clone(&database)),
         Query::<SearchRequest>::try_from_uri(&uri),
     )

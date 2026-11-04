@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use super::{SEARCH_TOOL_NAME, config};
+use super::{config, search::NAME};
 
 struct TestApplication {
     _directory: TempDir,
@@ -32,7 +32,7 @@ impl TestApplication {
             })
             .await?,
         );
-        let router = crate::application(Arc::clone(&database), config());
+        let router = crate::routes::application(Arc::clone(&database), config());
         Ok(Self {
             _directory: directory,
             database,
@@ -195,7 +195,7 @@ async fn mcp_call_router(
 async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result<(), Box<dyn Error>>
 {
     let reader = Arc::new(RecordingFoodReader::default());
-    let router = crate::application(Arc::clone(&reader), config());
+    let router = crate::routes::application(Arc::clone(&reader), config());
 
     let http = request_router(&router, http_request("/foods/search?query=beans&limit=1")?).await?;
     assert_eq!(http.status, StatusCode::OK, "{:?}", http.json);
@@ -217,13 +217,7 @@ async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result
     );
 
     mcp_initialize_router(&router).await?;
-    let mcp = mcp_call_router(
-        &router,
-        2,
-        SEARCH_TOOL_NAME,
-        json!({"query":"lentils", "limit":1001}),
-    )
-    .await?;
+    let mcp = mcp_call_router(&router, 2, NAME, json!({"query":"lentils", "limit":1001})).await?;
     assert_eq!(mcp.status, StatusCode::OK, "{:?}", mcp.json);
     assert_eq!(mcp.json["result"]["isError"], false);
     let mcp_result = &mcp.json["result"]["structuredContent"];
@@ -251,8 +245,7 @@ async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result
         request_router(&router, http_request("/foods/search?query=invalid")?).await?;
     assert_eq!(http_invalid.status, StatusCode::BAD_REQUEST);
     assert_eq!(http_invalid.json["error"], "invalid FTS query from reader");
-    let mcp_invalid =
-        mcp_call_router(&router, 3, SEARCH_TOOL_NAME, json!({"query":"invalid"})).await?;
+    let mcp_invalid = mcp_call_router(&router, 3, NAME, json!({"query":"invalid"})).await?;
     assert_eq!(mcp_invalid.status, StatusCode::OK);
     assert_eq!(mcp_invalid.json["result"]["isError"], true);
     assert_eq!(
@@ -271,8 +264,7 @@ async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result
             .to_string()
             .contains("private storage detail")
     );
-    let mcp_storage =
-        mcp_call_router(&router, 4, SEARCH_TOOL_NAME, json!({"query":"storage"})).await?;
+    let mcp_storage = mcp_call_router(&router, 4, NAME, json!({"query":"storage"})).await?;
     assert_eq!(mcp_storage.status, StatusCode::OK);
     assert_eq!(mcp_storage.json["result"]["isError"], true);
     assert_eq!(
@@ -420,12 +412,12 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         .await?;
     assert_eq!(tools.status, StatusCode::OK, "{:?}", tools.json);
     let tool = tools.json["result"]["tools"][0].clone();
-    assert_eq!(tool["name"], SEARCH_TOOL_NAME);
+    assert_eq!(tool["name"], NAME);
     assert_eq!(tool["inputSchema"]["required"], json!(["query"]));
     assert_eq!(tool["inputSchema"]["properties"]["limit"]["default"], 20);
     assert_eq!(tool["annotations"]["readOnlyHint"], true);
 
-    let mcp = mcp_call(&app, 3, SEARCH_TOOL_NAME, json!({"query":"tags:vegan"})).await?;
+    let mcp = mcp_call(&app, 3, NAME, json!({"query":"tags:vegan"})).await?;
     assert_eq!(mcp.status, StatusCode::OK, "{:?}", mcp.json);
     assert_eq!(mcp.json["result"]["structuredContent"], http.json);
     assert_eq!(mcp.json["result"]["isError"], false);
@@ -468,12 +460,12 @@ async fn mcp_returns_search_errors_as_tool_errors_and_unknown_tool_as_protocol_e
     let app = TestApplication::new().await?;
     mcp_initialize(&app).await?;
     for query in ["", "   ", "("] {
-        let response = mcp_call(&app, 2, SEARCH_TOOL_NAME, json!({"query":query})).await?;
+        let response = mcp_call(&app, 2, NAME, json!({"query":query})).await?;
         assert_eq!(response.status, StatusCode::OK, "{:?}", response.json);
         assert_eq!(response.json["result"]["isError"], true);
         assert!(response.json["result"]["structuredContent"]["error"].is_string());
     }
-    let no_match = mcp_call(&app, 3, SEARCH_TOOL_NAME, json!({"query":"chicken"})).await?;
+    let no_match = mcp_call(&app, 3, NAME, json!({"query":"chicken"})).await?;
     assert_eq!(no_match.status, StatusCode::OK);
     assert_eq!(
         no_match.json["result"]["structuredContent"],
@@ -517,7 +509,7 @@ async fn database_failures_are_hidden_from_http_and_mcp_callers() -> Result<(), 
         .await?;
     assert_eq!(http.status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(http.json["error"], "food search failed");
-    let mcp = mcp_call(&app, 2, SEARCH_TOOL_NAME, json!({"query":"chicken"})).await?;
+    let mcp = mcp_call(&app, 2, NAME, json!({"query":"chicken"})).await?;
     assert_eq!(mcp.json["result"]["isError"], true);
     assert_eq!(
         mcp.json["result"]["structuredContent"]["error"],
@@ -549,7 +541,7 @@ async fn limits_default_to_twenty_and_cap_at_one_thousand() -> Result<(), Box<dy
     assert_eq!(capped.status, StatusCode::OK);
     assert_eq!(capped.json["foods"].as_array().map(Vec::len), Some(1_000));
     mcp_initialize(&app).await?;
-    let mcp_default = mcp_call(&app, 2, SEARCH_TOOL_NAME, json!({"query":"chicken"})).await?;
+    let mcp_default = mcp_call(&app, 2, NAME, json!({"query":"chicken"})).await?;
     assert_eq!(mcp_default.status, StatusCode::OK);
     assert_eq!(
         mcp_default.json["result"]["structuredContent"],
@@ -561,13 +553,7 @@ async fn limits_default_to_twenty_and_cap_at_one_thousand() -> Result<(), Box<dy
             .map(Vec::len),
         Some(20)
     );
-    let mcp_lower = mcp_call(
-        &app,
-        3,
-        SEARCH_TOOL_NAME,
-        json!({"query":"chicken", "limit":1}),
-    )
-    .await?;
+    let mcp_lower = mcp_call(&app, 3, NAME, json!({"query":"chicken", "limit":1})).await?;
     assert_eq!(mcp_lower.status, StatusCode::OK);
     assert_eq!(mcp_lower.json["result"]["structuredContent"], lower.json);
     assert_eq!(
@@ -576,13 +562,7 @@ async fn limits_default_to_twenty_and_cap_at_one_thousand() -> Result<(), Box<dy
             .map(Vec::len),
         Some(20)
     );
-    let mcp = mcp_call(
-        &app,
-        4,
-        SEARCH_TOOL_NAME,
-        json!({"query":"chicken", "limit":1001}),
-    )
-    .await?;
+    let mcp = mcp_call(&app, 4, NAME, json!({"query":"chicken", "limit":1001})).await?;
     assert_eq!(mcp.status, StatusCode::OK);
     assert_eq!(
         mcp.json["result"]["structuredContent"]["foods"]
