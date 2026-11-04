@@ -341,8 +341,7 @@ impl FromStr for MeasuredQuantity {
         let (number, unit) = split_quantity(value)?;
         match unit {
             "ml" => Ok(Self::Volume(Millilitres::parse_with_unit(number, unit)?)),
-            "g" | "mg" | "µg" => Ok(Self::Mass(Mass::parse_with_unit(number, unit)?)),
-            _ => Err(QuantityError::Unit(unit.to_owned())),
+            _ => Ok(Self::Mass(Mass::parse_with_unit(number, unit)?)),
         }
     }
 }

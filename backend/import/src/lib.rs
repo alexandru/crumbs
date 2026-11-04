@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinError;
 
 use self::usda::{ParseError, RecordPosition, StreamItem};
-use crumbs_database::{Food, FoodWriter, Source, SourceFoodId};
+use crumbs_database::{FoodWriter, Source, SourceFoodId};
 
 pub use self::usda::RecordPosition as ImportRecordPosition;
 
@@ -158,9 +158,13 @@ where
     F: FnMut(&ImportDiagnostic) -> io::Result<()>,
 {
     let path = path.as_ref();
-    let file = tokio::fs::File::open(path)
-        .await
-        .map_err(|source| ImportError::open(path, source))?;
+    let file = tokio::fs::File::open(path).await.map_err(|source| {
+        ImportError::new(
+            path,
+            ImportReport::default(),
+            ImportFailure::Open { source },
+        )
+    })?;
     let file = file.into_std().await;
     let (sender, receiver) = mpsc::channel(PRODUCER_QUEUE_CAPACITY);
     let producer = tokio::task::spawn_blocking(move || {
@@ -174,8 +178,16 @@ where
 
     match producer_result {
         Ok(Ok(())) => Ok(report),
-        Ok(Err(source)) => Err(ImportError::stream(path, report, source)),
-        Err(source) => Err(ImportError::worker(path, report, source)),
+        Ok(Err(source)) => Err(ImportError::new(
+            path,
+            report,
+            ImportFailure::Stream { source },
+        )),
+        Err(source) => Err(ImportError::new(
+            path,
+            report,
+            ImportFailure::Worker { source },
+        )),
     }
 }
 
@@ -185,53 +197,11 @@ impl ImportError {
         self.report
     }
 
-    fn open(path: &Path, source: io::Error) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            report: ImportReport::default(),
-            failure: Box::new(ImportFailure::Open { source }),
-        }
-    }
-
-    fn stream(path: &Path, report: ImportReport, source: ParseError) -> Self {
+    fn new(path: &Path, report: ImportReport, failure: ImportFailure) -> Self {
         Self {
             path: path.to_path_buf(),
             report,
-            failure: Box::new(ImportFailure::Stream { source }),
-        }
-    }
-
-    fn worker(path: &Path, report: ImportReport, source: JoinError) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            report,
-            failure: Box::new(ImportFailure::Worker { source }),
-        }
-    }
-
-    fn write<E: std::error::Error + Send + Sync + 'static>(
-        path: &Path,
-        report: ImportReport,
-        food: &Food,
-        position: RecordPosition,
-        source: E,
-    ) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            report,
-            failure: Box::new(ImportFailure::Write {
-                fdc_id: food.source_food_id.clone(),
-                position,
-                source: Box::new(source),
-            }),
-        }
-    }
-
-    fn diagnostics(path: &Path, report: ImportReport, source: io::Error) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            report,
-            failure: Box::new(ImportFailure::Diagnostics { source }),
+            failure: Box::new(failure),
         }
     }
 }
@@ -285,10 +255,17 @@ where
                 let position = prepared.position;
                 let sanitizations = std::mem::take(&mut prepared.sanitizations);
                 let food = prepared.into_food();
-                store
-                    .upsert_food(&food)
-                    .await
-                    .map_err(|source| ImportError::write(path, report, &food, position, source))?;
+                store.upsert_food(&food).await.map_err(|source| {
+                    ImportError::new(
+                        path,
+                        report,
+                        ImportFailure::Write {
+                            fdc_id: food.source_food_id.clone(),
+                            position,
+                            source: Box::new(source),
+                        },
+                    )
+                })?;
                 report.committed.increment();
                 if !sanitizations.is_empty() {
                     report.sanitized.increment();
@@ -302,8 +279,9 @@ where
                         field: Some(sanitization.field),
                         reason: sanitization.reason,
                     };
-                    on_diagnostic(&diagnostic)
-                        .map_err(|source| ImportError::diagnostics(path, report, source))?;
+                    on_diagnostic(&diagnostic).map_err(|source| {
+                        ImportError::new(path, report, ImportFailure::Diagnostics { source })
+                    })?;
                 }
             }
             Err(rejected) => {
@@ -322,8 +300,9 @@ where
                     field,
                     reason,
                 };
-                on_diagnostic(&diagnostic)
-                    .map_err(|source| ImportError::diagnostics(path, report, source))?;
+                on_diagnostic(&diagnostic).map_err(|source| {
+                    ImportError::new(path, report, ImportFailure::Diagnostics { source })
+                })?;
             }
         }
     }

@@ -480,10 +480,13 @@ fn parse_mass_amount(
 }
 
 fn normalize_energy_unit(unit: &str) -> Option<&'static str> {
-    match unit.trim().to_ascii_lowercase().as_str() {
-        "kcal" => Some("kcal"),
-        "kj" => Some("kJ"),
-        _ => None,
+    let unit = unit.trim();
+    if unit.eq_ignore_ascii_case("kcal") {
+        Some("kcal")
+    } else if unit.eq_ignore_ascii_case("kJ") {
+        Some("kJ")
+    } else {
+        None
     }
 }
 
