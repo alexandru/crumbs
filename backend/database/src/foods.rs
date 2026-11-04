@@ -5,6 +5,7 @@ use std::error::Error as StdError;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 
+use serde::Serialize;
 use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
 
@@ -37,7 +38,7 @@ pub type FoodDescription = String;
 pub type FoodCategory = String;
 
 /// A complete food entry supplied by any source.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Food {
     pub source: Source,
     pub source_food_id: SourceFoodId,
@@ -49,7 +50,7 @@ pub struct Food {
 }
 
 /// Local food identity, independent of source identifiers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct FoodId(pub i64);
 
 /// Food metadata returned by source-identity lookup, without loading the source document.
