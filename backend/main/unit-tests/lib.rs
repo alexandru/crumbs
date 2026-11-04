@@ -1,8 +1,7 @@
 use std::path::Path;
 
-use super::{Cli, Command};
+use super::{Cli, Command, DbArgs, DbCommand};
 use clap::Parser;
-use crumbs_database::{DbArgs, DbCommand};
 use crumbs_server::{ServerArgs, ServerCommand};
 
 #[test]

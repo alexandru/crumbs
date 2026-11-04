@@ -16,20 +16,17 @@ use sqlx::sqlite::{
 
 use crate::clock::Clock;
 
-mod cli;
 mod clock;
 mod config;
 mod foods;
 mod fts;
-mod import;
+pub mod nutrition;
 
-pub use cli::{DbArgs, DbCommand};
 pub use config::{DatabaseConfig, DatabasePath};
 pub use foods::{
     Food, FoodCategory, FoodDescription, FoodId, FoodSummary, FoodType, FoodWriter, InvalidTagName,
     Source, SourceFoodId, Tag, TagId, TagName,
 };
-pub use import::{ImportError, ImportReport, ImportedFoods, import_usda};
 
 /// Handle to the application database.
 ///

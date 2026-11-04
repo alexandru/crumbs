@@ -1,8 +1,8 @@
 //! Streaming parser for the official USDA FoodData Central JSON archives.
 //!
 //! The archives wrap a single array under one root key. This module validates
-//! the root and each food header while forwarding every record as a
-//! [`PreparedFood`] without collecting the array or a `serde_json::Value`.
+//! the root and each food record while forwarding one [`PreparedFood`] at a
+//! time without collecting the array.
 
 use std::fmt;
 use std::io::Read;
@@ -15,11 +15,15 @@ use serde_json::Deserializer;
 use serde_json::value::RawValue;
 use tokio::sync::mpsc;
 
-use crate::{Food, Source};
+#[path = "usda_nutrition.rs"]
+mod usda_nutrition;
+
+use crumbs_database::nutrition::FoodData;
+use crumbs_database::{Food, Source};
 
 /// A validated food record ready for persistence.
 ///
-/// `raw` holds the original JSON object exactly as it appeared in the archive.
+/// Holds source-independent imported food details.
 #[derive(Debug)]
 pub(crate) struct PreparedFood {
     /// Positive FoodData Central identifier, converted to decimal text.
@@ -31,8 +35,8 @@ pub(crate) struct PreparedFood {
     /// Optional category text from `foodCategory.description`,
     /// `wweiaFoodCategory.wweiaFoodCategoryDescription`, or `brandedFoodCategory`.
     pub(crate) category: Option<FoodCategory>,
-    /// Original record object, including every detail field and number spelling.
-    pub(crate) raw: Box<RawValue>,
+    /// Typed nutrition and serving details.
+    pub(crate) parsed_data: FoodData,
     /// One-based position of the record within the root array.
     pub(crate) position: RecordPosition,
 }
@@ -45,7 +49,7 @@ impl PreparedFood {
             food_type: self.kind.as_str().into(),
             description: self.description.0,
             category: self.category.map(|category| category.0),
-            source_data: self.raw,
+            parsed_data: self.parsed_data,
         }
     }
 }
@@ -239,14 +243,17 @@ pub(crate) enum RecordError {
         /// Kind declared by the record.
         data_type: FoodKind,
     },
+    /// Supported nutrient or serving data is malformed.
+    #[error("invalid food nutrition or serving data: {0}")]
+    Nutrition(#[source] usda_nutrition::NutritionError),
 }
 
 /// Streams food records from `reader` into `sender`.
 ///
 /// The input must be a single top-level object with exactly one recognized
 /// array: `FoundationFoods`, `SRLegacyFoods`, `SurveyFoods`, or `BrandedFoods`.
-/// The parser validates each header, forwards the original record, and never
-/// collects the array.
+/// The parser validates each record, maps supported nutrition and serving
+/// details, and never collects the array.
 ///
 /// The function uses [`mpsc::Sender::blocking_send`], so it must run on a
 /// blocking thread, such as one created by [`tokio::task::spawn_blocking`],
@@ -421,7 +428,7 @@ impl<'de> Visitor<'de> for FoodListVisitor<'_> {
                 }
             };
 
-            let food = match prepare_food(raw, root_kind, position) {
+            let food = match prepare_food(&raw, root_kind, position) {
                 Ok(food) => food,
                 Err(source) => {
                     *state = StreamState::Failure(ParseError::Record { position, source });
@@ -459,7 +466,7 @@ fn food_kind_for_root(root: &str) -> Option<FoodKind> {
 }
 
 fn prepare_food(
-    raw: Box<RawValue>,
+    raw: &RawValue,
     root_kind: FoodKind,
     position: RecordPosition,
 ) -> Result<PreparedFood, RecordError> {
@@ -490,13 +497,15 @@ fn prepare_food(
             .or_else(|| survey_category(raw.get()))
             .map(FoodCategory),
     };
+    let parsed_data = usda_nutrition::parse_food_data(raw.get(), header.data_type)
+        .map_err(RecordError::Nutrition)?;
 
     Ok(PreparedFood {
         fdc_id,
         kind: header.data_type,
         description,
         category,
-        raw,
+        parsed_data,
         position,
     })
 }
@@ -587,5 +596,5 @@ impl<'de> Visitor<'de> for FoodCategoryVisitor {
 const USDA_SOURCE: Source = std::borrow::Cow::Borrowed("usda");
 
 #[cfg(test)]
-#[path = "../../unit-tests/import/usda.rs"]
+#[path = "../unit-tests/usda.rs"]
 mod tests;

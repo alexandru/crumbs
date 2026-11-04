@@ -1,19 +1,22 @@
 //! Command-line wiring for the `crumbs` executable.
 //!
 //! The clap hierarchy lives here so the executable entry point stays thin.
-//! Server-owned and database-owned argument types are composed into this
-//! hierarchy, keeping each subsystem's options close to its implementation.
+//! Server argument types are composed with the application-owned database
+//! commands in this hierarchy.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
 
 use ::config::ConfigError;
 use clap::{Parser, Subcommand};
-use crumbs_database::{Database, DbArgs, DbCommand, ImportError};
+use crumbs_database::Database;
+use crumbs_import::ImportError;
 use crumbs_server::{ServerArgs, ServerCommand};
 
+mod cli;
 mod config;
 
+pub use cli::{DbArgs, DbCommand};
 use config::AppConfig;
 
 /// Top-level command-line interface for the `crumbs` executable.
@@ -104,7 +107,7 @@ async fn run_server(config: AppConfig) -> Result<(), Error> {
 
 async fn run_import_usda(config: AppConfig, file: PathBuf) -> Result<(), Error> {
     let database = Database::open(config.database).await?;
-    let import_result = crumbs_database::import_usda(&database, &file).await;
+    let import_result = crumbs_import::import_usda(&database, &file).await;
     database.close().await;
     let report = import_result?;
 

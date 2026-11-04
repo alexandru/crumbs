@@ -3,7 +3,6 @@ use std::error::Error as StdError;
 use std::io;
 use std::time::{Duration, SystemTime};
 
-use serde_json::value::RawValue;
 use sqlx::{FromRow, query_scalar};
 
 use crate::clock::{Clock, UnixMillis};
@@ -367,7 +366,7 @@ fn make_food(
         food_type: Cow::Borrowed("Foundation"),
         description: description.to_owned(),
         category: None,
-        source_data: serde_json::from_str::<Box<RawValue>>("{}")?,
+        parsed_data: crate::nutrition::FoodData::default(),
     })
 }
 

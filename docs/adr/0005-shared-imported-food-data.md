@@ -12,6 +12,8 @@ Foods may have multiple serving definitions, each with a known measured mass or 
 
 Nutrition quantities use fixed-point decimal values and arithmetic throughout parsing, conversion, and JSON persistence, preserving decimal values without intermediate binary floating point.
 
+Reference and serving quantities must be positive; reported nutrient amounts must be nonnegative. A negative reported amount fails the import record rather than being clamped or treated as missing. This also applies to USDA's calculated negative carbohydrate-by-difference values, so a release containing them stops at the first such record while retaining earlier committed foods.
+
 Serialized quantities use unit-bearing strings, such as `"15 mg"` or `"0.55 µg"`. Deserialization parses these strings directly into concrete measurement types backed by fixed-point decimals; unsupported or incompatible units are rejected at the boundary. Nutrient amounts retain their source measurement units where supported.
 
 Reported nutrient amounts preserve source-supplied comparisons and approximations rather than treating them as unqualified numbers, using strings such as `"< 0.5 g"` and `"~ 15 mg"`. Parsing and serialization preserve selected source values without silent rounding. Any normalization that requires rounding needs an explicit precision and rounding policy.
