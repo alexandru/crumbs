@@ -187,13 +187,15 @@ type SourceText = String;
 type FoodTypeText = String;
 type ParsedFoodData = String;
 
-const SEARCH_SQL: &str = "SELECT f.id, f.source, f.source_food_id, f.food_type,
-                                  f.description, f.category, f.parsed_data
-                           FROM crumbs_foods_fts
-                           JOIN crumbs_foods AS f ON f.id = crumbs_foods_fts.rowid
-                           WHERE crumbs_foods_fts MATCH ?
-                           ORDER BY crumbs_foods_fts.rank ASC, f.id ASC
-                           LIMIT ?";
+const SEARCH_SQL: &str = "
+SELECT f.id, f.source, f.source_food_id, f.food_type,
+       f.description, f.category, f.parsed_data
+FROM crumbs_foods_fts
+JOIN crumbs_foods AS f ON f.id = crumbs_foods_fts.rowid
+WHERE crumbs_foods_fts MATCH ?
+ORDER BY crumbs_foods_fts.rank ASC, f.id ASC
+LIMIT ?
+";
 
 const FTS_ERROR_PROBE_QUERY: &str = "crumbsftsvalidation";
 
