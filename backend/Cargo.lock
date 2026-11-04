@@ -357,7 +357,6 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 name = "crumbs-database"
 version = "0.1.0"
 dependencies = [
- "clap",
  "futures-executor",
  "rust_decimal",
  "serde",
@@ -371,12 +370,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "crumbs-import"
+version = "0.1.0"
+dependencies = [
+ "crumbs-database",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "crumbs-main"
 version = "0.1.0"
 dependencies = [
  "clap",
  "config",
  "crumbs-database",
+ "crumbs-import",
  "crumbs-server",
  "http",
  "nix",

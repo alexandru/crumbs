@@ -8,9 +8,9 @@
 //! branded, and other USDA subsets coexist.
 //!
 //! Parsing runs on a blocking worker and hands one prepared record at a time to
-//! the asynchronous consumer. Each successfully persisted food commits in its
-//! own transaction. The FTS5 triggers run inside that same transaction, so a
-//! food write and its index update commit or roll back together.
+//! the asynchronous consumer. Each prepared food is sent to the configured
+//! [`FoodWriter`], and successful writes advance import progress. The database
+//! implementation commits each food and its FTS5 update in one transaction.
 
 mod usda;
 
@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinError;
 
 use self::usda::{ParseError, PreparedFood, RecordPosition};
-use crate::{Food, FoodWriter, SourceFoodId};
+use crumbs_database::{Food, FoodWriter, SourceFoodId};
 
 /// Number of foods committed by an import.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -183,7 +183,3 @@ async fn consume<S: FoodWriter + ?Sized>(
 }
 
 const PRODUCER_QUEUE_CAPACITY: usize = 1;
-
-#[cfg(test)]
-#[path = "../../unit-tests/import/mod.rs"]
-mod tests;

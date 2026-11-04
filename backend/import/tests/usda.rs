@@ -7,31 +7,33 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use sqlx::{FromRow, query, query_scalar};
+use sqlx::{FromRow, SqlitePool, query, query_scalar};
 
-use super::ImportError;
-use crate::nutrition::{FoodData, NutritionBasis, ServingSize};
-use crate::{
-    Database, DatabaseConfig, Food, FoodCategory, FoodDescription, FoodId, FoodWriter,
-    SourceFoodId, TagName, import_usda,
+use common::DatabaseFixture;
+use crumbs_database::nutrition::{FoodData, NutritionBasis, ServingSize};
+use crumbs_database::{
+    Database, Food, FoodCategory, FoodDescription, FoodId, FoodWriter, SourceFoodId, TagName,
 };
+use crumbs_import::{ImportError, import_usda};
 
-const FOUNDATION_JSON: &str = include_str!("../../test-fixtures/foundation.json");
-const BRANDED_JSON: &str = include_str!("../../test-fixtures/branded.json");
+mod common;
+
+const FOUNDATION_JSON: &str = include_str!("../test-fixtures/foundation.json");
+const BRANDED_JSON: &str = include_str!("../test-fixtures/branded.json");
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(5);
 const LATER_TRIGGER_ROWS: usize = 100;
 
 #[tokio::test]
 async fn persists_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
+    let fixture = DatabaseFixture::open().await?;
     let record = r#"{"fdcId":2705383,"description":"Milk, human","dataType":"Survey (FNDDS)","wweiaFoodCategory":{"wweiaFoodCategoryDescription":"Human milk","wweiaFoodCategoryCode":3298314}}"#;
     let input = format!(r#"{{"SurveyFoods":[{record}]}}"#);
-    let path = write_input(directory.path(), "survey.json", &input)?;
+    let path = write_input(fixture.directory.path(), "survey.json", &input)?;
 
-    let report = import_usda(&database, &path).await?;
+    let report = import_usda(&fixture.database, &path).await?;
 
     assert_eq!(report.committed().get(), 1);
-    let food = food_row(&database, "usda", "2705383").await?;
+    let food = food_row(&fixture.pool, "usda", "2705383").await?;
     assert_eq!(food.category.as_deref(), Some("Human milk"));
     assert_eq!(food.parsed_data()?, FoodData::default());
     Ok(())
@@ -39,14 +41,14 @@ async fn persists_survey_wweia_category() -> Result<(), Box<dyn StdError>> {
 
 #[tokio::test]
 async fn imports_foundation_foods_with_typed_data() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
-    let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
+    let fixture = DatabaseFixture::open().await?;
+    let path = write_input(fixture.directory.path(), "foundation.json", FOUNDATION_JSON)?;
 
-    let report = import_usda(&database, &path).await?;
+    let report = import_usda(&fixture.database, &path).await?;
 
     assert_eq!(report.committed().get(), 2);
-    assert_eq!(food_count(&database).await?, 2);
-    let food = food_row(&database, "usda", "321358").await?;
+    assert_eq!(food_count(&fixture.pool).await?, 2);
+    let food = food_row(&fixture.pool, "usda", "321358").await?;
     assert!(food.id > 0);
     assert_eq!(food.source, "usda");
     assert_eq!(food.food_type, "Foundation");
@@ -55,7 +57,7 @@ async fn imports_foundation_foods_with_typed_data() -> Result<(), Box<dyn StdErr
         food.category.as_deref(),
         Some("Legumes and Legume Products")
     );
-    assert!(database.list_tags().await?.is_empty());
+    assert!(fixture.database.list_tags().await?.is_empty());
     let parsed_data = food.parsed_data()?;
     assert_eq!(parsed_data.nutrition, None);
     assert_eq!(parsed_data.serving_sizes.len(), 1);
@@ -63,7 +65,7 @@ async fn imports_foundation_foods_with_typed_data() -> Result<(), Box<dyn StdErr
         serving_size_at(&parsed_data, 0)?.quantity.to_string(),
         "33.9 g"
     );
-    let food = food_row(&database, "usda", "321360").await?;
+    let food = food_row(&fixture.pool, "usda", "321360").await?;
     let parsed_data = food.parsed_data()?;
     assert_eq!(parsed_data.serving_sizes.len(), 1);
     assert_eq!(
@@ -75,18 +77,18 @@ async fn imports_foundation_foods_with_typed_data() -> Result<(), Box<dyn StdErr
 
 #[tokio::test]
 async fn imports_branded_food_with_typed_data() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
-    let path = write_input(directory.path(), "branded.json", BRANDED_JSON)?;
+    let fixture = DatabaseFixture::open().await?;
+    let path = write_input(fixture.directory.path(), "branded.json", BRANDED_JSON)?;
 
-    let report = import_usda(&database, &path).await?;
+    let report = import_usda(&fixture.database, &path).await?;
 
     assert_eq!(report.committed().get(), 1);
-    let food = food_row(&database, "usda", "1106281").await?;
+    let food = food_row(&fixture.pool, "usda", "1106281").await?;
     assert_eq!(food.source, "usda");
     assert_eq!(food.food_type, "Branded");
     assert_eq!(food.description, "GRANOLA, CINNAMON, RAISIN");
     assert_eq!(food.category.as_deref(), Some("Cereal"));
-    assert!(database.list_tags().await?.is_empty());
+    assert!(fixture.database.list_tags().await?.is_empty());
     let parsed_data = food.parsed_data()?;
     assert_eq!(parsed_data.serving_sizes.len(), 1);
     assert_eq!(
@@ -99,7 +101,7 @@ async fn imports_branded_food_with_typed_data() -> Result<(), Box<dyn StdError>>
 #[tokio::test]
 async fn imports_typed_nutrition_for_all_supported_usda_food_kinds() -> Result<(), Box<dyn StdError>>
 {
-    let (directory, database) = open_database().await?;
+    let fixture = DatabaseFixture::open().await?;
     let high_precision_protein = "7.1234567890123456789012345678";
     let foundation_energy = vec![
         nutrient(2048, "2048", "Atwater Specific Factors", "kcal", "91"),
@@ -189,11 +191,15 @@ async fn imports_typed_nutrition_for_all_supported_usda_food_kinds() -> Result<(
     for case in cases {
         let record = food_record(case.fdc_id, case.data_type, &case.nutrients, &case.extra);
         let input = food_document(case.root, &[record]);
-        let path = write_input(directory.path(), &format!("{}.json", case.fdc_id), &input)?;
-        let report = import_usda(&database, &path).await?;
+        let path = write_input(
+            fixture.directory.path(),
+            &format!("{}.json", case.fdc_id),
+            &input,
+        )?;
+        let report = import_usda(&fixture.database, &path).await?;
         assert_eq!(report.committed().get(), 1);
 
-        let row = food_row(&database, "usda", &case.fdc_id.to_string()).await?;
+        let row = food_row(&fixture.pool, "usda", &case.fdc_id.to_string()).await?;
         let parsed_data = row.parsed_data()?;
         let profile = parsed_data
             .nutrition
@@ -250,20 +256,20 @@ async fn imports_typed_nutrition_for_all_supported_usda_food_kinds() -> Result<(
 #[tokio::test]
 async fn nutrition_parse_error_on_second_record_reports_committed_progress()
 -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
+    let fixture = DatabaseFixture::open().await?;
     let first_nutrients = test_nutrients(&[], "3.25", None);
     let first = food_record(9501, "Foundation", &first_nutrients, "");
     let invalid_nutrient = nutrient(1003, "203", "Protein", "oz", "1");
     let second = food_record(9502, "Foundation", &[invalid_nutrient], "");
     let input = food_document("FoundationFoods", &[first, second]);
-    let path = write_input(directory.path(), "invalid-nutrition.json", &input)?;
+    let path = write_input(fixture.directory.path(), "invalid-nutrition.json", &input)?;
 
-    let error = require_import_error(&database, &path).await?;
+    let error = require_import_error(&fixture.database, &path).await?;
 
     assert!(error.to_string().contains("record 2"), "{error}");
     assert!(error.to_string().contains("committed 1 foods"), "{error}");
-    assert_eq!(food_count(&database).await?, 1);
-    let first_food = food_row(&database, "usda", "9501").await?;
+    assert_eq!(food_count(&fixture.pool).await?, 1);
+    let first_food = food_row(&fixture.pool, "usda", "9501").await?;
     assert_eq!(
         first_food
             .parsed_data()?
@@ -274,18 +280,19 @@ async fn nutrition_parse_error_on_second_record_reports_committed_progress()
             .as_deref(),
         Some("3.25 g")
     );
-    assert_row_absent(&database, "usda", "9502").await?;
+    assert_row_absent(&fixture.pool, "usda", "9502").await?;
     Ok(())
 }
 
 #[tokio::test]
 async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
-    let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
-    import_usda(&database, &path).await?;
-    let id_before = food_row(&database, "usda", "321358").await?.id;
+    let fixture = DatabaseFixture::open().await?;
+    let path = write_input(fixture.directory.path(), "foundation.json", FOUNDATION_JSON)?;
+    import_usda(&fixture.database, &path).await?;
+    let id_before = food_row(&fixture.pool, "usda", "321358").await?.id;
     let reviewed_tag = TagName::new("Nutrition reviewed")?;
-    database
+    fixture
+        .database
         .set_food_tags(FoodId(id_before), std::slice::from_ref(&reviewed_tag))
         .await?;
 
@@ -294,14 +301,14 @@ async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<d
          SET description = 'stale', category = NULL, parsed_data = '{\"nutrition\":null,\"serving_sizes\":[]}'
          WHERE source = 'usda' AND source_food_id = '321358'",
     )
-    .execute(&database.pool)
+    .execute(&fixture.pool)
     .await?;
 
-    let report = import_usda(&database, &path).await?;
+    let report = import_usda(&fixture.database, &path).await?;
 
     assert_eq!(report.committed().get(), 2);
-    assert_eq!(food_count(&database).await?, 2);
-    let food = food_row(&database, "usda", "321358").await?;
+    assert_eq!(food_count(&fixture.pool).await?, 2);
+    let food = food_row(&fixture.pool, "usda", "321358").await?;
     assert_eq!(food.id, id_before, "upsert replaced the internal row id");
     assert_eq!(food.description, "Hummus, commercial");
     assert_eq!(
@@ -320,7 +327,7 @@ async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<d
          WHERE t.name = ? ORDER BY ft.food_id",
     )
     .bind(reviewed_tag.as_str())
-    .fetch_all(&database.pool)
+    .fetch_all(&fixture.pool)
     .await?;
     assert_eq!(tagged_food_ids, vec![id_before]);
     Ok(())
@@ -328,11 +335,11 @@ async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<d
 
 #[tokio::test]
 async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
-    let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
-    import_usda(&database, &path).await?;
+    let fixture = DatabaseFixture::open().await?;
+    let path = write_input(fixture.directory.path(), "foundation.json", FOUNDATION_JSON)?;
+    import_usda(&fixture.database, &path).await?;
     query("INSERT INTO crumbs_sources (id, created_at) VALUES ('other', 0)")
-        .execute(&database.pool)
+        .execute(&fixture.pool)
         .await?;
     let other_food_id: RowId = query_scalar(
         "INSERT INTO crumbs_foods (
@@ -340,16 +347,17 @@ async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>
          ) VALUES ('other', '321358', 'Foundation', 'Other source food', NULL, '{}', 0)
          RETURNING id",
     )
-    .fetch_one(&database.pool)
+    .fetch_one(&fixture.pool)
     .await?;
     let other_tag = TagName::new("Other")?;
-    database
+    fixture
+        .database
         .set_food_tags(FoodId(other_food_id), std::slice::from_ref(&other_tag))
         .await?;
 
-    import_usda(&database, &path).await?;
+    import_usda(&fixture.database, &path).await?;
 
-    let other = food_row(&database, "other", "321358").await?;
+    let other = food_row(&fixture.pool, "other", "321358").await?;
     assert_eq!(other.source, "other");
     assert_eq!(other.description, "Other source food");
     assert_eq!(
@@ -362,51 +370,51 @@ async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>
          WHERE t.name = ? ORDER BY ft.food_id",
     )
     .bind(other_tag.as_str())
-    .fetch_all(&database.pool)
+    .fetch_all(&fixture.pool)
     .await?;
     assert_eq!(tagged_foods, vec![other_food_id]);
-    let usda = food_row(&database, "usda", "321358").await?;
+    let usda = food_row(&fixture.pool, "usda", "321358").await?;
     assert_eq!(usda.description, "Hummus, commercial");
-    assert_eq!(food_count(&database).await?, 3);
+    assert_eq!(food_count(&fixture.pool).await?, 3);
     Ok(())
 }
 
 #[tokio::test]
 async fn importing_a_subset_retains_absent_rows_and_coexists() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
-    let foundation = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
-    let branded = write_input(directory.path(), "branded.json", BRANDED_JSON)?;
+    let fixture = DatabaseFixture::open().await?;
+    let foundation = write_input(fixture.directory.path(), "foundation.json", FOUNDATION_JSON)?;
+    let branded = write_input(fixture.directory.path(), "branded.json", BRANDED_JSON)?;
 
-    import_usda(&database, &foundation).await?;
-    let report = import_usda(&database, &branded).await?;
+    import_usda(&fixture.database, &foundation).await?;
+    let report = import_usda(&fixture.database, &branded).await?;
 
     assert_eq!(report.committed().get(), 1);
-    assert_eq!(food_count(&database).await?, 3);
-    food_row(&database, "usda", "321358").await?;
-    food_row(&database, "usda", "321360").await?;
-    food_row(&database, "usda", "1106281").await?;
+    assert_eq!(food_count(&fixture.pool).await?, 3);
+    food_row(&fixture.pool, "usda", "321358").await?;
+    food_row(&fixture.pool, "usda", "321360").await?;
+    food_row(&fixture.pool, "usda", "1106281").await?;
     Ok(())
 }
 
 #[tokio::test]
 async fn imports_supported_roots_with_exact_food_types() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
+    let fixture = DatabaseFixture::open().await?;
     let sr = write_input(
-        directory.path(),
+        fixture.directory.path(),
         "sr.json",
         r#"{"SRLegacyFoods":[{"fdcId":9301,"description":"Legacy food","dataType":"SR Legacy"}]}"#,
     )?;
     let survey = write_input(
-        directory.path(),
+        fixture.directory.path(),
         "survey.json",
         r#"{"SurveyFoods":[{"fdcId":9302,"description":"Survey food","dataType":"Survey (FNDDS)"}]}"#,
     )?;
 
-    import_usda(&database, &sr).await?;
-    import_usda(&database, &survey).await?;
+    import_usda(&fixture.database, &sr).await?;
+    import_usda(&fixture.database, &survey).await?;
 
-    let sr_food = food_row(&database, "usda", "9301").await?;
-    let survey_food = food_row(&database, "usda", "9302").await?;
+    let sr_food = food_row(&fixture.pool, "usda", "9301").await?;
+    let survey_food = food_row(&fixture.pool, "usda", "9302").await?;
     assert_eq!(sr_food.food_type, "SR Legacy");
     assert_eq!(survey_food.food_type, "Survey (FNDDS)");
     Ok(())
@@ -414,19 +422,23 @@ async fn imports_supported_roots_with_exact_food_types() -> Result<(), Box<dyn S
 
 #[tokio::test]
 async fn empty_recognized_array_succeeds_with_zero_commits() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
-    let path = write_input(directory.path(), "empty.json", r#"{"FoundationFoods":[]}"#)?;
+    let fixture = DatabaseFixture::open().await?;
+    let path = write_input(
+        fixture.directory.path(),
+        "empty.json",
+        r#"{"FoundationFoods":[]}"#,
+    )?;
 
-    let report = import_usda(&database, &path).await?;
+    let report = import_usda(&fixture.database, &path).await?;
 
     assert_eq!(report.committed().get(), 0);
-    assert_eq!(food_count(&database).await?, 0);
+    assert_eq!(food_count(&fixture.pool).await?, 0);
     Ok(())
 }
 
 #[tokio::test]
 async fn rejects_empty_malformed_unknown_and_mismatched_inputs() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
+    let fixture = DatabaseFixture::open().await?;
     let cases = [
         ("", "invalid USDA FoodData Central document"),
         ("{}", "empty object"),
@@ -441,8 +453,8 @@ async fn rejects_empty_malformed_unknown_and_mismatched_inputs() -> Result<(), B
 
     for (index, (contents, message)) in cases.into_iter().enumerate() {
         let name = format!("invalid-{index}.json");
-        let path = write_input(directory.path(), &name, contents)?;
-        let error = require_import_error(&database, &path).await?;
+        let path = write_input(fixture.directory.path(), &name, contents)?;
+        let error = require_import_error(&fixture.database, &path).await?;
 
         assert!(
             error.to_string().contains(message),
@@ -450,21 +462,21 @@ async fn rejects_empty_malformed_unknown_and_mismatched_inputs() -> Result<(), B
         );
         assert!(error.to_string().contains("committed 0 foods"));
         assert!(error.to_string().contains(&path.display().to_string()));
-        assert_eq!(food_count(&database).await?, 0);
+        assert_eq!(food_count(&fixture.pool).await?, 0);
     }
     Ok(())
 }
 
 #[tokio::test]
 async fn late_framing_error_keeps_committed_food() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
+    let fixture = DatabaseFixture::open().await?;
     let path = write_input(
-        directory.path(),
+        fixture.directory.path(),
         "late.json",
         r#"{"FoundationFoods":[{"fdcId":9001,"description":"Late food","dataType":"Foundation"}]} trailing"#,
     )?;
 
-    let error = require_import_error(&database, &path).await?;
+    let error = require_import_error(&fixture.database, &path).await?;
 
     assert!(error.to_string().contains("committed 1 foods"), "{error}");
     assert!(error.source().is_some(), "import error lost its source");
@@ -472,17 +484,17 @@ async fn late_framing_error_keeps_committed_food() -> Result<(), Box<dyn StdErro
         error.source().and_then(StdError::source).is_some(),
         "stream error lost its nested JSON source"
     );
-    assert_eq!(food_count(&database).await?, 1);
-    food_row(&database, "usda", "9001").await?;
+    assert_eq!(food_count(&fixture.pool).await?, 1);
+    food_row(&fixture.pool, "usda", "9001").await?;
     Ok(())
 }
 
 #[tokio::test]
 async fn parse_failure_after_valid_food_keeps_earlier_commit_and_retry_succeeds()
 -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
+    let fixture = DatabaseFixture::open().await?;
     let path = write_input(
-        directory.path(),
+        fixture.directory.path(),
         "partial.json",
         r#"{"FoundationFoods":[
             {"fdcId":9101,"description":"First food","dataType":"Foundation"},
@@ -490,12 +502,12 @@ async fn parse_failure_after_valid_food_keeps_earlier_commit_and_retry_succeeds(
         ]}"#,
     )?;
 
-    let error = require_import_error(&database, &path).await?;
+    let error = require_import_error(&fixture.database, &path).await?;
 
     assert!(error.to_string().contains("record 2"), "{error}");
     assert!(error.to_string().contains("committed 1 foods"), "{error}");
-    assert_eq!(food_count(&database).await?, 1);
-    food_row(&database, "usda", "9101").await?;
+    assert_eq!(food_count(&fixture.pool).await?, 1);
+    food_row(&fixture.pool, "usda", "9101").await?;
 
     fs::write(
         &path,
@@ -504,20 +516,20 @@ async fn parse_failure_after_valid_food_keeps_earlier_commit_and_retry_succeeds(
             {"fdcId":9102,"description":"Second food","dataType":"Foundation"}
         ]}"#,
     )?;
-    let report = import_usda(&database, &path).await?;
+    let report = import_usda(&fixture.database, &path).await?;
 
     assert_eq!(report.committed().get(), 2);
-    assert_eq!(food_count(&database).await?, 2);
-    food_row(&database, "usda", "9102").await?;
+    assert_eq!(food_count(&fixture.pool).await?, 2);
+    food_row(&fixture.pool, "usda", "9102").await?;
     Ok(())
 }
 
 #[tokio::test]
 async fn write_failure_rolls_back_only_failed_food_and_retry_succeeds()
 -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
+    let fixture = DatabaseFixture::open().await?;
     let input = trigger_failure_input();
-    let path = write_input(directory.path(), "trigger.json", &input)?;
+    let path = write_input(fixture.directory.path(), "trigger.json", &input)?;
     query(
         "CREATE TRIGGER fail_trigger_food
          BEFORE INSERT ON crumbs_foods
@@ -526,10 +538,10 @@ async fn write_failure_rolls_back_only_failed_food_and_retry_succeeds()
              SELECT RAISE(ABORT, 'induced write failure');
          END",
     )
-    .execute(&database.pool)
+    .execute(&fixture.pool)
     .await?;
 
-    let error = require_import_error(&database, &path).await?;
+    let error = require_import_error(&fixture.database, &path).await?;
 
     assert!(error.to_string().contains("9202"), "{error}");
     assert!(error.to_string().contains("record 2"), "{error}");
@@ -539,33 +551,33 @@ async fn write_failure_rolls_back_only_failed_food_and_retry_succeeds()
         "{error}"
     );
     assert!(error.source().is_some(), "import error lost its source");
-    assert_eq!(food_count(&database).await?, 1);
-    food_row(&database, "usda", "9201").await?;
-    assert_row_absent(&database, "usda", "9202").await?;
-    assert_row_absent(&database, "usda", "9203").await?;
-    assert_row_absent(&database, "usda", "9302").await?;
+    assert_eq!(food_count(&fixture.pool).await?, 1);
+    food_row(&fixture.pool, "usda", "9201").await?;
+    assert_row_absent(&fixture.pool, "usda", "9202").await?;
+    assert_row_absent(&fixture.pool, "usda", "9203").await?;
+    assert_row_absent(&fixture.pool, "usda", "9302").await?;
 
     query("DROP TRIGGER fail_trigger_food")
-        .execute(&database.pool)
+        .execute(&fixture.pool)
         .await?;
-    let report = import_usda(&database, &path).await?;
+    let report = import_usda(&fixture.database, &path).await?;
 
     let expected = 2 + LATER_TRIGGER_ROWS;
     assert_eq!(report.committed().get(), expected);
-    assert_eq!(food_count(&database).await?, expected as i64);
-    food_row(&database, "usda", "9202").await?;
-    food_row(&database, "usda", "9203").await?;
-    food_row(&database, "usda", "9302").await?;
+    assert_eq!(food_count(&fixture.pool).await?, expected as i64);
+    food_row(&fixture.pool, "usda", "9202").await?;
+    food_row(&fixture.pool, "usda", "9203").await?;
+    food_row(&fixture.pool, "usda", "9302").await?;
     Ok(())
 }
 
 #[tokio::test]
 async fn closed_pool_import_fails_with_bounded_termination() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
-    let path = write_input(directory.path(), "closed.json", FOUNDATION_JSON)?;
-    database.close().await;
+    let fixture = DatabaseFixture::open().await?;
+    let path = write_input(fixture.directory.path(), "closed.json", FOUNDATION_JSON)?;
+    fixture.close().await;
 
-    let error = require_import_error(&database, &path).await?;
+    let error = require_import_error(&fixture.database, &path).await?;
 
     let message = error.to_string();
     assert!(
@@ -579,14 +591,14 @@ async fn closed_pool_import_fails_with_bounded_termination() -> Result<(), Box<d
 
 #[tokio::test]
 async fn missing_input_reports_path_and_zero_committed() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
-    let path = directory.path().join("missing.json");
+    let fixture = DatabaseFixture::open().await?;
+    let path = fixture.directory.path().join("missing.json");
 
-    let error = require_import_error(&database, &path).await?;
+    let error = require_import_error(&fixture.database, &path).await?;
 
     assert!(error.to_string().contains(&path.display().to_string()));
     assert!(error.to_string().contains("committed 0 foods"));
-    assert_eq!(food_count(&database).await?, 0);
+    assert_eq!(food_count(&fixture.pool).await?, 0);
     Ok(())
 }
 
@@ -659,15 +671,6 @@ async fn generic_writer_failure_reports_commits_and_joins_producer() -> Result<(
     Ok(())
 }
 
-async fn open_database() -> Result<(tempfile::TempDir, Database), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let database = Database::open(DatabaseConfig {
-        path: directory.path().join("crumbs.db"),
-    })
-    .await?;
-    Ok((directory, database))
-}
-
 fn write_input(directory: &Path, name: &str, contents: &str) -> Result<PathBuf, Box<dyn StdError>> {
     let path = directory.join(name);
     fs::write(&path, contents)?;
@@ -737,9 +740,9 @@ async fn require_writer_import_error<S: FoodWriter + ?Sized>(
     }
 }
 
-async fn food_count(database: &Database) -> Result<FoodCount, sqlx::Error> {
+async fn food_count(pool: &SqlitePool) -> Result<FoodCount, sqlx::Error> {
     query_scalar("SELECT COUNT(*) FROM crumbs_foods")
-        .fetch_one(&database.pool)
+        .fetch_one(pool)
         .await
 }
 
@@ -769,7 +772,7 @@ impl FoodRow {
 }
 
 async fn food_row(
-    database: &Database,
+    pool: &SqlitePool,
     source: &str,
     source_food_id: &str,
 ) -> Result<FoodRow, sqlx::Error> {
@@ -780,7 +783,7 @@ async fn food_row(
     )
     .bind(source)
     .bind(source_food_id)
-    .fetch_one(&database.pool)
+    .fetch_one(pool)
     .await
 }
 
@@ -934,7 +937,7 @@ impl FoodWriter for RecordingFoodWriter {
 }
 
 async fn assert_row_absent(
-    database: &Database,
+    pool: &SqlitePool,
     source: &str,
     source_food_id: &str,
 ) -> Result<(), Box<dyn StdError>> {
@@ -944,7 +947,7 @@ async fn assert_row_absent(
     )
     .bind(source)
     .bind(source_food_id)
-    .fetch_one(&database.pool)
+    .fetch_one(pool)
     .await?;
     assert_eq!(count, 0, "unexpected food row {source}/{source_food_id}");
     Ok(())

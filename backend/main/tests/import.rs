@@ -13,7 +13,7 @@ use common::temporary_config;
 type DatabaseFilename<'a> = &'a str;
 
 const BIN: &str = env!("CARGO_BIN_EXE_crumbs");
-const FOUNDATION_JSON: &str = include_str!("../../database/test-fixtures/foundation.json");
+const FOUNDATION_JSON: &str = include_str!("../../import/test-fixtures/foundation.json");
 const CONFIG: &str = "[http]\nport = 0\n\n[database]\npath = \"crumbs.db\"\n";
 
 #[test]

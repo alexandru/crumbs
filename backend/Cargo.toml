@@ -1,5 +1,5 @@
 [workspace]
-members = ["database", "server", "main", "xtask"]
+members = ["database", "import", "server", "main", "xtask"]
 resolver = "3"
 
 [workspace.package]
@@ -12,6 +12,7 @@ axum = { version = "0.8.9", default-features = false, features = ["http1", "json
 clap = { version = "4.6.7", features = ["derive"] }
 config = { version = "0.15.27", default-features = false, features = ["toml"] }
 crumbs-database = { path = "database" }
+crumbs-import = { path = "import" }
 crumbs-server = { path = "server" }
 futures-executor = "0.3"
 http = "1"

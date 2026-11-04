@@ -1,6 +1,5 @@
 use std::error::Error as StdError;
 use std::fs;
-use std::path::{Path, PathBuf};
 
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -8,8 +7,6 @@ use sqlx::{SqliteConnection, query, query_scalar};
 
 use crate::{Database, DatabaseConfig, FoodCategory, FoodDescription, TagName};
 
-const FOUNDATION_JSON: &str = include_str!("../test-fixtures/foundation.json");
-const BRANDED_JSON: &str = include_str!("../test-fixtures/branded.json");
 const MIGRATION_0001: &str = include_str!("../migrations/0001_create_crumbs_sources.sql");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_create_crumbs_foods.sql");
 type FoodId = i64;
@@ -42,45 +39,6 @@ async fn schema_uses_external_content_unicode_tokenizer_and_triggers()
     assert!(sql.contains("remove_diacritics 2"), "{sql}");
 
     assert_eq!(fts_row_count(&database).await?, 0);
-    assert_fts_integrity(&database).await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn imported_fixtures_are_searchable_and_preserve_display_text()
--> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
-    let foundation = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
-    let branded = write_input(directory.path(), "branded.json", BRANDED_JSON)?;
-
-    crate::import_usda(&database, &foundation).await?;
-    crate::import_usda(&database, &branded).await?;
-
-    let hummus = food_id(&database, "usda", "321358").await?;
-    let tomatoes = food_id(&database, "usda", "321360").await?;
-    let granola = food_id(&database, "usda", "1106281").await?;
-
-    assert_matches(&database, "hummus", &[hummus]).await?;
-    assert_matches(&database, "legumes", &[hummus]).await?;
-    assert_matches(&database, "category:legumes", &[hummus]).await?;
-    assert_matches(&database, "tomatoes", &[tomatoes]).await?;
-    assert_matches(&database, "vegetables", &[tomatoes]).await?;
-    assert_matches(&database, "description:tomatoes", &[tomatoes]).await?;
-    assert_matches(&database, "granola", &[granola]).await?;
-    assert_matches(&database, "cereal", &[granola]).await?;
-    assert_eq!(description(&database, hummus).await?, "Hummus, commercial");
-    assert_eq!(
-        description(&database, granola).await?,
-        "GRANOLA, CINNAMON, RAISIN"
-    );
-    assert_eq!(
-        category(&database, hummus).await?.as_deref(),
-        Some("Legumes and Legume Products")
-    );
-    assert_eq!(
-        category(&database, granola).await?.as_deref(),
-        Some("Cereal")
-    );
     assert_fts_integrity(&database).await?;
     Ok(())
 }
@@ -303,45 +261,6 @@ async fn decomposed_romanian_forms_match_composed_and_plain_forms() -> Result<()
         );
     }
     assert_eq!(fts_row_count(&database).await?, 15);
-    assert_fts_integrity(&database).await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn reimport_replaces_stale_terms_without_duplicate_hits() -> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
-    let foundation = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
-    crate::import_usda(&database, &foundation).await?;
-    let id = food_id(&database, "usda", "321358").await?;
-    let favorite = TagName::new("favorite")?;
-    database
-        .set_food_tags(crate::FoodId(id), &[favorite])
-        .await?;
-    assert_matches(&database, "tags:favorite", &[id]).await?;
-
-    let updated = write_input(
-        directory.path(),
-        "updated.json",
-        r#"{"FoundationFoods":[{"fdcId":321358,"description":"Chickpea spread","dataType":"Foundation","foodCategory":{"description":"Spreads"}}]}"#,
-    )?;
-    crate::import_usda(&database, &updated).await?;
-
-    assert_eq!(food_id(&database, "usda", "321358").await?, id);
-    assert_eq!(description(&database, id).await?, "Chickpea spread");
-    for stale in ["hummus", "commercial", "legumes"] {
-        assert_matches(&database, stale, &[]).await?;
-    }
-    assert_matches(&database, "chickpea", &[id]).await?;
-    assert_matches(&database, "spreads", &[id]).await?;
-    assert_matches(&database, "tags:favorite", &[id]).await?;
-    assert_eq!(fts_row_count(&database).await?, 2);
-
-    for _ in 0..3 {
-        crate::import_usda(&database, &updated).await?;
-    }
-    assert_matches(&database, "chickpea", &[id]).await?;
-    assert_matches(&database, "tags:favorite", &[id]).await?;
-    assert_eq!(fts_row_count(&database).await?, 2);
     assert_fts_integrity(&database).await?;
     Ok(())
 }
@@ -758,39 +677,6 @@ async fn transaction_rollback_restores_food_and_index() -> Result<(), Box<dyn St
 }
 
 #[tokio::test]
-async fn import_failure_keeps_earlier_food_searchable_and_retry_succeeds()
--> Result<(), Box<dyn StdError>> {
-    let (directory, database) = open_database().await?;
-    let path = write_input(
-        directory.path(),
-        "partial.json",
-        r#"{"FoundationFoods":[
-            {"fdcId":9401,"description":"Searchable first food","dataType":"Foundation"},
-            {"fdcId":9402,"description":"  ","dataType":"Foundation"}
-        ]}"#,
-    )?;
-
-    assert!(crate::import_usda(&database, &path).await.is_err());
-    let first = food_id(&database, "usda", "9401").await?;
-    assert_matches(&database, "searchable", &[first]).await?;
-    assert_matches(&database, "second", &[]).await?;
-
-    fs::write(
-        &path,
-        r#"{"FoundationFoods":[
-            {"fdcId":9401,"description":"Searchable first food","dataType":"Foundation"},
-            {"fdcId":9402,"description":"Second food","dataType":"Foundation"}
-        ]}"#,
-    )?;
-    crate::import_usda(&database, &path).await?;
-    let second = food_id(&database, "usda", "9402").await?;
-    assert_matches(&database, "searchable", &[first]).await?;
-    assert_matches(&database, "second", &[second]).await?;
-    assert_fts_integrity(&database).await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let migrations = directory.path().join("migrations");
@@ -873,12 +759,6 @@ async fn open_database() -> Result<(tempfile::TempDir, Database), Box<dyn StdErr
     Ok((directory, database))
 }
 
-fn write_input(directory: &Path, name: &str, contents: &str) -> Result<PathBuf, Box<dyn StdError>> {
-    let path = directory.join(name);
-    fs::write(&path, contents)?;
-    Ok(path)
-}
-
 async fn insert_food(
     database: &Database,
     id: FoodId,
@@ -909,18 +789,6 @@ async fn insert_food(
         database.set_food_tags(crate::FoodId(id), &[tag]).await?;
     }
     Ok(())
-}
-
-async fn food_id(
-    database: &Database,
-    source: Source<'_>,
-    source_food_id: SourceFoodId<'_>,
-) -> Result<FoodId, sqlx::Error> {
-    query_scalar("SELECT id FROM crumbs_foods WHERE source = ? AND source_food_id = ?")
-        .bind(source)
-        .bind(source_food_id)
-        .fetch_one(&database.pool)
-        .await
 }
 
 async fn description(database: &Database, id: FoodId) -> Result<FoodDescription, sqlx::Error> {

@@ -152,7 +152,8 @@ pub enum Mass {
 }
 
 impl Mass {
-    pub(crate) fn is_zero(self) -> bool {
+    /// Returns whether this measured amount is zero.
+    pub fn is_zero(self) -> bool {
         match self {
             Self::Grams(value) => value.value().is_zero(),
             Self::Milligrams(value) => value.value().is_zero(),
@@ -192,7 +193,8 @@ pub enum Energy {
 }
 
 impl Energy {
-    pub(crate) fn is_zero(self) -> bool {
+    /// Returns whether this measured amount is zero.
+    pub fn is_zero(self) -> bool {
         match self {
             Self::Kilocalories(value) => value.value().is_zero(),
             Self::Kilojoules(value) => value.value().is_zero(),

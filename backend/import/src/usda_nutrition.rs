@@ -4,7 +4,7 @@ use std::str::FromStr;
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
-use crate::nutrition::{
+use crumbs_database::nutrition::{
     Energy, FoodData, Mass, NutritionBasis, NutritionProfile, Qualifier, QuantityError, Reported,
     ServingQuantity, ServingSize,
 };
@@ -636,5 +636,5 @@ struct MeasureUnit {
 }
 
 #[cfg(test)]
-#[path = "../../unit-tests/import/usda_nutrition.rs"]
+#[path = "../unit-tests/usda_nutrition.rs"]
 mod tests;

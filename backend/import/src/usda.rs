@@ -18,8 +18,8 @@ use tokio::sync::mpsc;
 #[path = "usda_nutrition.rs"]
 mod usda_nutrition;
 
-use crate::nutrition::FoodData;
-use crate::{Food, Source};
+use crumbs_database::nutrition::FoodData;
+use crumbs_database::{Food, Source};
 
 /// A validated food record ready for persistence.
 ///
@@ -596,5 +596,5 @@ impl<'de> Visitor<'de> for FoodCategoryVisitor {
 const USDA_SOURCE: Source = std::borrow::Cow::Borrowed("usda");
 
 #[cfg(test)]
-#[path = "../../unit-tests/import/usda.rs"]
+#[path = "../unit-tests/usda.rs"]
 mod tests;

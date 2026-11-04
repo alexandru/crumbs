@@ -1,13 +1,9 @@
 use std::borrow::Cow;
 use std::error::Error as StdError;
-use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::{Database, DatabaseConfig};
-
-const FOUNDATION_JSON: &str = include_str!("../test-fixtures/foundation.json");
 
 #[tokio::test]
 async fn upsert_foods_are_scoped_by_provider_and_keep_opaque_ids() -> Result<(), Box<dyn StdError>>
@@ -194,62 +190,6 @@ fn tag_names_fold_full_case_canonical_forms_and_latest_unicode_mappings()
 }
 
 #[tokio::test]
-async fn food_upserts_and_usda_reimports_preserve_tag_assignments() -> Result<(), Box<dyn StdError>>
-{
-    let (directory, database) = open_database().await?;
-    let source = Source::Borrowed("usda");
-    let source_food_id = "321358";
-    let initial = make_food(
-        source.clone(),
-        source_food_id,
-        "Foundation",
-        "Manual description",
-        Some("Manual category"),
-        r#"{"origin":"manual"}"#,
-    )?;
-    let initial_id = database.upsert_food(&initial).await?;
-    let favorite = TagName::new("Favorite")?;
-    database
-        .set_food_tags(initial_id, std::slice::from_ref(&favorite))
-        .await?;
-
-    let update = make_food(
-        source.clone(),
-        source_food_id,
-        "Foundation",
-        "Updated manual description",
-        Some("Updated manual category"),
-        r#"{"origin":"updated"}"#,
-    )?;
-    let update_id = database.upsert_food(&update).await?;
-    assert_eq!(update_id, initial_id);
-    assert_eq!(ids_with_tag(&database, &favorite).await?, vec![initial_id]);
-
-    let path = write_input(directory.path(), "foundation.json", FOUNDATION_JSON)?;
-    let first_import = crate::import_usda(&database, &path).await?;
-    assert_eq!(first_import.committed().get(), 2);
-    let imported = find_food(&database, &source, source_food_id).await?;
-    assert_eq!(imported.id, initial_id);
-    assert_eq!(imported.food_type.as_ref(), "Foundation");
-    assert_eq!(imported.description, "Hummus, commercial");
-    assert_eq!(
-        imported.category.as_deref(),
-        Some("Legumes and Legume Products")
-    );
-    assert_eq!(ids_with_tag(&database, &favorite).await?, vec![initial_id]);
-
-    let second_import = crate::import_usda(&database, &path).await?;
-    assert_eq!(second_import.committed().get(), 2);
-    let reimported = find_food(&database, &source, source_food_id).await?;
-    assert_eq!(reimported.id, initial_id);
-    assert_eq!(reimported.description, "Hummus, commercial");
-    assert_eq!(ids_with_tag(&database, &favorite).await?, vec![initial_id]);
-
-    database.close().await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn clearing_assignments_keeps_catalog_and_unknown_food_does_not_change_it()
 -> Result<(), Box<dyn StdError>> {
     let (_directory, database) = open_database().await?;
@@ -387,10 +327,4 @@ async fn ids_with_tag(database: &Database, tag: &TagName) -> Result<Vec<FoodId>,
     .into_iter()
     .map(FoodId)
     .collect())
-}
-
-fn write_input(directory: &Path, name: &str, contents: &str) -> Result<PathBuf, io::Error> {
-    let path = directory.join(name);
-    fs::write(&path, contents)?;
-    Ok(path)
 }

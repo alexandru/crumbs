@@ -2,7 +2,7 @@ use std::error::Error;
 use std::io;
 
 use super::*;
-use crate::nutrition::{NutritionBasis, Qualifier, QuantityError, Reported};
+use crumbs_database::nutrition::{NutritionBasis, Qualifier, QuantityError, Reported};
 
 #[test]
 fn maps_all_supported_usda_nutrient_categories() -> Result<(), Box<dyn Error>> {

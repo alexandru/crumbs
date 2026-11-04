@@ -10,8 +10,12 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 use sqlx::{SqlitePool, query, query_scalar};
 
-use crate::nutrition::{FoodData, Mass};
-use crate::{Database, DatabaseConfig, TagName};
+use common::DatabaseFixture;
+use crumbs_database::nutrition::{FoodData, Mass};
+use crumbs_database::{Database, FoodId as DatabaseFoodId, TagName};
+use crumbs_import::{ImportError, import_usda};
+
+mod common;
 
 const RELEASE_JSON_ENV: &str = "USDA_FOUNDATION_JSON";
 const ENV_HELP: &str = "USDA_FOUNDATION_JSON must point at the official 2026-10-29 Foundation JSON";
@@ -22,7 +26,7 @@ const REJECTED_FOOD_ID: SourceFoodIdRef<'_> = "2727566";
 const EXPECTED_SOURCE: SourceRef<'_> = "usda";
 const EXPECTED_FOOD_TYPE: FoodTypeRef<'_> = "Foundation";
 
-type FoodId = i64;
+type RawFoodId = i64;
 type ReleaseDate = &'static str;
 type FoodCount = usize;
 type SourceRef<'a> = &'a str;
@@ -88,7 +92,7 @@ struct ReferenceNutrient {
 #[derive(Debug, PartialEq, sqlx::FromRow)]
 struct StoredFood {
     #[sqlx(rename = "id")]
-    local_id: FoodId,
+    local_id: RawFoodId,
     source: Source,
     source_food_id: SourceFoodId,
     food_type: FoodType,
@@ -104,59 +108,56 @@ async fn rejects_negative_fooddata_amount_and_preserves_committed_prefix_on_retr
     let json_path = foundation_json_path()?;
     let reference = load_reference(&json_path)?;
 
-    let directory = tempfile::tempdir()?;
-    let database_path = directory.path().join("crumbs.db");
-    let database = Database::open(config(database_path.clone())).await?;
-    let applied_before = applied_migrations(&database.pool).await?;
+    let mut fixture = DatabaseFixture::open().await?;
+    let applied_before = applied_migrations(&fixture.pool).await?;
     assert!(applied_before > 0, "no applied migration");
 
-    let first_error = require_rejected_release_import(&database, &json_path).await?;
+    let first_error = require_rejected_release_import(&fixture.database, &json_path).await?;
     verify_rejection(&first_error);
-    let mut first = read_stored(&database).await?;
+    let mut first = read_stored(&fixture.pool).await?;
     verify_reference(&first, &reference)?;
     assert!(
         first.iter().all(|food| food.tags.is_empty()),
         "initial import assigned tags"
     );
-    assert_food_absent(&database, REJECTED_FOOD_ID).await?;
+    assert_food_absent(&fixture.pool, REJECTED_FOOD_ID).await?;
     let reviewed_tag = TagName::new("Reviewed")?;
     let (reviewed_food_id, reviewed_food_local_id) = match first.first_mut() {
         Some(food) => {
             food.tags = reviewed_tag.as_str().to_owned();
-            (crate::FoodId(food.local_id), food.local_id)
+            (DatabaseFoodId(food.local_id), food.local_id)
         }
         None => return Err(invalid_data("first import returned no foods")),
     };
-    database
+    fixture
+        .database
         .set_food_tags(reviewed_food_id, std::slice::from_ref(&reviewed_tag))
         .await?;
-    let tag_matches = matching_rowids(&database.pool, "tags:reviewed").await?;
+    let tag_matches = matching_rowids(&fixture.pool, "tags:reviewed").await?;
     assert_eq!(tag_matches, vec![reviewed_food_local_id], "FTS tag");
-    verify_fts(&database.pool, &first).await?;
-    verify_foreign_keys(&database.pool).await?;
-    database.close().await;
-
-    let reopened = Database::open(config(database_path)).await?;
-    let applied_after_reopen = applied_migrations(&reopened.pool).await?;
+    verify_fts(&fixture.pool, &first).await?;
+    verify_foreign_keys(&fixture.pool).await?;
+    fixture.reopen().await?;
+    let applied_after_reopen = applied_migrations(&fixture.pool).await?;
     assert_eq!(applied_after_reopen, applied_before, "reopen migrations");
 
-    let second_error = require_rejected_release_import(&reopened, &json_path).await?;
+    let second_error = require_rejected_release_import(&fixture.database, &json_path).await?;
     verify_rejection(&second_error);
-    let second = read_stored(&reopened).await?;
+    let second = read_stored(&fixture.pool).await?;
     assert_eq!(first, second, "reimport changed stored foods");
     verify_reference(&second, &reference)?;
-    assert_food_absent(&reopened, REJECTED_FOOD_ID).await?;
-    verify_fts(&reopened.pool, &second).await?;
-    let tag_matches = matching_rowids(&reopened.pool, "tags:reviewed").await?;
+    assert_food_absent(&fixture.pool, REJECTED_FOOD_ID).await?;
+    verify_fts(&fixture.pool, &second).await?;
+    let tag_matches = matching_rowids(&fixture.pool, "tags:reviewed").await?;
     assert_eq!(
         tag_matches,
         vec![reviewed_food_local_id],
         "reopened and reimported FTS tag"
     );
-    verify_foreign_keys(&reopened.pool).await?;
-    let applied_reimport = applied_migrations(&reopened.pool).await?;
+    verify_foreign_keys(&fixture.pool).await?;
+    let applied_reimport = applied_migrations(&fixture.pool).await?;
     assert_eq!(applied_reimport, applied_before, "reimport migrations");
-    reopened.close().await;
+    fixture.close().await;
 
     Ok(())
 }
@@ -203,7 +204,7 @@ fn load_reference(path: &Path) -> Result<ReferenceFoods, Box<dyn StdError>> {
     Ok(reference)
 }
 
-async fn read_stored(database: &Database) -> Result<Vec<StoredFood>, sqlx::Error> {
+async fn read_stored(pool: &SqlitePool) -> Result<Vec<StoredFood>, sqlx::Error> {
     sqlx::query_as::<_, StoredFood>(
         "SELECT f.id, f.source, f.source_food_id, f.food_type, f.description, f.category,
                 s.tags AS tags, f.parsed_data
@@ -211,7 +212,7 @@ async fn read_stored(database: &Database) -> Result<Vec<StoredFood>, sqlx::Error
          JOIN crumbs_foods_search_content AS s ON s.id = f.id
          ORDER BY f.id",
     )
-    .fetch_all(&database.pool)
+    .fetch_all(pool)
     .await
 }
 
@@ -259,8 +260,8 @@ fn verify_reference(stored: &[StoredFood], reference: &ReferenceFoods) -> TestRe
 async fn require_rejected_release_import(
     database: &Database,
     path: &Path,
-) -> Result<crate::ImportError, Box<dyn StdError>> {
-    match crate::import_usda(database, path).await {
+) -> Result<ImportError, Box<dyn StdError>> {
+    match import_usda(database, path).await {
         Ok(report) => Err(invalid_data(format!(
             "full release import unexpectedly succeeded with {} commits",
             report.committed().get()
@@ -269,7 +270,7 @@ async fn require_rejected_release_import(
     }
 }
 
-fn verify_rejection(error: &crate::ImportError) {
+fn verify_rejection(error: &ImportError) {
     let message = error_chain(error);
     assert!(message.contains("record 315"), "{message}");
     assert!(message.contains("committed 314 foods"), "{message}");
@@ -291,14 +292,14 @@ fn error_chain(error: &dyn StdError) -> String {
 }
 
 async fn assert_food_absent(
-    database: &Database,
+    pool: &SqlitePool,
     source_food_id: SourceFoodIdRef<'_>,
 ) -> Result<(), sqlx::Error> {
     let count: i64 =
         query_scalar("SELECT COUNT(*) FROM crumbs_foods WHERE source = ? AND source_food_id = ?")
             .bind(EXPECTED_SOURCE)
             .bind(source_food_id)
-            .fetch_one(&database.pool)
+            .fetch_one(pool)
             .await?;
     assert_eq!(count, 0, "rejected food {source_food_id} was stored");
     Ok(())
@@ -386,7 +387,7 @@ async fn verify_fts(pool: &SqlitePool, foods: &[StoredFood]) -> TestResult {
 async fn matching_rowids(
     pool: &SqlitePool,
     fts_query: FtsQuery<'_>,
-) -> Result<Vec<FoodId>, sqlx::Error> {
+) -> Result<Vec<RawFoodId>, sqlx::Error> {
     query_scalar("SELECT rowid FROM crumbs_foods_fts WHERE crumbs_foods_fts MATCH ? ORDER BY rowid")
         .bind(fts_query)
         .fetch_all(pool)
@@ -414,10 +415,6 @@ async fn applied_migrations(pool: &SqlitePool) -> Result<MigrationCount, sqlx::E
     query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
         .fetch_one(pool)
         .await
-}
-
-fn config(path: PathBuf) -> DatabaseConfig {
-    DatabaseConfig { path }
 }
 
 fn invalid_data(message: impl Into<String>) -> Box<dyn StdError> {
