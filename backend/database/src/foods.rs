@@ -34,15 +34,19 @@ pub trait FoodReader: Sync {
     /// Failure reported by this storage implementation.
     type Error: StdError + Send + Sync + 'static;
 
-    /// Searches indexed descriptions, categories, and tags with an SQLite FTS5 expression.
+    /// Searches indexed descriptions, categories, and tags with a Crumbs full-text expression.
     ///
-    /// Results include full parsed nutrition data. Implementations use SQLite's
-    /// default relevance ranking and food ID to break ties. The default limit
-    /// is 20, and supplied limits are clamped to 20–1,000.
+    /// Results include full parsed nutrition data. Implementations use
+    /// best-effort relevance ranking and food ID to break ties.
+    /// An expression may contain plain terms (combined as AND), quoted phrases,
+    /// prefix matching with a trailing `*` (for example, `chick*`),
+    /// `AND`/`OR`/`NOT`, parentheses, and field selectors such as
+    /// `description:chicken`, `category:dairy`, or `tags:organic`. The default
+    /// limit is 20, and supplied limits are clamped to 20–1,000.
     ///
     /// # Errors
     ///
-    /// Returns [`SearchError::InvalidQuery`] if the FTS5 parser rejects the
+    /// Returns [`SearchError::InvalidQuery`] if the search adapter rejects the
     /// expression. Returns [`SearchError::Storage`] if the data store cannot
     /// search or decode matching data.
     fn search_foods(

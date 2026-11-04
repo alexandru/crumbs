@@ -56,7 +56,7 @@ where
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("crumbs", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Search foods using SQLite FTS5 expressions. Results include full nutrition data.",
+                "Search foods using Crumbs full-text expressions. Results include full nutrition data.",
             )
     }
 
@@ -115,7 +115,7 @@ fn search_tool() -> Tool {
                 "query": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Nonblank SQLite FTS5 expression over description, category, and tags. Examples: chicken breast, \"chicken breast\", chick*, chicken OR turkey, tags:organic. Matches ignore case and Latin diacritics."
+                    "description": "Nonblank Crumbs full-text expression over description, category, and tags. Terms separated by spaces match all terms. Use quoted phrases, prefix matching with a trailing * (for example, chick*), AND/OR/NOT, parentheses, or selectors such as description:chicken, category:dairy, and tags:organic. Examples: chicken breast, \"chicken breast\", chick*, chicken OR turkey, tags:organic."
                 },
                 "limit": {
                     "type": "integer",
@@ -127,7 +127,7 @@ fn search_tool() -> Tool {
     ]);
     Tool::new_with_raw(
         SEARCH_TOOL_NAME,
-        Some("Search food descriptions, categories, and tags. Return matching foods with full nutrition data, ordered by relevance then food ID. No pagination.".into()),
+        Some("Search food descriptions, categories, and tags. Return matching foods with full nutrition data, ordered by best-effort relevance then food ID. No pagination.".into()),
         schema,
     )
     .with_annotations(ToolAnnotations::new().read_only(true).destructive(false).open_world(false))

@@ -7,18 +7,18 @@ use serde::{Deserialize, Serialize};
 
 use super::{Food, FoodId};
 
-/// A nonblank SQLite FTS5 query expression.
+/// A nonblank Crumbs full-text expression.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct SearchQuery(String);
 
 impl SearchQuery {
-    /// Creates a search query from an FTS5 expression.
+    /// Creates a search query from a Crumbs full-text expression.
     ///
     /// # Errors
     ///
     /// Returns [`SearchQueryError`] when the expression is blank or contains a
-    /// NUL character. FTS5 syntax errors are reported by
+    /// NUL character. Expressions rejected by the current search adapter are reported by
     /// [`FoodReader::search_foods`](super::FoodReader::search_foods).
     pub fn new(value: impl Into<String>) -> Result<Self, SearchQueryError> {
         let value = value.into();
@@ -31,7 +31,7 @@ impl SearchQuery {
         Ok(Self(value))
     }
 
-    /// Returns the FTS5 expression.
+    /// Returns the Crumbs full-text expression.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -51,7 +51,7 @@ impl From<SearchQuery> for String {
     }
 }
 
-/// Error produced when an FTS5 expression cannot form a valid [`SearchQuery`].
+/// Error produced when input cannot form a valid [`SearchQuery`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SearchQueryError {
     /// The expression contains only whitespace.
@@ -113,8 +113,8 @@ pub struct FoodSearchResult {
 /// Failure while searching indexed food data.
 #[derive(Debug, thiserror::Error)]
 pub enum SearchError<E: StdError> {
-    /// The FTS5 parser rejected the supplied expression.
-    #[error("invalid FTS5 search expression: {0}")]
+    /// The search adapter rejected the supplied expression.
+    #[error("invalid search expression: {0}")]
     InvalidQuery(String),
     /// The data store could not execute the search or decode stored data.
     #[error("food search failed: {0}")]
