@@ -7,7 +7,7 @@ use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use crumbs_database::{Database, FoodSearchResult, SearchError, SearchLimit, SearchQuery};
+use crumbs_database::{FoodReader, FoodSearchResult, SearchError, SearchLimit, SearchQuery};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -22,16 +22,16 @@ pub(crate) struct SearchResponse {
     pub(crate) foods: Vec<FoodSearchResult>,
 }
 
-pub(crate) async fn execute(
-    database: &Database,
+pub(crate) async fn execute<S: FoodReader + ?Sized>(
+    reader: &S,
     request: SearchRequest,
-) -> Result<SearchResponse, SearchError> {
-    let foods = database.search_foods(&request.query, request.limit).await?;
+) -> Result<SearchResponse, SearchError<S::Error>> {
+    let foods = reader.search_foods(&request.query, request.limit).await?;
     Ok(SearchResponse { foods })
 }
 
-pub(crate) async fn handler(
-    State(database): State<Arc<Database>>,
+pub(crate) async fn handler<S: FoodReader + Send + 'static>(
+    State(reader): State<Arc<S>>,
     request: Result<Query<SearchRequest>, QueryRejection>,
 ) -> Response {
     let Query(request) = match request {
@@ -41,7 +41,7 @@ pub(crate) async fn handler(
         }
     };
 
-    match execute(&database, request).await {
+    match execute(reader.as_ref(), request).await {
         Ok(response) => Json(response).into_response(),
         Err(SearchError::InvalidQuery(diagnostic)) => failure(StatusCode::BAD_REQUEST, diagnostic),
         Err(SearchError::Storage(_)) => failure(

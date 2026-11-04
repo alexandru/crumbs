@@ -11,7 +11,10 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::nutrition::FoodData;
 
+mod search;
 mod sqlite;
+
+pub use search::{FoodSearchResult, SearchError, SearchLimit, SearchQuery, SearchQueryError};
 
 /// Persists source-scoped foods independently of their import format.
 pub trait FoodWriter: Sync {
@@ -24,6 +27,29 @@ pub trait FoodWriter: Sync {
     ///
     /// Returns an implementation error if the food cannot be persisted.
     fn upsert_food(&self, food: &Food) -> impl Future<Output = Result<FoodId, Self::Error>> + Send;
+}
+
+/// Searches source-independent food data.
+pub trait FoodReader: Sync {
+    /// Failure reported by this storage implementation.
+    type Error: StdError + Send + Sync + 'static;
+
+    /// Searches indexed descriptions, categories, and tags with an SQLite FTS5 expression.
+    ///
+    /// Results include full parsed nutrition data. Implementations use SQLite's
+    /// default relevance ranking and food ID to break ties. The default limit
+    /// is 20, and supplied limits are clamped to 20–1,000.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SearchError::InvalidQuery`] if the FTS5 parser rejects the
+    /// expression. Returns [`SearchError::Storage`] if the data store cannot
+    /// search or decode matching data.
+    fn search_foods(
+        &self,
+        query: &SearchQuery,
+        limit: SearchLimit,
+    ) -> impl Future<Output = Result<Vec<FoodSearchResult>, SearchError<Self::Error>>> + Send;
 }
 
 /// Provider identifier; providers may use static or dynamically supplied names.

@@ -21,14 +21,13 @@ mod config;
 mod foods;
 mod fts;
 pub mod nutrition;
-mod search;
 
 pub use config::{DatabaseConfig, DatabasePath};
 pub use foods::{
-    Food, FoodCategory, FoodDescription, FoodId, FoodSummary, FoodType, FoodWriter, InvalidTagName,
+    Food, FoodCategory, FoodDescription, FoodId, FoodReader, FoodSearchResult, FoodSummary,
+    FoodType, FoodWriter, InvalidTagName, SearchError, SearchLimit, SearchQuery, SearchQueryError,
     Source, SourceFoodId, Tag, TagId, TagName,
 };
-pub use search::{FoodSearchResult, SearchError, SearchLimit, SearchQuery, SearchQueryError};
 
 /// Handle to the application database.
 ///

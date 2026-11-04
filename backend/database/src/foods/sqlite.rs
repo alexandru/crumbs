@@ -1,13 +1,17 @@
 use std::collections::HashSet;
 
+use sqlx::error::DatabaseError;
+use sqlx::sqlite::SqliteError;
 use sqlx::{FromRow, Row};
 
 use super::{
-    Food, FoodCategory, FoodDescription, FoodId, FoodSummary, FoodWriter, Source, SourceFoodId,
-    Tag, TagId, TagKey, TagName,
+    Food, FoodCategory, FoodDescription, FoodId, FoodReader, FoodSearchResult, FoodSummary,
+    FoodType, FoodWriter, SearchError, SearchLimit, SearchQuery, Source, SourceFoodId, Tag, TagId,
+    TagKey, TagName,
 };
 use crate::Database;
 use crate::clock::{ClockError, UnixMillis};
+use crate::nutrition::FoodData;
 
 impl FoodWriter for Database {
     type Error = sqlx::Error;
@@ -49,6 +53,44 @@ impl FoodWriter for Database {
         .await?;
         transaction.commit().await?;
         Ok(FoodId(id))
+    }
+}
+
+impl FoodReader for Database {
+    type Error = sqlx::Error;
+
+    async fn search_foods(
+        &self,
+        query: &SearchQuery,
+        limit: SearchLimit,
+    ) -> Result<Vec<FoodSearchResult>, SearchError<Self::Error>> {
+        let mut connection = self.pool.acquire().await.map_err(SearchError::Storage)?;
+        let rows = match sqlx::query_as::<_, FoodSearchRow>(SEARCH_SQL)
+            .bind(query.as_str())
+            .bind(limit.get())
+            .fetch_all(&mut *connection)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                let Some(message) = fts_query_error_message(&error).map(str::to_owned) else {
+                    return Err(SearchError::Storage(error));
+                };
+                // SQLite may defer schema errors until step. A valid FTS query
+                // separates those errors from diagnostics caused by this input.
+                match sqlx::query(SEARCH_SQL)
+                    .bind(FTS_ERROR_PROBE_QUERY)
+                    .bind(1_i64)
+                    .fetch_optional(&mut *connection)
+                    .await
+                {
+                    Ok(_) => return Err(SearchError::InvalidQuery(message)),
+                    Err(probe_error) => return Err(SearchError::Storage(probe_error)),
+                }
+            }
+        };
+
+        rows.into_iter().map(FoodSearchRow::into_result).collect()
     }
 }
 
@@ -166,6 +208,67 @@ impl From<ClockError> for sqlx::Error {
 type RowId = i64;
 type SourceText = String;
 type FoodTypeText = String;
+type ParsedFoodDataText = String;
+
+#[derive(FromRow)]
+struct FoodSearchRow {
+    id: RowId,
+    source: SourceText,
+    source_food_id: SourceFoodId,
+    food_type: FoodTypeText,
+    description: FoodDescription,
+    category: Option<FoodCategory>,
+    parsed_data: ParsedFoodDataText,
+}
+
+const SEARCH_SQL: &str = "
+SELECT f.id, f.source, f.source_food_id, f.food_type,
+       f.description, f.category, f.parsed_data
+FROM crumbs_foods_fts
+JOIN crumbs_foods AS f ON f.id = crumbs_foods_fts.rowid
+WHERE crumbs_foods_fts MATCH ?
+ORDER BY crumbs_foods_fts.rank ASC, f.id ASC
+LIMIT ?
+";
+
+const FTS_ERROR_PROBE_QUERY: &str = "crumbsftsvalidation";
+
+impl FoodSearchRow {
+    fn into_result(self) -> Result<FoodSearchResult, SearchError<sqlx::Error>> {
+        let parsed_data = serde_json::from_str::<FoodData>(&self.parsed_data)
+            .map_err(|error| SearchError::Storage(sqlx::Error::Decode(Box::new(error))))?;
+        Ok(FoodSearchResult {
+            id: FoodId(self.id),
+            food: Food {
+                source: Source::Owned(self.source),
+                source_food_id: self.source_food_id,
+                food_type: FoodType::Owned(self.food_type),
+                description: self.description,
+                category: self.category,
+                parsed_data,
+            },
+        })
+    }
+}
+
+fn fts_query_error_message(error: &sqlx::Error) -> Option<&str> {
+    let database_error = error.as_database_error()?;
+    let sqlite_error = database_error.try_downcast_ref::<SqliteError>()?;
+    if is_fts_query_error(sqlite_error.message()) {
+        Some(sqlite_error.message())
+    } else {
+        None
+    }
+}
+
+fn is_fts_query_error(message: &str) -> bool {
+    message == "unterminated string"
+        || message.starts_with("fts5: syntax error")
+        || message == "fts5: parser stack overflow"
+        || message.starts_with("expected integer, got ")
+        || message.starts_with("fts5 expression tree is too large")
+        || message.starts_with("no such column: ")
+}
 
 #[derive(FromRow)]
 struct TagAssignmentRow {

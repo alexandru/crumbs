@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::Router;
-use crumbs_database::{Database, SearchError};
+use crumbs_database::{FoodReader, SearchError};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ErrorCode, Implementation,
     ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -18,11 +18,14 @@ use serde_json::{Map, Value, json};
 
 use crate::search::{self, SearchRequest};
 
-pub(crate) fn router(database: Arc<Database>, config: StreamableHttpServerConfig) -> Router {
+pub(crate) fn router<S>(reader: Arc<S>, config: StreamableHttpServerConfig) -> Router
+where
+    S: FoodReader + Send + 'static,
+{
     let service = StreamableHttpService::new(
         move || {
             Ok(FoodSearchServer {
-                database: Arc::clone(&database),
+                reader: Arc::clone(&reader),
             })
         },
         Arc::new(LocalSessionManager::default()),
@@ -41,11 +44,14 @@ pub(crate) fn config() -> StreamableHttpServerConfig {
         .enforce_origin_validation()
 }
 
-struct FoodSearchServer {
-    database: Arc<Database>,
+struct FoodSearchServer<S> {
+    reader: Arc<S>,
 }
 
-impl ServerHandler for FoodSearchServer {
+impl<S> ServerHandler for FoodSearchServer<S>
+where
+    S: FoodReader + Send + 'static,
+{
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("crumbs", env!("CARGO_PKG_VERSION")))
@@ -84,7 +90,7 @@ impl ServerHandler for FoodSearchServer {
             Ok(request) => request,
             Err(error) => return Ok(tool_error(error.to_string()).into()),
         };
-        match search::execute(&self.database, request).await {
+        match search::execute(self.reader.as_ref(), request).await {
             Ok(response) => {
                 let value = serde_json::to_value(response).map_err(|_| {
                     ErrorData::internal_error("food search serialization failed", None)

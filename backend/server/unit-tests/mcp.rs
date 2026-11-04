@@ -1,11 +1,16 @@
 use std::error::Error;
+use std::io;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use crumbs_database::nutrition::FoodData;
-use crumbs_database::{Database, DatabaseConfig, Food, FoodType, FoodWriter, Source, TagName};
+use crumbs_database::{
+    Database, DatabaseConfig, Food, FoodId, FoodReader, FoodSearchResult, FoodType, FoodWriter,
+    SearchError, SearchLimit, SearchQuery, Source, TagName,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -62,17 +67,24 @@ impl TestApplication {
     }
 
     async fn request(&self, request: Request<Body>) -> Result<ResponseBody, Box<dyn Error>> {
-        let response = self.router.clone().oneshot(request).await?;
-        let status = response.status();
-        let headers = response.headers().clone();
-        let body = to_bytes(response.into_body(), usize::MAX).await?;
-        let json = serde_json::from_slice(&body)?;
-        Ok(ResponseBody {
-            status,
-            headers,
-            json,
-        })
+        request_router(&self.router, request).await
     }
+}
+
+async fn request_router(
+    router: &Router,
+    request: Request<Body>,
+) -> Result<ResponseBody, Box<dyn Error>> {
+    let response = router.clone().oneshot(request).await?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let json = serde_json::from_slice(&body)?;
+    Ok(ResponseBody {
+        status,
+        headers,
+        json,
+    })
 }
 
 struct ResponseBody {
@@ -120,8 +132,13 @@ fn protocol_request(body: Value) -> Result<Request<Body>, Box<dyn Error>> {
 }
 
 async fn mcp_initialize(app: &TestApplication) -> Result<(), Box<dyn Error>> {
-    let response = app
-        .request(mcp_request(json!({
+    mcp_initialize_router(&app.router).await
+}
+
+async fn mcp_initialize_router(router: &Router) -> Result<(), Box<dyn Error>> {
+    let response = request_router(
+        router,
+        mcp_request(json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
@@ -130,13 +147,13 @@ async fn mcp_initialize(app: &TestApplication) -> Result<(), Box<dyn Error>> {
                 "capabilities": {},
                 "clientInfo": { "name": "transport-test", "version": "1" }
             }
-        }))?)
-        .await?;
+        }))?,
+    )
+    .await?;
     assert_eq!(response.status, StatusCode::OK, "{:?}", response.json);
     assert_eq!(response.json["result"]["capabilities"]["tools"], json!({}));
 
-    let initialized = app
-        .router
+    let initialized = router
         .clone()
         .oneshot(protocol_request(json!({
             "jsonrpc": "2.0",
@@ -153,13 +170,220 @@ async fn mcp_call(
     name: &str,
     arguments: Value,
 ) -> Result<ResponseBody, Box<dyn Error>> {
-    app.request(protocol_request(json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": "tools/call",
-        "params": { "name": name, "arguments": arguments }
-    }))?)
+    mcp_call_router(&app.router, id, name, arguments).await
+}
+
+async fn mcp_call_router(
+    router: &Router,
+    id: u64,
+    name: &str,
+    arguments: Value,
+) -> Result<ResponseBody, Box<dyn Error>> {
+    request_router(
+        router,
+        protocol_request(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments }
+        }))?,
+    )
     .await
+}
+
+#[tokio::test]
+async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result<(), Box<dyn Error>>
+{
+    let reader = Arc::new(RecordingFoodReader::default());
+    let router = crate::application(Arc::clone(&reader), config());
+
+    let http = request_router(&router, http_request("/foods/search?query=beans&limit=1")?).await?;
+    assert_eq!(http.status, StatusCode::OK, "{:?}", http.json);
+    assert_eq!(http.json["foods"][0]["description"], "Test lentils");
+    assert_eq!(
+        http.json["foods"][0]["parsed_data"]["nutrition"]["energy"],
+        "120 kcal"
+    );
+    assert_eq!(
+        http.json["foods"][0]["parsed_data"]["nutrition"]["protein"],
+        "8 g"
+    );
+    assert_eq!(
+        reader.invocations()?,
+        vec![SearchInvocation {
+            query: SearchQuery::new("beans")?,
+            limit: SearchLimit::from(1),
+        }]
+    );
+
+    mcp_initialize_router(&router).await?;
+    let mcp = mcp_call_router(
+        &router,
+        2,
+        SEARCH_TOOL_NAME,
+        json!({"query":"lentils", "limit":1001}),
+    )
+    .await?;
+    assert_eq!(mcp.status, StatusCode::OK, "{:?}", mcp.json);
+    assert_eq!(mcp.json["result"]["isError"], false);
+    let mcp_result = &mcp.json["result"]["structuredContent"];
+    assert_eq!(mcp_result["foods"][0]["description"], "Test lentils");
+    assert_eq!(
+        mcp_result["foods"][0]["parsed_data"]["nutrition"]["energy"],
+        "120 kcal"
+    );
+    assert_eq!(
+        reader.invocations()?,
+        vec![
+            SearchInvocation {
+                query: SearchQuery::new("beans")?,
+                limit: SearchLimit::from(1),
+            },
+            SearchInvocation {
+                query: SearchQuery::new("lentils")?,
+                limit: SearchLimit::from(1_001),
+            },
+        ]
+    );
+
+    reader.set_outcome(ReaderOutcome::InvalidQuery)?;
+    let http_invalid =
+        request_router(&router, http_request("/foods/search?query=invalid")?).await?;
+    assert_eq!(http_invalid.status, StatusCode::BAD_REQUEST);
+    assert_eq!(http_invalid.json["error"], "invalid FTS query from reader");
+    let mcp_invalid =
+        mcp_call_router(&router, 3, SEARCH_TOOL_NAME, json!({"query":"invalid"})).await?;
+    assert_eq!(mcp_invalid.status, StatusCode::OK);
+    assert_eq!(mcp_invalid.json["result"]["isError"], true);
+    assert_eq!(
+        mcp_invalid.json["result"]["structuredContent"]["error"],
+        "invalid FTS query from reader"
+    );
+
+    reader.set_outcome(ReaderOutcome::Storage)?;
+    let http_storage =
+        request_router(&router, http_request("/foods/search?query=storage")?).await?;
+    assert_eq!(http_storage.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(http_storage.json["error"], "food search failed");
+    assert!(
+        !http_storage
+            .json
+            .to_string()
+            .contains("private storage detail")
+    );
+    let mcp_storage =
+        mcp_call_router(&router, 4, SEARCH_TOOL_NAME, json!({"query":"storage"})).await?;
+    assert_eq!(mcp_storage.status, StatusCode::OK);
+    assert_eq!(mcp_storage.json["result"]["isError"], true);
+    assert_eq!(
+        mcp_storage.json["result"]["structuredContent"]["error"],
+        "food search failed"
+    );
+    assert!(
+        !mcp_storage
+            .json
+            .to_string()
+            .contains("private storage detail")
+    );
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReaderOutcome {
+    Success,
+    InvalidQuery,
+    Storage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SearchInvocation {
+    query: SearchQuery,
+    limit: SearchLimit,
+}
+
+struct RecordingFoodReader {
+    invocations: Mutex<Vec<SearchInvocation>>,
+    outcome: Mutex<ReaderOutcome>,
+}
+
+impl Default for RecordingFoodReader {
+    fn default() -> Self {
+        Self {
+            invocations: Mutex::new(Vec::new()),
+            outcome: Mutex::new(ReaderOutcome::Success),
+        }
+    }
+}
+
+impl RecordingFoodReader {
+    fn set_outcome(&self, outcome: ReaderOutcome) -> Result<(), Box<dyn Error>> {
+        *self
+            .outcome
+            .lock()
+            .map_err(|_| io::Error::other("recording reader outcome lock was poisoned"))? = outcome;
+        Ok(())
+    }
+
+    fn invocations(&self) -> Result<Vec<SearchInvocation>, Box<dyn Error>> {
+        Ok(self
+            .invocations
+            .lock()
+            .map_err(|_| io::Error::other("recording reader invocation lock was poisoned"))?
+            .clone())
+    }
+}
+
+impl FoodReader for RecordingFoodReader {
+    type Error = io::Error;
+
+    async fn search_foods(
+        &self,
+        query: &SearchQuery,
+        limit: SearchLimit,
+    ) -> Result<Vec<FoodSearchResult>, SearchError<Self::Error>> {
+        self.invocations
+            .lock()
+            .map_err(|_| {
+                SearchError::Storage(io::Error::other("recording reader lock was poisoned"))
+            })?
+            .push(SearchInvocation {
+                query: query.clone(),
+                limit,
+            });
+        let outcome = *self.outcome.lock().map_err(|_| {
+            SearchError::Storage(io::Error::other("recording reader lock was poisoned"))
+        })?;
+        match outcome {
+            ReaderOutcome::Success => {
+                let parsed_data = serde_json::from_value(json!({
+                    "nutrition": {
+                        "per": "100 g",
+                        "energy": "120 kcal",
+                        "protein": "8 g"
+                    },
+                    "serving_sizes": []
+                }))
+                .map_err(|error| SearchError::Storage(io::Error::other(error)))?;
+                Ok(vec![FoodSearchResult {
+                    id: FoodId(42),
+                    food: Food {
+                        source: Source::Borrowed("recording"),
+                        source_food_id: "fixture-42".to_owned(),
+                        food_type: FoodType::Borrowed("ingredient"),
+                        description: "Test lentils".to_owned(),
+                        category: Some("Legumes".to_owned()),
+                        parsed_data,
+                    },
+                }])
+            }
+            ReaderOutcome::InvalidQuery => Err(SearchError::InvalidQuery(
+                "invalid FTS query from reader".to_owned(),
+            )),
+            ReaderOutcome::Storage => Err(SearchError::Storage(io::Error::other(
+                "private storage detail",
+            ))),
+        }
+    }
 }
 
 #[tokio::test]

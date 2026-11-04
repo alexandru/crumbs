@@ -6,7 +6,10 @@ use std::time::{Duration, SystemTime};
 use sqlx::{FromRow, query_scalar};
 
 use crate::clock::{Clock, UnixMillis};
-use crate::{Database, DatabaseConfig, Food, FoodId, FoodWriter, Source, Tag, TagName};
+use crate::{
+    Database, DatabaseConfig, Food, FoodId, FoodReader, FoodSearchResult, FoodWriter, SearchError,
+    SearchLimit, SearchQuery, Source, Tag, TagName,
+};
 
 #[tokio::test]
 async fn inserts_application_timestamps_and_leaves_updates_empty() -> Result<(), Box<dyn StdError>>
@@ -443,4 +446,217 @@ async fn find_tag(database: &Database, name: &TagName) -> Result<Tag, Box<dyn St
 struct Timestamps {
     created_at: UnixMillis,
     updated_at: Option<UnixMillis>,
+}
+
+#[tokio::test]
+async fn searches_indexed_fields_and_returns_full_nutrition() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    let mut food = make_food("usda", "1", "Roșii coapte")?;
+    food.category = Some("Produce".to_owned());
+    let mut nutrition =
+        crate::nutrition::NutritionProfile::empty(crate::nutrition::NutritionBasis::Per100Grams);
+    nutrition.energy = Some("18 kcal".parse()?);
+    nutrition.protein = Some("0.9 g".parse()?);
+    food.parsed_data = crate::nutrition::FoodData {
+        nutrition: Some(nutrition),
+        serving_sizes: Vec::new(),
+    };
+    let id = database.upsert_food(&food).await?;
+    database
+        .set_food_tags(id, &[TagName::new("seasonal")?])
+        .await?;
+
+    for expression in [
+        "roșii",
+        "category:Produce",
+        "tags:seasonal",
+        "\"roșii coapte\"",
+    ] {
+        let results = search_database(&database, expression, SearchLimit::default()).await?;
+        let result = results
+            .first()
+            .ok_or_else(|| io::Error::other("expected a food search result"))?;
+        assert_eq!(results.len(), 1, "MATCH {expression:?}");
+        assert_eq!(result.id, id);
+        assert_eq!(result.food.parsed_data, food.parsed_data);
+        let json = serde_json::to_value(result)?;
+        assert_eq!(json["parsed_data"]["nutrition"]["energy"], "18 kcal");
+        assert_eq!(json["parsed_data"]["nutrition"]["protein"], "0.9 g");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn supports_boolean_prefix_and_diacritic_matching() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    let tomato = database
+        .upsert_food(&make_food("usda", "1", "Roșii ripe tomato")?)
+        .await?;
+    let potato = database
+        .upsert_food(&make_food("usda", "2", "Roșii potato")?)
+        .await?;
+
+    let mut matching_ids = search_food_ids(&database, "tomat* OR potato").await?;
+    matching_ids.sort_by_key(|id| id.0);
+    assert_eq!(matching_ids, [tomato, potato]);
+    assert_eq!(
+        search_food_ids(&database, "rosii AND potato").await?,
+        [potato]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn ranks_results_then_breaks_ties_by_food_id() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    let longer = database
+        .upsert_food(&make_food(
+            "usda",
+            "1",
+            "Chicken with long grain brown rice",
+        )?)
+        .await?;
+    let shorter = database
+        .upsert_food(&make_food("usda", "2", "Chicken soup")?)
+        .await?;
+    let tie_first = database
+        .upsert_food(&make_food("usda", "3", "Chicken bread")?)
+        .await?;
+    let tie_second = database
+        .upsert_food(&make_food("usda", "4", "Chicken cream")?)
+        .await?;
+
+    assert_eq!(
+        search_food_ids(&database, "chicken").await?,
+        [shorter, tie_first, tie_second, longer]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_returns_empty_for_unmatched_valid_expression() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    database
+        .upsert_food(&make_food("usda", "1", "Plain rice")?)
+        .await?;
+    assert!(
+        search_database(&database, "unicorn", SearchLimit::default())
+            .await?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_and_unknown_column_expressions_are_invalid_queries()
+-> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    for expression in [
+        "(milk OR cheese",
+        "\"unterminated",
+        "unknown:milk",
+        "NEAR(milk cheese, nope)",
+    ] {
+        let error = database
+            .search_foods(&SearchQuery::new(expression)?, SearchLimit::default())
+            .await
+            .err()
+            .ok_or_else(|| io::Error::other("expected invalid FTS5 expression error"))?;
+        assert!(matches!(error, SearchError::InvalidQuery(_)), "{error}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_search_column_is_reported_as_storage_failure() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    database
+        .upsert_food(&make_food("usda", "1", "Milk")?)
+        .await?;
+    sqlx::query("ALTER TABLE crumbs_foods RENAME COLUMN source TO source_broken")
+        .execute(&database.pool)
+        .await?;
+
+    let error = database
+        .search_foods(&SearchQuery::new("milk")?, SearchLimit::default())
+        .await
+        .err()
+        .ok_or_else(|| io::Error::other("expected a storage failure"))?;
+    assert!(matches!(error, SearchError::Storage(_)), "{error}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_search_index_is_reported_as_storage_failure() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    sqlx::query("DROP TABLE crumbs_foods_fts")
+        .execute(&database.pool)
+        .await?;
+
+    let error = database
+        .search_foods(&SearchQuery::new("milk")?, SearchLimit::default())
+        .await
+        .err()
+        .ok_or_else(|| io::Error::other("expected a storage failure"))?;
+    assert!(matches!(error, SearchError::Storage(_)), "{error}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_query_cannot_execute_sql_statements() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    database
+        .upsert_food(&make_food("usda", "1", "Milk")?)
+        .await?;
+    let expression = "milk'; DROP TABLE crumbs_foods; --";
+    let _ = database
+        .search_foods(&SearchQuery::new(expression)?, SearchLimit::default())
+        .await;
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM crumbs_foods")
+        .fetch_one(&database.pool)
+        .await?;
+    assert_eq!(count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn applies_limit_after_relevance_ranking() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    for index in 0..24 {
+        let description = format!("chicken food {index}");
+        database
+            .upsert_food(&make_food("usda", &index.to_string(), &description)?)
+            .await?;
+    }
+    assert_eq!(
+        search_database(&database, "chicken", SearchLimit::from(1))
+            .await?
+            .len(),
+        20
+    );
+    Ok(())
+}
+
+async fn search_database(
+    database: &Database,
+    expression: &str,
+    limit: SearchLimit,
+) -> Result<Vec<FoodSearchResult>, Box<dyn StdError>> {
+    Ok(database
+        .search_foods(&SearchQuery::new(expression)?, limit)
+        .await?)
+}
+
+async fn search_food_ids(
+    database: &Database,
+    expression: &str,
+) -> Result<Vec<FoodId>, Box<dyn StdError>> {
+    Ok(
+        search_database(database, expression, SearchLimit::default())
+            .await?
+            .into_iter()
+            .map(|result| result.id)
+            .collect(),
+    )
 }

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{Json, Router};
-use crumbs_database::Database;
+use crumbs_database::FoodReader;
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use serde::Serialize;
 use tokio::net::TcpListener;
@@ -78,7 +78,10 @@ pub enum Error {
 /// Returns an error if signal handlers cannot be created, the listener cannot
 /// bind, its address cannot be read, the readiness message cannot be written to
 /// standard output, or the HTTP server fails.
-pub async fn start(database: Arc<Database>, config: HttpConfig) -> Result<(), Error> {
+pub async fn start<S>(reader: Arc<S>, config: HttpConfig) -> Result<(), Error>
+where
+    S: FoodReader + Send + 'static,
+{
     // Handlers are installed before bind/readiness so Tokio buffers signals
     // that arrive during startup until the shutdown future is polled.
     let hangup = signal(SignalKind::hangup()).map_err(Error::Signal)?;
@@ -97,7 +100,7 @@ pub async fn start(database: Arc<Database>, config: HttpConfig) -> Result<(), Er
     let mcp_config = mcp::config();
     let cancellation = mcp_config.cancellation_token.clone();
     let _cancel_on_drop = cancellation.clone().drop_guard();
-    let application = application(database, mcp_config);
+    let application = application(reader, mcp_config);
 
     {
         let mut stdout = io::stdout().lock();
@@ -114,12 +117,15 @@ pub async fn start(database: Arc<Database>, config: HttpConfig) -> Result<(), Er
         .map_err(Error::Serve)
 }
 
-fn application(database: Arc<Database>, mcp_config: StreamableHttpServerConfig) -> Router {
+fn application<S>(reader: Arc<S>, mcp_config: StreamableHttpServerConfig) -> Router
+where
+    S: FoodReader + Send + 'static,
+{
     Router::new()
         .route("/", axum::routing::get(hello))
-        .route("/foods/search", axum::routing::get(search::handler))
-        .with_state(Arc::clone(&database))
-        .merge(mcp::router(database, mcp_config))
+        .route("/foods/search", axum::routing::get(search::handler::<S>))
+        .with_state(Arc::clone(&reader))
+        .merge(mcp::router(reader, mcp_config))
 }
 
 async fn shutdown_signal(mut hangup: Signal, mut interrupt: Signal, mut terminate: Signal) {
