@@ -2,22 +2,35 @@
 
 Crumbs is a self-hosted calorie tracker in early development. The first milestone is a food catalog that an MCP server can search and extend; the goal is to track daily caloric intake and burn.
 
-## Quick start
+## Run with Docker Compose
 
-Requires stable Rust.
+Requires Docker with Compose. Save this as `compose.yaml`:
 
-From the repository root:
+```yaml
+services:
+  crumbs:
+    image: ghcr.io/alexandru/crumbs:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - crumbs-data:/app/data
 
-```sh
-cd backend
-cargo run -p crumbs-main -- server start --config resources/application-sample.toml
+volumes:
+  crumbs-data:
 ```
 
-## Container
-
-From the repository root:
+From the same directory, start the server:
 
 ```sh
-docker build -t crumbs ./backend
-docker run --rm --name crumbs -p 8080:8080 crumbs
+docker compose up -d
 ```
+
+Download the [USDA Foundation Foods JSON dataset](https://fdc.nal.usda.gov/download-datasets/), extract the ZIP, and save the JSON file as `~/Downloads/usda.json`. Import it with:
+
+```sh
+docker compose run --rm --no-deps \
+  --volume "$HOME/Downloads/usda.json:/imports/usda.json:ro" \
+  crumbs db import-usda /imports/usda.json --config /app/application.toml
+```
+
+Stop the service with `docker compose down`; the `crumbs-data` volume keeps the database.
