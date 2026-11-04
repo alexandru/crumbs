@@ -64,14 +64,14 @@ async fn imports_foundation_foods_with_typed_data() -> Result<(), Box<dyn StdErr
     assert_eq!(parsed_data.nutrition, None);
     assert_eq!(parsed_data.serving_sizes.len(), 1);
     assert_eq!(
-        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        serving_size_at(&parsed_data, 0)?.quantity().to_string(),
         "33.9 g"
     );
     let food = food_row(&fixture.pool, "usda", "321360").await?;
     let parsed_data = food.parsed_data()?;
     assert_eq!(parsed_data.serving_sizes.len(), 1);
     assert_eq!(
-        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        serving_size_at(&parsed_data, 0)?.quantity().to_string(),
         "49.7 g"
     );
     Ok(())
@@ -94,7 +94,7 @@ async fn imports_branded_food_with_typed_data() -> Result<(), Box<dyn StdError>>
     let parsed_data = food.parsed_data()?;
     assert_eq!(parsed_data.serving_sizes.len(), 1);
     assert_eq!(
-        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        serving_size_at(&parsed_data, 0)?.quantity().to_string(),
         "28 g"
     );
     Ok(())
@@ -246,7 +246,7 @@ async fn imports_typed_nutrition_for_all_supported_usda_food_kinds() -> Result<(
         );
         for (index, expected) in case.expected_servings.iter().enumerate() {
             assert_eq!(
-                serving_size_at(&parsed_data, index)?.quantity.to_string(),
+                serving_size_at(&parsed_data, index)?.quantity().to_string(),
                 *expected
             );
         }
@@ -322,7 +322,7 @@ async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<d
     let parsed_data = food.parsed_data()?;
     assert_eq!(parsed_data.serving_sizes.len(), 1);
     assert_eq!(
-        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        serving_size_at(&parsed_data, 0)?.quantity().to_string(),
         "33.9 g"
     );
     let tagged_food_ids: Vec<RowId> = query_scalar(

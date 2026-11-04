@@ -174,26 +174,28 @@ fn serving_sizes_are_positive_measured_quantities_and_keep_servings_separate_fro
     assert!(
         data.serving_sizes
             .first()
-            .and_then(|serving| serving.quantity.volume())
+            .map(ServingSize::quantity)
+            .and_then(MeasuredQuantity::volume)
             .is_none()
     );
     assert!(
         data.serving_sizes
             .get(2)
-            .and_then(|serving| serving.quantity.mass())
+            .map(ServingSize::quantity)
+            .and_then(MeasuredQuantity::mass)
             .is_none()
     );
     assert_eq!(
         data.serving_sizes
             .first()
-            .map(|serving| serving.quantity.to_string())
+            .map(|serving| serving.quantity().to_string())
             .as_deref(),
         Some("30 g")
     );
     assert_eq!(
         data.serving_sizes
             .get(2)
-            .map(|serving| serving.quantity.to_string())
+            .map(|serving| serving.quantity().to_string())
             .as_deref(),
         Some("240 ml")
     );
@@ -207,14 +209,18 @@ fn serving_sizes_are_positive_measured_quantities_and_keep_servings_separate_fro
             .as_deref(),
         Some("7 g")
     );
-    for input in ["0 g", "0 ml", "-1 g", "1 kcal", "~ 1 g", "1 lb"] {
-        assert!(
-            MeasuredQuantity::from_str(input).is_err(),
-            "accepted invalid serving quantity {input}"
-        );
+    let zero_mass = MeasuredQuantity::from_str("0 g")?;
+    let zero_volume = MeasuredQuantity::from_str("0 ml")?;
+    assert!(zero_mass.value().is_zero());
+    assert!(zero_volume.value().is_zero());
+    for input in ["-1 g", "1 kcal", "~ 1 g", "1 lb"] {
+        assert!(MeasuredQuantity::from_str(input).is_err());
     }
     assert!(MeasuredQuantity::from_str("1 g").is_ok());
     assert!(MeasuredQuantity::from_str("1 ml").is_ok());
+    assert!(ServingSize::new("empty".to_owned(), zero_mass).is_err());
+    assert!(ServingSize::new("empty".to_owned(), zero_volume).is_err());
+    assert!(serde_json::from_str::<ServingSize>(r#"{"name":"empty","quantity":"0 g"}"#).is_err());
     Ok(())
 }
 
@@ -236,22 +242,13 @@ fn reported_values_cannot_encode_a_strict_zero_upper_bound() -> Result<(), Box<d
 }
 
 #[test]
-fn less_than_uses_a_positive_limit_proof() -> Result<(), Box<dyn Error>> {
-    let limit = Positive::try_new(Mass::from_str("0.55 g")?)?;
-    let reported = Reported::less_than(limit);
-
-    assert_eq!(reported.qualifier(), Qualifier::LessThan);
-    assert_eq!(reported.amount().to_string(), "0.55 g");
-    Ok(())
-}
-
-#[test]
 fn quantity_builder_parses_values_and_units_without_combining_strings() -> Result<(), Box<dyn Error>>
 {
     let reported = Reported::<Mass>::parse_with_unit("< 0.55", "µg")?;
     assert_eq!(reported.qualifier(), Qualifier::LessThan);
     assert_eq!(reported.amount().to_string(), "0.55 µg");
-    assert_eq!(reported.into_amount().to_string(), "0.55 µg");
+    let copied = reported;
+    assert_eq!(copied.amount().to_string(), "0.55 µg");
 
     assert!(Reported::<Mass>::parse_with_unit("0", "g").is_ok());
     assert!(Reported::<Mass>::parse_with_unit("-0.1", "g").is_err());
@@ -260,31 +257,21 @@ fn quantity_builder_parses_values_and_units_without_combining_strings() -> Resul
 }
 
 #[test]
-fn positive_measured_quantities_cannot_encode_zero() -> Result<(), Box<dyn Error>> {
-    let zero_mass = Mass::from_str("0 g")?;
-    let zero_volume = Millilitres::from_str("0 ml")?;
-    assert!(matches!(
-        Positive::try_new(zero_mass),
-        Err(QuantityError::NonPositive)
-    ));
-    assert!(matches!(
-        Positive::try_new(zero_volume),
-        Err(QuantityError::NonPositive)
-    ));
-
-    for quantity in [
-        MeasuredQuantity::from_str("0 g"),
-        MeasuredQuantity::from_str("0 ml"),
-    ] {
-        assert!(quantity.is_err());
-    }
+fn measured_quantity_parses_zero_while_serving_size_rejects_it() -> Result<(), Box<dyn Error>> {
+    let zero = MeasuredQuantity::from_str("0 g")?;
+    assert!(zero.value().is_zero());
+    assert!(ServingSize::new("empty".to_owned(), zero).is_err());
+    assert_eq!(
+        MeasuredQuantity::from_str("0.55 mg")?.value().to_string(),
+        "0.55"
+    );
     for quantity in ["1 g", "1 ml"] {
         let parsed = MeasuredQuantity::from_str(quantity)?;
         let encoded = serde_json::to_string(&parsed)?;
         let decoded: MeasuredQuantity = serde_json::from_str(&encoded)?;
         assert_eq!(decoded, parsed);
     }
-    assert!(serde_json::from_str::<MeasuredQuantity>("\"0 g\"").is_err());
+    assert!(serde_json::from_str::<MeasuredQuantity>("\"0 g\"").is_ok());
     Ok(())
 }
 

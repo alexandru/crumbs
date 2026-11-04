@@ -6,7 +6,7 @@ use serde_json::value::RawValue;
 
 use crumbs_database::nutrition::{
     Energy, FoodData, Mass, MeasuredQuantity, Measurement, NutritionBasis, NutritionProfile,
-    Positive, Qualifier, QuantityError, Reported, ServingSize,
+    Qualifier, QuantityError, Reported, ServingSize,
 };
 
 use super::FoodKind;
@@ -120,15 +120,15 @@ pub(super) fn parse_food_data(raw: &str, kind: FoodKind) -> Result<ParsedFoodDat
                         unit: unit.to_owned(),
                     });
                 }
-                let parsed = parse_amount_and_limit::<Energy>(
+                let energy = parse_amount_and_limit::<Energy>(
                     nutrient.amount.as_deref(),
                     nutrient.loq.as_deref(),
                     method.expected_unit(),
                     metadata.id,
                     "energy",
+                    &mut sanitizations,
                 )?;
-                sanitizations.extend(parsed.sanitizations);
-                let Some(energy) = parsed.amount else {
+                let Some(energy) = energy else {
                     continue;
                 };
                 energy_candidates.push((method, energy));
@@ -140,9 +140,9 @@ pub(super) fn parse_food_data(raw: &str, kind: FoodKind) -> Result<ParsedFoodDat
                     unit,
                     metadata.id,
                     "carbohydrates.sugars.total",
+                    &mut sanitizations,
                 )?;
-                sanitizations.extend(parsed.sanitizations);
-                let Some(amount) = parsed.amount else {
+                let Some(amount) = parsed else {
                     continue;
                 };
                 has_amount = true;
@@ -164,9 +164,9 @@ pub(super) fn parse_food_data(raw: &str, kind: FoodKind) -> Result<ParsedFoodDat
                     unit,
                     metadata.id,
                     field,
+                    &mut sanitizations,
                 )?;
-                sanitizations.extend(parsed.sanitizations);
-                let Some(amount) = parsed.amount else {
+                let Some(amount) = parsed else {
                     continue;
                 };
                 has_amount = true;
@@ -184,7 +184,7 @@ pub(super) fn parse_food_data(raw: &str, kind: FoodKind) -> Result<ParsedFoodDat
                 .iter()
                 .find(|(method, _)| *method == SugarMethod::Total)
         })
-        .map(|(_, amount)| amount.clone());
+        .map(|(_, amount)| *amount);
     profile.energy = select_energy(energy_candidates)?;
     let nutrition = (has_amount || profile.energy.is_some()).then_some(profile);
     Ok(ParsedFoodData {
@@ -415,7 +415,9 @@ fn branded_serving(record: &NutritionRecord) -> Result<Vec<ServingSize>, Nutriti
         .filter(|name| !name.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| quantity.to_string());
-    Ok(vec![ServingSize { name, quantity }])
+    Ok(vec![
+        ServingSize::new(name, quantity).map_err(|source| NutritionError::Serving { source })?,
+    ])
 }
 
 fn parse_food_portion(
@@ -434,7 +436,7 @@ fn parse_food_portion(
         Some(description) => description.to_owned(),
         None => portion_name(portion)?,
     };
-    Ok(ServingSize { name, quantity })
+    ServingSize::new(name, quantity).map_err(|source| NutritionError::Serving { source })
 }
 
 fn portion_name(portion: &FoodPortion) -> Result<String, NutritionError> {
@@ -468,12 +470,13 @@ fn parse_mass_amount(
     unit: &str,
     nutrient_id: NutrientId,
     field: &str,
-) -> Result<ParsedAmount<Mass>, NutritionError> {
+    sanitizations: &mut Vec<Sanitization>,
+) -> Result<Option<Reported<Mass>>, NutritionError> {
     let unit = normalize_mass_unit(unit).ok_or_else(|| NutritionError::IncompatibleUnit {
         nutrient_id,
         unit: unit.to_owned(),
     })?;
-    parse_amount_and_limit(amount, loq, unit, nutrient_id, field)
+    parse_amount_and_limit(amount, loq, unit, nutrient_id, field, sanitizations)
 }
 
 fn normalize_energy_unit(unit: &str) -> Option<&'static str> {
@@ -482,11 +485,6 @@ fn normalize_energy_unit(unit: &str) -> Option<&'static str> {
         "kj" => Some("kJ"),
         _ => None,
     }
-}
-
-struct ParsedAmount<T: Measurement> {
-    amount: Option<Reported<T>>,
-    sanitizations: Vec<Sanitization>,
 }
 
 enum SourceAmount<T: Measurement> {
@@ -501,8 +499,8 @@ fn parse_amount_and_limit<T: Measurement>(
     unit: &str,
     nutrient_id: NutrientId,
     field: &str,
-) -> Result<ParsedAmount<T>, NutritionError> {
-    let mut sanitizations = Vec::new();
+    sanitizations: &mut Vec<Sanitization>,
+) -> Result<Option<Reported<T>>, NutritionError> {
     let source_amount = match amount.map(raw_scalar).transpose()? {
         Some(raw_amount) => match Reported::<T>::parse_with_unit(&raw_amount, unit) {
             Ok(amount) => SourceAmount::Present(amount),
@@ -540,20 +538,17 @@ fn parse_amount_and_limit<T: Measurement>(
         None => None,
     };
 
-    let amount = match source_amount {
+    Ok(match source_amount {
         SourceAmount::Negative => None,
-        SourceAmount::Missing => limit.map(Reported::less_than),
+        SourceAmount::Missing => limit,
         SourceAmount::Present(amount) => match limit {
-            Some(limit) if amount.qualifier() == Qualifier::Exact && amount.amount().is_zero() => {
-                Some(Reported::less_than(limit))
+            Some(limit)
+                if amount.qualifier() == Qualifier::Exact && amount.amount().value().is_zero() =>
+            {
+                Some(limit)
             }
             _ => Some(amount),
         },
-    };
-
-    Ok(ParsedAmount {
-        amount,
-        sanitizations,
     })
 }
 
@@ -561,7 +556,7 @@ fn parse_limit<T: Measurement>(
     value: &str,
     unit: &str,
     nutrient_id: NutrientId,
-) -> Result<Option<Positive<T>>, NutritionError> {
+) -> Result<Option<Reported<T>>, NutritionError> {
     let parsed = match Reported::<T>::parse_with_unit(value, unit) {
         Ok(parsed) => parsed,
         Err(QuantityError::Negative) => return Ok(None),
@@ -576,9 +571,9 @@ fn parse_limit<T: Measurement>(
     if parsed.qualifier() != Qualifier::Exact {
         return Err(NutritionError::QualifiedLimitOfQuantification);
     }
-    match Positive::try_new(parsed.into_amount()) {
+    match Reported::new(Qualifier::LessThan, parsed.amount()) {
         Ok(limit) => Ok(Some(limit)),
-        Err(QuantityError::NonPositive) => Ok(None),
+        Err(QuantityError::ZeroStrictUpperBound) => Ok(None),
         Err(source) => Err(NutritionError::Amount {
             nutrient_id,
             value: format!("{value} {unit}"),

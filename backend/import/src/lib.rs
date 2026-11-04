@@ -170,14 +170,12 @@ where
 
     let consumer_result = consume(store, receiver, path, &mut on_diagnostic).await;
     let producer_result = producer.await;
+    let report = consumer_result?;
 
-    match consumer_result {
-        Err(error) => Err(error),
-        Ok(report) => match producer_result {
-            Ok(Ok(())) => Ok(report),
-            Ok(Err(source)) => Err(ImportError::stream(path, report, source)),
-            Err(source) => Err(ImportError::worker(path, report, source)),
-        },
+    match producer_result {
+        Ok(Ok(())) => Ok(report),
+        Ok(Err(source)) => Err(ImportError::stream(path, report, source)),
+        Err(source) => Err(ImportError::worker(path, report, source)),
     }
 }
 

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 mod quantity;
 pub use quantity::{
     Energy, Grams, Kilocalories, Kilojoules, Mass, MeasuredQuantity, Measurement, Micrograms,
-    Milligrams, Millilitres, Positive, Qualifier, QuantityError, Reported,
+    Milligrams, Millilitres, Qualifier, QuantityError, Reported,
 };
 
 /// Imported food details. Missing nutrition does not imply zero nutrients.
@@ -89,10 +89,41 @@ pub struct Sugars {
 
 /// A named portion with a known positive mass or volume.
 /// Nutrition remains on the profile basis and is not copied into servings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ServingSize {
     pub name: ServingName,
-    pub quantity: MeasuredQuantity,
+    quantity: MeasuredQuantity,
+}
+
+impl ServingSize {
+    /// Creates a named serving with a positive mass or volume.
+    pub fn new(name: ServingName, quantity: MeasuredQuantity) -> Result<Self, QuantityError> {
+        if quantity.value().is_zero() {
+            return Err(QuantityError::NonPositive);
+        }
+        Ok(Self { name, quantity })
+    }
+
+    /// Returns the serving's measured mass or volume.
+    pub const fn quantity(&self) -> MeasuredQuantity {
+        self.quantity
+    }
+}
+
+impl<'de> Deserialize<'de> for ServingSize {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Fields {
+            name: ServingName,
+            quantity: MeasuredQuantity,
+        }
+
+        let fields = Fields::deserialize(deserializer)?;
+        Self::new(fields.name, fields.quantity).map_err(serde::de::Error::custom)
+    }
 }
 
 /// Source-supplied display name of a measured portion.

@@ -178,7 +178,7 @@ fn streams_branded_food_and_preserves_gtin_text() -> Result<(), Box<dyn StdError
         food.parsed_data
             .serving_sizes
             .first()
-            .map(|serving| serving.quantity.to_string()),
+            .map(|serving| serving.quantity().to_string()),
         Some("28 g".to_owned())
     );
     Ok(())

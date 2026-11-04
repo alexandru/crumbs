@@ -31,17 +31,17 @@ pub enum Qualifier {
     Approximate,
 }
 
-/// A nonnegative decimal measurement that can parse a value in a supported unit.
-pub trait Measurement: sealed::Sealed + Copy + fmt::Display + FromStr<Err = QuantityError> {
-    /// Returns whether this quantity is zero.
-    fn is_zero(self) -> bool;
+/// A nonnegative decimal measurement in its retained source unit.
+pub trait Measurement: sealed::Sealed + Copy + fmt::Display {
+    /// Returns the decimal value in the retained source unit.
+    fn value(self) -> Decimal;
 
     /// Parses a decimal value and its unit without first formatting them together.
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError>;
 }
 
 /// A measured nutrient amount with its source-supplied qualification.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reported<T: Measurement> {
     qualifier: Qualifier,
     amount: T,
@@ -50,18 +50,10 @@ pub struct Reported<T: Measurement> {
 impl<T: Measurement> Reported<T> {
     /// Creates a reported amount, rejecting an impossible strict upper bound.
     pub fn new(qualifier: Qualifier, amount: T) -> Result<Self, QuantityError> {
-        if qualifier == Qualifier::LessThan && amount.is_zero() {
+        if qualifier == Qualifier::LessThan && amount.value().is_zero() {
             return Err(QuantityError::ZeroStrictUpperBound);
         }
         Ok(Self { qualifier, amount })
-    }
-
-    /// Creates a strict upper bound from an already validated positive limit.
-    pub fn less_than(limit: Positive<T>) -> Self {
-        Self {
-            qualifier: Qualifier::LessThan,
-            amount: limit.get(),
-        }
     }
 
     /// Parses a qualified decimal value and its unit.
@@ -77,12 +69,7 @@ impl<T: Measurement> Reported<T> {
     }
 
     /// Returns the measured amount.
-    pub const fn amount(&self) -> &T {
-        &self.amount
-    }
-
-    /// Returns the measured amount by value.
-    pub fn into_amount(self) -> T {
+    pub const fn amount(&self) -> T {
         self.amount
     }
 }
@@ -159,8 +146,8 @@ macro_rules! measurement {
         impl sealed::Sealed for $name {}
 
         impl Measurement for $name {
-            fn is_zero(self) -> bool {
-                self.0.is_zero()
+            fn value(self) -> Decimal {
+                self.0
             }
 
             fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
@@ -209,12 +196,12 @@ pub enum Mass {
 }
 
 impl Mass {
-    /// Returns whether this measured amount is zero.
-    pub fn is_zero(self) -> bool {
+    /// Returns the decimal value in the retained source unit.
+    pub fn value(self) -> Decimal {
         match self {
-            Self::Grams(value) => value.value().is_zero(),
-            Self::Milligrams(value) => value.value().is_zero(),
-            Self::Micrograms(value) => value.value().is_zero(),
+            Self::Grams(value) => value.value(),
+            Self::Milligrams(value) => value.value(),
+            Self::Micrograms(value) => value.value(),
         }
     }
 }
@@ -222,8 +209,8 @@ impl Mass {
 impl sealed::Sealed for Mass {}
 
 impl Measurement for Mass {
-    fn is_zero(self) -> bool {
-        Mass::is_zero(self)
+    fn value(self) -> Decimal {
+        Mass::value(self)
     }
 
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
@@ -267,11 +254,11 @@ pub enum Energy {
 }
 
 impl Energy {
-    /// Returns whether this measured amount is zero.
-    pub fn is_zero(self) -> bool {
+    /// Returns the decimal value in the retained source unit.
+    pub fn value(self) -> Decimal {
         match self {
-            Self::Kilocalories(value) => value.value().is_zero(),
-            Self::Kilojoules(value) => value.value().is_zero(),
+            Self::Kilocalories(value) => value.value(),
+            Self::Kilojoules(value) => value.value(),
         }
     }
 }
@@ -279,8 +266,8 @@ impl Energy {
 impl sealed::Sealed for Energy {}
 
 impl Measurement for Energy {
-    fn is_zero(self) -> bool {
-        Energy::is_zero(self)
+    fn value(self) -> Decimal {
+        Energy::value(self)
     }
 
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
@@ -314,37 +301,26 @@ impl fmt::Display for Energy {
     }
 }
 
-/// A positive measurement of any supported dimension.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Positive<T: Measurement>(T);
-
-impl<T: Measurement> Positive<T> {
-    /// Creates a positive measurement.
-    pub fn try_new(value: T) -> Result<Self, QuantityError> {
-        if value.is_zero() {
-            return Err(QuantityError::NonPositive);
-        }
-        Ok(Self(value))
-    }
-
-    /// Returns the positive measurement.
-    pub const fn get(self) -> T {
-        self.0
-    }
-}
-
-/// A positive serving quantity with its mass or volume dimension preserved.
+/// A mass or volume that retains its source unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeasuredQuantity {
-    Mass(Positive<Mass>),
-    Volume(Positive<Millilitres>),
+    Mass(Mass),
+    Volume(Millilitres),
 }
 
 impl MeasuredQuantity {
+    /// Returns the decimal value in the retained source unit.
+    pub fn value(self) -> Decimal {
+        match self {
+            Self::Mass(value) => value.value(),
+            Self::Volume(value) => value.value(),
+        }
+    }
+
     /// Returns the measured mass, when the serving has a mass measurement.
     pub const fn mass(self) -> Option<Mass> {
         match self {
-            Self::Mass(mass) => Some(mass.get()),
+            Self::Mass(mass) => Some(mass),
             Self::Volume(_) => None,
         }
     }
@@ -352,7 +328,7 @@ impl MeasuredQuantity {
     /// Returns the measured volume, when the serving has a volume measurement.
     pub const fn volume(self) -> Option<Millilitres> {
         match self {
-            Self::Volume(volume) => Some(volume.get()),
+            Self::Volume(volume) => Some(volume),
             Self::Mass(_) => None,
         }
     }
@@ -362,23 +338,20 @@ impl FromStr for MeasuredQuantity {
     type Err = QuantityError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let (_, unit) = split_quantity(value)?;
-        let quantity = if unit == "ml" {
-            let volume: Millilitres = value.parse()?;
-            Self::Volume(Positive::try_new(volume)?)
-        } else {
-            let mass: Mass = value.parse()?;
-            Self::Mass(Positive::try_new(mass)?)
-        };
-        Ok(quantity)
+        let (number, unit) = split_quantity(value)?;
+        match unit {
+            "ml" => Ok(Self::Volume(Millilitres::parse_with_unit(number, unit)?)),
+            "g" | "mg" | "µg" => Ok(Self::Mass(Mass::parse_with_unit(number, unit)?)),
+            _ => Err(QuantityError::Unit(unit.to_owned())),
+        }
     }
 }
 
 impl fmt::Display for MeasuredQuantity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Mass(value) => value.get().fmt(f),
-            Self::Volume(value) => value.get().fmt(f),
+            Self::Mass(value) => value.fmt(f),
+            Self::Volume(value) => value.fmt(f),
         }
     }
 }

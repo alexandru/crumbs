@@ -112,7 +112,7 @@ fn supports_each_usda_food_kind_and_branded_mass_or_volume_basis() -> Result<(),
         .serving_sizes
         .first()
         .ok_or_else(|| io::Error::other("branded measured serving is missing"))?;
-    assert_eq!(serving.quantity.to_string(), "250 ml");
+    assert_eq!(serving.quantity().to_string(), "250 ml");
     assert!(
         parse_data(
             r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
@@ -351,13 +351,13 @@ fn stores_multiple_measured_portions_without_inventing_volume() -> Result<(), Bo
     assert_eq!(
         data.serving_sizes
             .first()
-            .map(|serving| serving.quantity.to_string()),
+            .map(|serving| serving.quantity().to_string()),
         Some("30 g".to_owned())
     );
     assert_eq!(
         data.serving_sizes
             .get(1)
-            .map(|serving| serving.quantity.to_string()),
+            .map(|serving| serving.quantity().to_string()),
         Some("60 g".to_owned())
     );
 
