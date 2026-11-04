@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 mod quantity;
 pub use quantity::{
-    Energy, Grams, Kilocalories, Kilojoules, Mass, Micrograms, Milligrams, Millilitres, Qualifier,
-    QuantityError, Reported, ServingQuantity,
+    Energy, Grams, Kilocalories, Kilojoules, Mass, MeasuredQuantity, Measurement, Micrograms,
+    Milligrams, Millilitres, Positive, Qualifier, QuantityError, Reported,
 };
 
 /// Imported food details. Missing nutrition does not imply zero nutrients.
@@ -92,7 +92,7 @@ pub struct Sugars {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServingSize {
     pub name: ServingName,
-    pub quantity: ServingQuantity,
+    pub quantity: MeasuredQuantity,
 }
 
 /// Source-supplied display name of a measured portion.

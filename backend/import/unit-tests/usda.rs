@@ -220,7 +220,7 @@ fn allows_missing_and_null_categories() -> Result<(), Box<dyn StdError>> {
     result?;
 
     assert_eq!(foods.len(), 2);
-    for food in &foods {
+    for food in &foods.foods {
         assert_eq!(food.category, None);
     }
     Ok(())
@@ -408,18 +408,10 @@ fn rejects_missing_header_fields_with_json_position() -> Result<(), Box<dyn StdE
         let input = document("FoundationFoods", &[record]);
         let (result, foods) = collect(input.as_bytes(), 1);
         assert!(foods.is_empty());
-        let error = error(result)?;
-        match error {
-            ParseError::Record {
-                position,
-                source: RecordError::Header(source),
-            } => {
-                assert_eq!(position.get(), 1);
-                assert!(source.line() > 0);
-                assert!(source.column() > 0);
-            }
-            other => return Err(io::Error::other(format!("unexpected error: {other}")).into()),
-        }
+        result?;
+        let rejected = first_rejection(&foods)?;
+        assert_eq!(rejected.position, 1);
+        assert!(rejected.reason.contains("malformed food header"));
     }
     Ok(())
 }
@@ -439,16 +431,11 @@ fn rejects_wrong_header_field_types() -> Result<(), Box<dyn StdError>> {
         let input = document("FoundationFoods", &[record]);
         let (result, foods) = collect(input.as_bytes(), 1);
         assert!(foods.is_empty());
-        let error = error(result)?;
+        result?;
         assert!(
-            matches!(
-                error,
-                ParseError::Record {
-                    source: RecordError::Header(_),
-                    ..
-                }
-            ),
-            "wrong-type record did not produce a header error"
+            first_rejection(&foods)?
+                .reason
+                .contains("malformed food header")
         );
     }
     Ok(())
@@ -459,18 +446,10 @@ fn rejects_positional_array_record() -> Result<(), Box<dyn StdError>> {
     let input = document("FoundationFoods", &[r#"[123,"Apple","Foundation"]"#]);
     let (result, foods) = collect(input.as_bytes(), 1);
     assert!(foods.is_empty());
-    let error = error(result)?;
-
-    assert!(
-        matches!(
-            error,
-            ParseError::Record {
-                position,
-                source: RecordError::NotObject,
-            } if position.get() == 1
-        ),
-        "positional array was accepted as a food record"
-    );
+    result?;
+    let rejected = first_rejection(&foods)?;
+    assert_eq!(rejected.position, 1);
+    assert!(rejected.reason.contains("must be a JSON object"));
     Ok(())
 }
 
@@ -482,18 +461,25 @@ fn rejects_zero_fdc_id() -> Result<(), Box<dyn StdError>> {
     );
     let (result, foods) = collect(input.as_bytes(), 1);
     assert!(foods.is_empty());
-    let error = error(result)?;
+    result?;
+    let rejected = first_rejection(&foods)?;
+    assert_eq!(rejected.position, 1);
+    assert_eq!(rejected.source_food_id.as_deref(), Some("0"));
+    assert!(rejected.reason.contains("fdcId must be positive"));
+    Ok(())
+}
 
-    assert!(
-        matches!(
-            error,
-            ParseError::Record {
-                position,
-                source: RecordError::ZeroFdcId,
-            } if position.get() == 1
-        ),
-        "zero fdcId was not rejected"
-    );
+#[test]
+fn preserves_readable_invalid_source_ids_in_rejection_details() -> Result<(), Box<dyn StdError>> {
+    let records = [
+        r#"{"fdcId":"abc","description":"String ID","dataType":"Foundation"}"#,
+        r#"{"fdcId":null,"description":"Null ID","dataType":"Foundation"}"#,
+    ];
+    let (result, foods) = collect(document("FoundationFoods", &records).as_bytes(), 1);
+    result?;
+    assert_eq!(foods.rejected.len(), 2);
+    assert_eq!(foods.rejected[0].source_food_id.as_deref(), Some("abc"));
+    assert_eq!(foods.rejected[1].source_food_id, None);
     Ok(())
 }
 
@@ -508,18 +494,11 @@ fn rejects_blank_description_with_record_position() -> Result<(), Box<dyn StdErr
     );
     let (result, foods) = collect(input.as_bytes(), 1);
     assert_eq!(foods.len(), 1);
-    let error = error(result)?;
-
-    assert!(
-        matches!(
-            error,
-            ParseError::Record {
-                position,
-                source: RecordError::BlankDescription,
-            } if position.get() == 2
-        ),
-        "blank description was not rejected at record two"
-    );
+    result?;
+    let rejected = first_rejection(&foods)?;
+    assert_eq!(rejected.position, 2);
+    assert_eq!(rejected.source_food_id.as_deref(), Some("3"));
+    assert!(rejected.reason.contains("description must not be blank"));
     Ok(())
 }
 
@@ -531,19 +510,14 @@ fn rejects_root_and_data_type_mismatch() -> Result<(), Box<dyn StdError>> {
     );
     let (result, foods) = collect(input.as_bytes(), 1);
     assert!(foods.is_empty());
-    let error = error(result)?;
-
-    match error {
-        ParseError::Record {
-            position,
-            source: RecordError::KindMismatch { root, data_type },
-        } => {
-            assert_eq!(position.get(), 1);
-            assert_eq!(root, FoodKind::Foundation);
-            assert_eq!(data_type, FoodKind::Branded);
-        }
-        other => return Err(io::Error::other(format!("unexpected error: {other}")).into()),
-    }
+    result?;
+    let rejected = first_rejection(&foods)?;
+    assert_eq!(rejected.position, 1);
+    assert!(
+        rejected
+            .reason
+            .contains("does not match the Foundation root")
+    );
     Ok(())
 }
 
@@ -572,25 +546,40 @@ fn rejects_malformed_category_types() -> Result<(), Box<dyn StdError>> {
         let input = document(root, &[record]);
         let (result, foods) = collect(input.as_bytes(), 1);
         assert!(foods.is_empty(), "record was accepted: {record}");
-        let error = error(result)?;
+        result?;
         assert!(
-            matches!(
-                error,
-                ParseError::Record {
-                    source: RecordError::Header(_),
-                    ..
-                }
-            ),
-            "malformed category did not produce a header error"
+            first_rejection(&foods)?
+                .reason
+                .contains("malformed food header")
         );
     }
     Ok(())
 }
 
 #[test]
+fn continues_after_rejected_food_and_reports_the_bad_nutrient() -> Result<(), Box<dyn StdError>> {
+    let records = [
+        IO_FAILURE_FIRST_RECORD,
+        r#"{"fdcId":2,"description":"Bad nutrient","dataType":"Foundation","foodNutrients":[{"nutrient":{"id":1003,"unitName":"stone"},"amount":1}]}"#,
+        IO_FAILURE_SECOND_RECORD,
+    ];
+    let (result, foods) = collect(document("FoundationFoods", &records).as_bytes(), 1);
+    result?;
+    assert_eq!(foods.len(), 2);
+    assert_eq!(foods.rejected.len(), 1);
+    let rejected = first_rejection(&foods)?;
+    assert_eq!(rejected.position, 2);
+    assert_eq!(rejected.source_food_id.as_deref(), Some("2"));
+    assert_eq!(rejected.field.as_deref(), Some("nutrient[1003]"));
+    assert!(rejected.reason.contains("incompatible unit"));
+    assert_eq!(foods.get(1).map(|food| food.fdc_id.as_str()), Some("2"));
+    Ok(())
+}
+
+#[test]
 fn reports_consumer_disconnect() -> Result<(), Box<dyn StdError>> {
     let input = document("FoundationFoods", &[FOUNDATION_RECORD_NULL_CATEGORY]);
-    let (sender, receiver) = mpsc::channel::<PreparedFood>(1);
+    let (sender, receiver) = mpsc::channel::<StreamItem>(1);
     drop(receiver);
 
     let result = stream_foods(input.as_bytes(), &sender);
@@ -609,7 +598,7 @@ fn reports_consumer_disconnect() -> Result<(), Box<dyn StdError>> {
 #[test]
 fn streams_large_input_to_incremental_consumer() -> Result<(), Box<dyn StdError>> {
     let input = generated_foundation_json(5_000);
-    let (sender, mut receiver) = mpsc::channel::<PreparedFood>(1);
+    let (sender, mut receiver) = mpsc::channel::<StreamItem>(1);
 
     let consumer = thread::spawn(move || {
         let first = receiver.blocking_recv();
@@ -624,7 +613,7 @@ fn streams_large_input_to_incremental_consumer() -> Result<(), Box<dyn StdError>
     let consumer_result = consumer.join();
     assert!(consumer_result.is_ok(), "consumer thread panicked");
     let first = consumer_result.ok().flatten();
-    assert!(first.is_some(), "consumer received no record");
+    assert!(matches!(first, Some(Ok(_))), "consumer received no food");
     let bytes_read = reader.bytes_read();
 
     let error = error(result)?;
@@ -676,13 +665,6 @@ impl FoodCategory {
     }
 }
 
-impl RecordPosition {
-    /// Returns the position as a one-based number.
-    const fn get(self) -> usize {
-        self.0.get()
-    }
-}
-
 fn document(root: &str, records: &[&str]) -> String {
     let mut input = String::from("{\"");
     input.push_str(root);
@@ -692,21 +674,28 @@ fn document(root: &str, records: &[&str]) -> String {
     input
 }
 
-fn collect(input: &[u8], capacity: usize) -> (Result<(), ParseError>, Vec<PreparedFood>) {
+fn collect(input: &[u8], capacity: usize) -> (Result<(), ParseError>, CollectedFoods) {
     collect_reader(input, capacity)
 }
 
-fn collect_reader(
-    input: impl Read,
-    capacity: usize,
-) -> (Result<(), ParseError>, Vec<PreparedFood>) {
-    let (sender, mut receiver) = mpsc::channel(capacity);
+fn collect_reader(input: impl Read, capacity: usize) -> (Result<(), ParseError>, CollectedFoods) {
+    let (sender, mut receiver) = mpsc::channel::<StreamItem>(capacity);
     let consumer = thread::spawn(move || {
-        let mut foods = Vec::new();
-        while let Some(food) = receiver.blocking_recv() {
-            foods.push(food);
+        let mut collected = CollectedFoods::default();
+        while let Some(item) = receiver.blocking_recv() {
+            match item {
+                Ok(food) => collected.foods.push(food),
+                Err(rejected) => {
+                    collected.rejected.push(RejectedRecord {
+                        position: rejected.position.get(),
+                        source_food_id: rejected.source_food_id,
+                        field: rejected.field,
+                        reason: rejected.reason,
+                    });
+                }
+            }
         }
-        foods
+        collected
     });
 
     let result = stream_foods(input, &sender);
@@ -716,6 +705,41 @@ fn collect_reader(
     assert!(consumer_result.is_ok(), "consumer thread panicked");
     let foods = consumer_result.unwrap_or_default();
     (result, foods)
+}
+
+#[derive(Default)]
+struct CollectedFoods {
+    foods: Vec<PreparedFood>,
+    rejected: Vec<RejectedRecord>,
+}
+
+impl CollectedFoods {
+    fn len(&self) -> usize {
+        self.foods.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.foods.is_empty()
+    }
+    fn last(&self) -> Option<&PreparedFood> {
+        self.foods.last()
+    }
+    fn get(&self, index: usize) -> Option<&PreparedFood> {
+        self.foods.get(index)
+    }
+}
+
+struct RejectedRecord {
+    position: usize,
+    source_food_id: Option<String>,
+    field: Option<String>,
+    reason: String,
+}
+
+fn first_rejection(foods: &CollectedFoods) -> Result<&RejectedRecord, io::Error> {
+    foods
+        .rejected
+        .first()
+        .ok_or_else(|| io::Error::other("rejection is missing"))
 }
 
 fn record_offset(input: &str, record: &str) -> Result<usize, io::Error> {
@@ -761,8 +785,9 @@ fn require_document_read_error(error: &ParseError) -> Result<(), io::Error> {
     }
 }
 
-fn first_food(foods: &[PreparedFood]) -> Result<&PreparedFood, io::Error> {
+fn first_food(foods: &CollectedFoods) -> Result<&PreparedFood, io::Error> {
     foods
+        .foods
         .first()
         .ok_or_else(|| io::Error::other("no food records"))
 }

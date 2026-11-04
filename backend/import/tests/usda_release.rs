@@ -13,7 +13,7 @@ use sqlx::{SqlitePool, query, query_scalar};
 use common::DatabaseFixture;
 use crumbs_database::nutrition::{FoodData, Mass};
 use crumbs_database::{Database, FoodId as DatabaseFoodId, TagName};
-use crumbs_import::{ImportError, import_usda};
+use crumbs_import::{DiagnosticKind, ImportDiagnostic, import_usda_with_diagnostics};
 
 mod common;
 
@@ -21,8 +21,12 @@ const RELEASE_JSON_ENV: &str = "USDA_FOUNDATION_JSON";
 const ENV_HELP: &str = "USDA_FOUNDATION_JSON must point at the official 2026-10-29 Foundation JSON";
 const PINNED_RELEASE: ReleaseDate = "2026-10-29";
 const FOUNDATION_FOOD_COUNT: FoodCount = 424;
-const COMMITTED_PREFIX_COUNT: FoodCount = 314;
-const REJECTED_FOOD_ID: SourceFoodIdRef<'_> = "2727566";
+const COMMITTED_FOOD_COUNT: FoodCount = 424;
+const SANITIZED_FOOD_COUNT: FoodCount = 10;
+const SANITIZED_FOOD_IDS: [&str; 10] = [
+    "2727566", "2727567", "2727568", "2727569", "2727570", "2727571", "2727575", "2727576",
+    "2747656", "2747673",
+];
 const EXPECTED_SOURCE: SourceRef<'_> = "usda";
 const EXPECTED_FOOD_TYPE: FoodTypeRef<'_> = "Foundation";
 
@@ -31,7 +35,6 @@ type ReleaseDate = &'static str;
 type FoodCount = usize;
 type SourceRef<'a> = &'a str;
 type FoodTypeRef<'a> = &'a str;
-type SourceFoodIdRef<'a> = &'a str;
 type FtsQuery<'a> = &'a str;
 type FtsPhrase = String;
 type MigrationCount = i64;
@@ -104,7 +107,7 @@ struct StoredFood {
 
 #[tokio::test]
 #[ignore = "requires USDA_FOUNDATION_JSON pointing to the official October 2026 Foundation download"]
-async fn rejects_negative_fooddata_amount_and_preserves_committed_prefix_on_retry() -> TestResult {
+async fn sanitizes_negative_fooddata_amount_and_preserves_foods_and_tags_on_retry() -> TestResult {
     let json_path = foundation_json_path()?;
     let reference = load_reference(&json_path)?;
 
@@ -112,15 +115,15 @@ async fn rejects_negative_fooddata_amount_and_preserves_committed_prefix_on_retr
     let applied_before = applied_migrations(&fixture.pool).await?;
     assert!(applied_before > 0, "no applied migration");
 
-    let first_error = require_rejected_release_import(&fixture.database, &json_path).await?;
-    verify_rejection(&first_error);
+    let (first_report, first_diagnostics) = import_release(&fixture.database, &json_path).await?;
+    verify_report(first_report, &first_diagnostics);
     let mut first = read_stored(&fixture.pool).await?;
     verify_reference(&first, &reference)?;
     assert!(
         first.iter().all(|food| food.tags.is_empty()),
         "initial import assigned tags"
     );
-    assert_food_absent(&fixture.pool, REJECTED_FOOD_ID).await?;
+    verify_negative_carbohydrates_absent(&first)?;
     let reviewed_tag = TagName::new("Reviewed")?;
     let (reviewed_food_id, reviewed_food_local_id) = match first.first_mut() {
         Some(food) => {
@@ -141,12 +144,12 @@ async fn rejects_negative_fooddata_amount_and_preserves_committed_prefix_on_retr
     let applied_after_reopen = applied_migrations(&fixture.pool).await?;
     assert_eq!(applied_after_reopen, applied_before, "reopen migrations");
 
-    let second_error = require_rejected_release_import(&fixture.database, &json_path).await?;
-    verify_rejection(&second_error);
+    let (second_report, second_diagnostics) = import_release(&fixture.database, &json_path).await?;
+    verify_report(second_report, &second_diagnostics);
     let second = read_stored(&fixture.pool).await?;
     assert_eq!(first, second, "reimport changed stored foods");
     verify_reference(&second, &reference)?;
-    assert_food_absent(&fixture.pool, REJECTED_FOOD_ID).await?;
+    verify_negative_carbohydrates_absent(&second)?;
     verify_fts(&fixture.pool, &second).await?;
     let tag_matches = matching_rowids(&fixture.pool, "tags:reviewed").await?;
     assert_eq!(
@@ -217,11 +220,8 @@ async fn read_stored(pool: &SqlitePool) -> Result<Vec<StoredFood>, sqlx::Error> 
 }
 
 fn verify_reference(stored: &[StoredFood], reference: &ReferenceFoods) -> TestResult {
-    assert_eq!(stored.len(), COMMITTED_PREFIX_COUNT, "row count");
-    for (food, expected_source_food_id) in stored
-        .iter()
-        .zip(reference.order.iter().take(COMMITTED_PREFIX_COUNT))
-    {
+    assert_eq!(stored.len(), COMMITTED_FOOD_COUNT, "row count");
+    for (food, expected_source_food_id) in stored.iter().zip(reference.order.iter()) {
         let source_food_id = food.source_food_id.as_str();
         assert_eq!(
             &food.source_food_id, expected_source_food_id,
@@ -257,51 +257,72 @@ fn verify_reference(stored: &[StoredFood], reference: &ReferenceFoods) -> TestRe
     Ok(())
 }
 
-async fn require_rejected_release_import(
+async fn import_release(
     database: &Database,
     path: &Path,
-) -> Result<ImportError, Box<dyn StdError>> {
-    match import_usda(database, path).await {
-        Ok(report) => Err(invalid_data(format!(
-            "full release import unexpectedly succeeded with {} commits",
-            report.committed().get()
-        ))),
-        Err(error) => Ok(error),
-    }
+) -> Result<(crumbs_import::ImportReport, Vec<ImportDiagnostic>), Box<dyn StdError>> {
+    let mut diagnostics = Vec::new();
+    let report = import_usda_with_diagnostics(database, path, |diagnostic| {
+        diagnostics.push(diagnostic.clone());
+        Ok(())
+    })
+    .await?;
+    Ok((report, diagnostics))
 }
 
-fn verify_rejection(error: &ImportError) {
-    let message = error_chain(error);
-    assert!(message.contains("record 315"), "{message}");
-    assert!(message.contains("committed 314 foods"), "{message}");
-    assert!(message.contains("-0.475 g"), "{message}");
-    assert!(
-        message.contains("measurements must not be negative"),
-        "{message}"
+fn verify_report(report: crumbs_import::ImportReport, diagnostics: &[ImportDiagnostic]) {
+    assert_eq!(
+        report.committed().get(),
+        COMMITTED_FOOD_COUNT,
+        "committed count"
     );
-}
-
-fn error_chain(error: &dyn StdError) -> String {
-    let mut messages = Vec::new();
-    let mut source = Some(error);
-    while let Some(error) = source {
-        messages.push(error.to_string());
-        source = error.source();
+    assert_eq!(
+        report.sanitized().get(),
+        SANITIZED_FOOD_COUNT,
+        "sanitized count"
+    );
+    assert_eq!(report.rejected().get(), 0, "rejected count");
+    assert_eq!(diagnostics.len(), SANITIZED_FOOD_COUNT, "diagnostic count");
+    let actual_ids: Vec<&str> = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            assert_eq!(diagnostic.source, EXPECTED_SOURCE);
+            assert_eq!(diagnostic.kind, DiagnosticKind::Sanitized);
+            assert_eq!(
+                diagnostic.field.as_deref(),
+                Some("carbohydrates.including_fibre")
+            );
+            assert!(diagnostic.reason.contains("negative source amount"));
+            diagnostic.source_food_id.as_deref().unwrap_or("unknown")
+        })
+        .collect();
+    assert_eq!(actual_ids, SANITIZED_FOOD_IDS, "sanitized food IDs");
+    for (diagnostic, expected_position) in diagnostics
+        .iter()
+        .zip([315, 316, 317, 318, 319, 320, 324, 325, 343, 360])
+    {
+        assert_eq!(diagnostic.position.get(), expected_position);
     }
-    messages.join(": ")
 }
 
-async fn assert_food_absent(
-    pool: &SqlitePool,
-    source_food_id: SourceFoodIdRef<'_>,
-) -> Result<(), sqlx::Error> {
-    let count: i64 =
-        query_scalar("SELECT COUNT(*) FROM crumbs_foods WHERE source = ? AND source_food_id = ?")
-            .bind(EXPECTED_SOURCE)
-            .bind(source_food_id)
-            .fetch_one(pool)
-            .await?;
-    assert_eq!(count, 0, "rejected food {source_food_id} was stored");
+fn verify_negative_carbohydrates_absent(stored: &[StoredFood]) -> TestResult {
+    for source_food_id in SANITIZED_FOOD_IDS {
+        let food = stored
+            .iter()
+            .find(|food| food.source_food_id == source_food_id)
+            .ok_or_else(|| invalid_data(format!("missing sanitized food {source_food_id}")))?;
+        let parsed_data: FoodData = serde_json::from_str(&food.parsed_data).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid parsed_data {source_food_id}: {error}"),
+            )
+        })?;
+        let carbohydrate = parsed_data
+            .nutrition
+            .as_ref()
+            .and_then(|profile| profile.carbohydrates.including_fibre.as_ref());
+        assert_eq!(carbohydrate, None, "negative carbohydrate {source_food_id}");
+    }
     Ok(())
 }
 

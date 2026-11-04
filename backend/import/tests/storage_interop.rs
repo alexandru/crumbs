@@ -175,12 +175,18 @@ async fn import_failure_keeps_earlier_food_searchable_and_retry_succeeds()
         fixture.directory.path(),
         "partial.json",
         r#"{"FoundationFoods":[
-            {"fdcId":9401,"description":"Searchable first food","dataType":"Foundation"},
-            {"fdcId":9402,"description":"  ","dataType":"Foundation"}
+            {"fdcId":9401,"description":"Searchable first food","dataType":"Foundation","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":-1}]},
+            {"fdcId":9402,"description":"Malformed food","dataType":"Foundation",}
         ]}"#,
     )?;
 
-    assert!(import_usda(&fixture.database, &path).await.is_err());
+    let error = import_usda(&fixture.database, &path)
+        .await
+        .err()
+        .ok_or_else(|| io::Error::other("malformed record unexpectedly imported"))?;
+    assert_eq!(error.report().committed().get(), 1);
+    assert_eq!(error.report().sanitized().get(), 1);
+    assert_eq!(error.report().rejected().get(), 0);
     let first = food_id(&fixture.pool, "usda", "9401").await?;
     assert_matches(&fixture.pool, "searchable", &[first]).await?;
     assert_matches(&fixture.pool, "second", &[]).await?;
