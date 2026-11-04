@@ -13,8 +13,10 @@ pub enum QuantityError {
     Decimal(String),
     #[error("measurements must not be negative")]
     Negative,
-    #[error("serving quantities must be positive")]
+    #[error("measurements must be positive")]
     NonPositive,
+    #[error("a strict upper bound must be greater than zero")]
+    ZeroStrictUpperBound,
 }
 
 /// A comparison or approximation supplied by the source.
@@ -29,38 +31,60 @@ pub enum Qualifier {
     Approximate,
 }
 
-/// A measured nutrient amount with its source-supplied qualification.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reported<T> {
-    pub qualifier: Qualifier,
-    pub amount: T,
+/// A nonnegative decimal measurement in its retained source unit.
+pub trait Measurement: sealed::Sealed + Copy + fmt::Display {
+    /// Returns the decimal value in the retained source unit.
+    fn value(self) -> Decimal;
+
+    /// Parses a decimal value and its unit without first formatting them together.
+    fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError>;
 }
 
-impl<T: FromStr<Err = QuantityError>> FromStr for Reported<T> {
-    type Err = QuantityError;
+/// A measured nutrient amount with its source-supplied qualification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reported<T: Measurement> {
+    qualifier: Qualifier,
+    amount: T,
+}
 
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
+impl<T: Measurement> Reported<T> {
+    /// Creates a reported amount, rejecting an impossible strict upper bound.
+    pub fn new(qualifier: Qualifier, amount: T) -> Result<Self, QuantityError> {
+        if qualifier == Qualifier::LessThan && amount.value().is_zero() {
+            return Err(QuantityError::ZeroStrictUpperBound);
+        }
+        Ok(Self { qualifier, amount })
+    }
+
+    /// Parses a qualified decimal value and its unit.
+    pub fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
         let value = value.trim();
-        let (qualifier, rest) = [
-            ("<=", Qualifier::AtMost),
-            (">=", Qualifier::AtLeast),
-            ("≤", Qualifier::AtMost),
-            ("≥", Qualifier::AtLeast),
-            ("<", Qualifier::LessThan),
-            (">", Qualifier::GreaterThan),
-            ("~", Qualifier::Approximate),
-        ]
-        .into_iter()
-        .find_map(|(prefix, qualifier)| value.strip_prefix(prefix).map(|rest| (qualifier, rest)))
-        .unwrap_or((Qualifier::Exact, value));
-        Ok(Self {
-            qualifier,
-            amount: rest.trim().parse()?,
-        })
+        let (qualifier, amount) = qualifier_and_amount(value);
+        Self::new(qualifier, T::parse_with_unit(amount.trim(), unit)?)
+    }
+
+    /// Returns the source-supplied comparison or approximation.
+    pub const fn qualifier(&self) -> Qualifier {
+        self.qualifier
+    }
+
+    /// Returns the measured amount.
+    pub const fn amount(&self) -> T {
+        self.amount
     }
 }
 
-impl<T: fmt::Display> fmt::Display for Reported<T> {
+impl<T: Measurement> FromStr for Reported<T> {
+    type Err = QuantityError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (qualifier, rest) = qualifier_and_amount(value.trim());
+        let (number, unit) = split_quantity(rest.trim())?;
+        Self::new(qualifier, T::parse_with_unit(number, unit)?)
+    }
+}
+
+impl<T: Measurement> fmt::Display for Reported<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let prefix = match self.qualifier {
             Qualifier::Exact => "",
@@ -74,13 +98,13 @@ impl<T: fmt::Display> fmt::Display for Reported<T> {
     }
 }
 
-impl<T: fmt::Display> Serialize for Reported<T> {
+impl<T: Measurement> Serialize for Reported<T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
     }
 }
 
-impl<'de, T: FromStr<Err = QuantityError>> Deserialize<'de> for Reported<T> {
+impl<'de, T: Measurement> Deserialize<'de> for Reported<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         String::deserialize(deserializer)?
             .parse()
@@ -96,6 +120,14 @@ macro_rules! measurement {
         pub struct $name(Decimal);
 
         impl $name {
+            /// Creates a nonnegative quantity from an exact fixed-point value.
+            pub fn try_new(value: Decimal) -> Result<Self, QuantityError> {
+                if value.is_sign_negative() && !value.is_zero() {
+                    return Err(QuantityError::Negative);
+                }
+                Ok(Self(value))
+            }
+
             /// Returns the exact fixed-point value in this unit.
             pub const fn value(self) -> Decimal {
                 self.0
@@ -107,10 +139,22 @@ macro_rules! measurement {
 
             fn from_str(value: &str) -> Result<Self, Self::Err> {
                 let (number, unit) = split_quantity(value)?;
+                <Self as Measurement>::parse_with_unit(number, unit)
+            }
+        }
+
+        impl sealed::Sealed for $name {}
+
+        impl Measurement for $name {
+            fn value(self) -> Decimal {
+                self.0
+            }
+
+            fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
                 if unit != $unit {
                     return Err(QuantityError::Unit(unit.to_owned()));
                 }
-                Ok(Self(parse_decimal(number)?))
+                Self::try_new(parse_decimal(value)?)
             }
         }
 
@@ -152,12 +196,33 @@ pub enum Mass {
 }
 
 impl Mass {
-    /// Returns whether this measured amount is zero.
-    pub fn is_zero(self) -> bool {
+    /// Returns the decimal value in the retained source unit.
+    pub fn value(self) -> Decimal {
         match self {
-            Self::Grams(value) => value.value().is_zero(),
-            Self::Milligrams(value) => value.value().is_zero(),
-            Self::Micrograms(value) => value.value().is_zero(),
+            Self::Grams(value) => value.value(),
+            Self::Milligrams(value) => value.value(),
+            Self::Micrograms(value) => value.value(),
+        }
+    }
+}
+
+impl sealed::Sealed for Mass {}
+
+impl Measurement for Mass {
+    fn value(self) -> Decimal {
+        Mass::value(self)
+    }
+
+    fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
+        match unit {
+            "g" => Ok(Self::Grams(Grams::try_new(parse_decimal(value)?)?)),
+            "mg" => Ok(Self::Milligrams(Milligrams::try_new(parse_decimal(
+                value,
+            )?)?)),
+            "µg" => Ok(Self::Micrograms(Micrograms::try_new(parse_decimal(
+                value,
+            )?)?)),
+            _ => Err(QuantityError::Unit(unit.to_owned())),
         }
     }
 }
@@ -166,12 +231,8 @@ impl FromStr for Mass {
     type Err = QuantityError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match split_quantity(value)?.1 {
-            "g" => Ok(Self::Grams(value.parse()?)),
-            "mg" => Ok(Self::Milligrams(value.parse()?)),
-            "µg" => Ok(Self::Micrograms(value.parse()?)),
-            unit => Err(QuantityError::Unit(unit.to_owned())),
-        }
+        let (number, unit) = split_quantity(value)?;
+        <Self as Measurement>::parse_with_unit(number, unit)
     }
 }
 
@@ -193,11 +254,31 @@ pub enum Energy {
 }
 
 impl Energy {
-    /// Returns whether this measured amount is zero.
-    pub fn is_zero(self) -> bool {
+    /// Returns the decimal value in the retained source unit.
+    pub fn value(self) -> Decimal {
         match self {
-            Self::Kilocalories(value) => value.value().is_zero(),
-            Self::Kilojoules(value) => value.value().is_zero(),
+            Self::Kilocalories(value) => value.value(),
+            Self::Kilojoules(value) => value.value(),
+        }
+    }
+}
+
+impl sealed::Sealed for Energy {}
+
+impl Measurement for Energy {
+    fn value(self) -> Decimal {
+        Energy::value(self)
+    }
+
+    fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
+        match unit {
+            "kcal" => Ok(Self::Kilocalories(Kilocalories::try_new(parse_decimal(
+                value,
+            )?)?)),
+            "kJ" => Ok(Self::Kilojoules(Kilojoules::try_new(parse_decimal(
+                value,
+            )?)?)),
+            _ => Err(QuantityError::Unit(unit.to_owned())),
         }
     }
 }
@@ -206,11 +287,8 @@ impl FromStr for Energy {
     type Err = QuantityError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match split_quantity(value)?.1 {
-            "kcal" => Ok(Self::Kilocalories(value.parse()?)),
-            "kJ" => Ok(Self::Kilojoules(value.parse()?)),
-            unit => Err(QuantityError::Unit(unit.to_owned())),
-        }
+        let (number, unit) = split_quantity(value)?;
+        <Self as Measurement>::parse_with_unit(number, unit)
     }
 }
 
@@ -223,65 +301,67 @@ impl fmt::Display for Energy {
     }
 }
 
-/// A positive measured serving quantity. Mass and volume remain distinct.
+/// A mass or volume that retains its source unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ServingQuantity(MeasuredQuantity);
+pub enum MeasuredQuantity {
+    Mass(Mass),
+    Volume(Millilitres),
+}
 
-impl ServingQuantity {
+impl MeasuredQuantity {
+    /// Returns the decimal value in the retained source unit.
+    pub fn value(self) -> Decimal {
+        match self {
+            Self::Mass(value) => value.value(),
+            Self::Volume(value) => value.value(),
+        }
+    }
+
     /// Returns the measured mass, when the serving has a mass measurement.
     pub const fn mass(self) -> Option<Mass> {
-        match self.0 {
-            MeasuredQuantity::Mass(mass) => Some(mass),
-            MeasuredQuantity::Volume(_) => None,
+        match self {
+            Self::Mass(mass) => Some(mass),
+            Self::Volume(_) => None,
         }
     }
 
     /// Returns the measured volume, when the serving has a volume measurement.
     pub const fn volume(self) -> Option<Millilitres> {
-        match self.0 {
-            MeasuredQuantity::Volume(volume) => Some(volume),
-            MeasuredQuantity::Mass(_) => None,
+        match self {
+            Self::Volume(volume) => Some(volume),
+            Self::Mass(_) => None,
         }
     }
 }
 
-impl FromStr for ServingQuantity {
+impl FromStr for MeasuredQuantity {
     type Err = QuantityError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let quantity = if split_quantity(value)?.1 == "ml" {
-            let volume: Millilitres = value.parse()?;
-            if volume.value().is_zero() {
-                return Err(QuantityError::NonPositive);
-            }
-            MeasuredQuantity::Volume(volume)
-        } else {
-            let mass: Mass = value.parse()?;
-            if mass.is_zero() {
-                return Err(QuantityError::NonPositive);
-            }
-            MeasuredQuantity::Mass(mass)
-        };
-        Ok(Self(quantity))
-    }
-}
-
-impl fmt::Display for ServingQuantity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            MeasuredQuantity::Mass(value) => value.fmt(f),
-            MeasuredQuantity::Volume(value) => value.fmt(f),
+        let (number, unit) = split_quantity(value)?;
+        match unit {
+            "ml" => Ok(Self::Volume(Millilitres::parse_with_unit(number, unit)?)),
+            _ => Ok(Self::Mass(Mass::parse_with_unit(number, unit)?)),
         }
     }
 }
 
-impl Serialize for ServingQuantity {
+impl fmt::Display for MeasuredQuantity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mass(value) => value.fmt(f),
+            Self::Volume(value) => value.fmt(f),
+        }
+    }
+}
+
+impl Serialize for MeasuredQuantity {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
     }
 }
 
-impl<'de> Deserialize<'de> for ServingQuantity {
+impl<'de> Deserialize<'de> for MeasuredQuantity {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         String::deserialize(deserializer)?
             .parse()
@@ -289,10 +369,23 @@ impl<'de> Deserialize<'de> for ServingQuantity {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MeasuredQuantity {
-    Mass(Mass),
-    Volume(Millilitres),
+mod sealed {
+    pub trait Sealed {}
+}
+
+fn qualifier_and_amount(value: &str) -> (Qualifier, &str) {
+    [
+        ("<=", Qualifier::AtMost),
+        (">=", Qualifier::AtLeast),
+        ("≤", Qualifier::AtMost),
+        ("≥", Qualifier::AtLeast),
+        ("<", Qualifier::LessThan),
+        (">", Qualifier::GreaterThan),
+        ("~", Qualifier::Approximate),
+    ]
+    .into_iter()
+    .find_map(|(prefix, qualifier)| value.strip_prefix(prefix).map(|rest| (qualifier, rest)))
+    .unwrap_or((Qualifier::Exact, value))
 }
 
 fn split_quantity(value: &str) -> Result<(&str, &str), QuantityError> {
@@ -313,12 +406,7 @@ fn parse_decimal(value: &str) -> Result<Decimal, QuantityError> {
         value
     };
     // from_str_exact rejects excess scale instead of rounding to the decimal capacity.
-    let decimal =
-        Decimal::from_str_exact(value).map_err(|_| QuantityError::Decimal(value.to_owned()))?;
-    if decimal.is_sign_negative() && !decimal.is_zero() {
-        return Err(QuantityError::Negative);
-    }
-    Ok(decimal)
+    Decimal::from_str_exact(value).map_err(|_| QuantityError::Decimal(value.to_owned()))
 }
 
 fn expand_decimal(base: &str, exponent: &str) -> Option<String> {

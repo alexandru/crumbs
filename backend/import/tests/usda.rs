@@ -14,7 +14,9 @@ use crumbs_database::nutrition::{FoodData, NutritionBasis, ServingSize};
 use crumbs_database::{
     Database, Food, FoodCategory, FoodDescription, FoodId, FoodWriter, SourceFoodId, TagName,
 };
-use crumbs_import::{ImportError, import_usda};
+use crumbs_import::{
+    DiagnosticKind, ImportDiagnostic, ImportError, import_usda, import_usda_with_diagnostics,
+};
 
 mod common;
 
@@ -62,14 +64,14 @@ async fn imports_foundation_foods_with_typed_data() -> Result<(), Box<dyn StdErr
     assert_eq!(parsed_data.nutrition, None);
     assert_eq!(parsed_data.serving_sizes.len(), 1);
     assert_eq!(
-        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        serving_size_at(&parsed_data, 0)?.quantity().to_string(),
         "33.9 g"
     );
     let food = food_row(&fixture.pool, "usda", "321360").await?;
     let parsed_data = food.parsed_data()?;
     assert_eq!(parsed_data.serving_sizes.len(), 1);
     assert_eq!(
-        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        serving_size_at(&parsed_data, 0)?.quantity().to_string(),
         "49.7 g"
     );
     Ok(())
@@ -92,7 +94,7 @@ async fn imports_branded_food_with_typed_data() -> Result<(), Box<dyn StdError>>
     let parsed_data = food.parsed_data()?;
     assert_eq!(parsed_data.serving_sizes.len(), 1);
     assert_eq!(
-        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        serving_size_at(&parsed_data, 0)?.quantity().to_string(),
         "28 g"
     );
     Ok(())
@@ -244,7 +246,7 @@ async fn imports_typed_nutrition_for_all_supported_usda_food_kinds() -> Result<(
         );
         for (index, expected) in case.expected_servings.iter().enumerate() {
             assert_eq!(
-                serving_size_at(&parsed_data, index)?.quantity.to_string(),
+                serving_size_at(&parsed_data, index)?.quantity().to_string(),
                 *expected
             );
         }
@@ -254,21 +256,22 @@ async fn imports_typed_nutrition_for_all_supported_usda_food_kinds() -> Result<(
 }
 
 #[tokio::test]
-async fn nutrition_parse_error_on_second_record_reports_committed_progress()
--> Result<(), Box<dyn StdError>> {
+async fn unsupported_nutrition_unit_rejects_only_its_food() -> Result<(), Box<dyn StdError>> {
     let fixture = DatabaseFixture::open().await?;
     let first_nutrients = test_nutrients(&[], "3.25", None);
     let first = food_record(9501, "Foundation", &first_nutrients, "");
     let invalid_nutrient = nutrient(1003, "203", "Protein", "oz", "1");
     let second = food_record(9502, "Foundation", &[invalid_nutrient], "");
-    let input = food_document("FoundationFoods", &[first, second]);
+    let third = food_record(9503, "Foundation", &test_nutrients(&[], "2", None), "");
+    let input = food_document("FoundationFoods", &[first, second, third]);
     let path = write_input(fixture.directory.path(), "invalid-nutrition.json", &input)?;
 
-    let error = require_import_error(&fixture.database, &path).await?;
+    let report = import_usda(&fixture.database, &path).await?;
 
-    assert!(error.to_string().contains("record 2"), "{error}");
-    assert!(error.to_string().contains("committed 1 foods"), "{error}");
-    assert_eq!(food_count(&fixture.pool).await?, 1);
+    assert_eq!(report.committed().get(), 2);
+    assert_eq!(report.sanitized().get(), 0);
+    assert_eq!(report.rejected().get(), 1);
+    assert_eq!(food_count(&fixture.pool).await?, 2);
     let first_food = food_row(&fixture.pool, "usda", "9501").await?;
     assert_eq!(
         first_food
@@ -281,6 +284,7 @@ async fn nutrition_parse_error_on_second_record_reports_committed_progress()
         Some("3.25 g")
     );
     assert_row_absent(&fixture.pool, "usda", "9502").await?;
+    food_row(&fixture.pool, "usda", "9503").await?;
     Ok(())
 }
 
@@ -318,7 +322,7 @@ async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<d
     let parsed_data = food.parsed_data()?;
     assert_eq!(parsed_data.serving_sizes.len(), 1);
     assert_eq!(
-        serving_size_at(&parsed_data, 0)?.quantity.to_string(),
+        serving_size_at(&parsed_data, 0)?.quantity().to_string(),
         "33.9 g"
     );
     let tagged_food_ids: Vec<RowId> = query_scalar(
@@ -437,7 +441,7 @@ async fn empty_recognized_array_succeeds_with_zero_commits() -> Result<(), Box<d
 }
 
 #[tokio::test]
-async fn rejects_empty_malformed_unknown_and_mismatched_inputs() -> Result<(), Box<dyn StdError>> {
+async fn rejects_invalid_document_framing_and_root_inputs() -> Result<(), Box<dyn StdError>> {
     let fixture = DatabaseFixture::open().await?;
     let cases = [
         ("", "invalid USDA FoodData Central document"),
@@ -445,10 +449,6 @@ async fn rejects_empty_malformed_unknown_and_mismatched_inputs() -> Result<(), B
         (r#"{"OtherFoods":[]}"#, "unsupported USDA root"),
         (r#"{"FoundationFoods":{}}"#, "invalid type"),
         (r#"{"FoundationFoods":[{"fdcId":1,}]}"#, "record 1"),
-        (
-            r#"{"FoundationFoods":[{"fdcId":1,"description":"Food","dataType":"Branded"}]}"#,
-            "does not match",
-        ),
     ];
 
     for (index, (contents, message)) in cases.into_iter().enumerate() {
@@ -462,8 +462,215 @@ async fn rejects_empty_malformed_unknown_and_mismatched_inputs() -> Result<(), B
         );
         assert!(error.to_string().contains("committed 0 foods"));
         assert!(error.to_string().contains(&path.display().to_string()));
+        assert_eq!(error.report().committed().get(), 0);
+        assert_eq!(error.report().sanitized().get(), 0);
+        assert_eq!(error.report().rejected().get(), 0);
         assert_eq!(food_count(&fixture.pool).await?, 0);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn import_continues_after_sanitized_and_rejected_foods_with_diagnostics()
+-> Result<(), Box<dyn StdError>> {
+    let fixture = DatabaseFixture::open().await?;
+    let first = food_record(9601, "Foundation", &test_nutrients(&[], "3", None), "");
+    let sanitized_nutrients = [
+        nutrient(2048, "2048", "Atwater Specific Factors", "kcal", "-1"),
+        nutrient(2047, "2047", "Atwater General Factors", "kcal", "42"),
+        nutrient(1003, "203", "Protein", "g", "-2"),
+        r#"{"nutrient":{"id":1093,"number":"307","name":"Sodium","unitName":"mg"},"amount":1.5,"loq":0}"#.to_owned(),
+        r#"{"nutrient":{"id":1079,"number":"291","name":"Fiber","unitName":"g"},"amount":null,"loq":0}"#.to_owned(),
+        r#"{"nutrient":{"id":1009,"number":"209","name":"Starch","unitName":"g"},"amount":0.2,"loq":0.55}"#.to_owned(),
+        r#"{"nutrient":{"id":1235,"number":"539","name":"Added sugars","unitName":"g"},"amount":1,"loq":-0.1}"#.to_owned(),
+    ];
+    let sanitized = food_record(9602, "Foundation", &sanitized_nutrients, "");
+    let missing_description =
+        r#"{"fdcId":9603,"dataType":"Foundation","foodNutrients":[]}"#.to_owned();
+    let invalid_unit = food_record(
+        9604,
+        "Foundation",
+        &[nutrient(1003, "203", "Protein", "oz", "1")],
+        "",
+    );
+    let invalid_precision = food_record(
+        9605,
+        "Foundation",
+        &[nutrient(
+            1003,
+            "203",
+            "Protein",
+            "g",
+            "0.12345678901234567890123456789",
+        )],
+        "",
+    );
+    let impossible_bound = food_record(
+        9606,
+        "Foundation",
+        &[nutrient(1003, "203", "Protein", "g", "\"< 0\"")],
+        "",
+    );
+    let invalid_serving = food_record(
+        9607,
+        "Foundation",
+        &[],
+        r#", "foodPortions":[{"portionDescription":"zero portion","gramWeight":0}]"#,
+    );
+    let last = food_record(9608, "Foundation", &test_nutrients(&[], "8", None), "");
+    let input = food_document(
+        "FoundationFoods",
+        &[
+            first,
+            sanitized,
+            missing_description,
+            invalid_unit,
+            invalid_precision,
+            impossible_bound,
+            invalid_serving,
+            last,
+        ],
+    );
+    let path = write_input(fixture.directory.path(), "recoverable.json", &input)?;
+    let mut diagnostics = Vec::<ImportDiagnostic>::new();
+
+    let report = import_usda_with_diagnostics(&fixture.database, &path, |diagnostic| {
+        diagnostics.push(diagnostic.clone());
+        Ok(())
+    })
+    .await?;
+
+    assert_eq!(report.committed().get(), 3);
+    assert_eq!(report.sanitized().get(), 1);
+    assert_eq!(report.rejected().get(), 5);
+    assert_eq!(food_count(&fixture.pool).await?, 3);
+    food_row(&fixture.pool, "usda", "9601").await?;
+    food_row(&fixture.pool, "usda", "9608").await?;
+    let sanitized_row = food_row(&fixture.pool, "usda", "9602").await?;
+    let parsed = sanitized_row.parsed_data()?;
+    let profile = parsed
+        .nutrition
+        .as_ref()
+        .ok_or_else(|| io::Error::other("sanitized food has no nutrition profile"))?;
+    assert_eq!(
+        profile.energy.as_ref().map(ToString::to_string).as_deref(),
+        Some("42 kcal")
+    );
+    assert_eq!(profile.protein, None);
+    assert_eq!(
+        profile.sodium.as_ref().map(ToString::to_string).as_deref(),
+        Some("1.5 mg")
+    );
+    assert_eq!(profile.fibre, None);
+    assert_eq!(
+        profile
+            .carbohydrates
+            .starch
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("0.2 g")
+    );
+    assert_eq!(
+        profile
+            .carbohydrates
+            .sugars
+            .added
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("1 g")
+    );
+    assert!(!serde_json::to_string(&parsed)?.contains("< 0"));
+
+    let sanitized_diagnostics: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.kind == DiagnosticKind::Sanitized)
+        .collect();
+    assert_eq!(sanitized_diagnostics.len(), 5);
+    for field in [
+        "energy",
+        "protein",
+        "sodium",
+        "fibre",
+        "carbohydrates.sugars.added",
+    ] {
+        assert!(
+            sanitized_diagnostics.iter().any(|diagnostic| {
+                diagnostic.source == "usda"
+                    && diagnostic.source_food_id.as_deref() == Some("9602")
+                    && diagnostic.position.get() == 2
+                    && diagnostic.field.as_deref() == Some(field)
+                    && !diagnostic.reason.is_empty()
+            }),
+            "missing sanitization diagnostic for {field}"
+        );
+    }
+
+    let rejected_diagnostics: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.kind == DiagnosticKind::Rejected)
+        .collect();
+    assert_eq!(rejected_diagnostics.len(), 5);
+    for source_food_id in ["9603", "9604", "9605", "9606", "9607"] {
+        assert!(
+            rejected_diagnostics.iter().any(|diagnostic| {
+                diagnostic.source == "usda"
+                    && diagnostic.source_food_id.as_deref() == Some(source_food_id)
+                    && diagnostic.position.get() > 0
+                    && !diagnostic.reason.is_empty()
+            }),
+            "missing rejected diagnostic for {source_food_id}"
+        );
+        assert_row_absent(&fixture.pool, "usda", source_food_id).await?;
+    }
+    assert!(rejected_diagnostics.iter().any(|diagnostic| {
+        diagnostic.source_food_id.as_deref() == Some("9604")
+            && diagnostic.field.as_deref() == Some("nutrient[1003]")
+    }));
+    assert!(rejected_diagnostics.iter().any(|diagnostic| {
+        diagnostic.source_food_id.as_deref() == Some("9607")
+            && diagnostic.field.as_deref() == Some("serving_sizes")
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn diagnostic_callback_failure_returns_completed_counts_without_deadlock()
+-> Result<(), Box<dyn StdError>> {
+    let fixture = DatabaseFixture::open().await?;
+    let sanitized = food_record(
+        9611,
+        "Foundation",
+        &[nutrient(1003, "203", "Protein", "g", "-1")],
+        "",
+    );
+    let later = food_record(9612, "Foundation", &[], "");
+    let input = food_document("FoundationFoods", &[sanitized, later]);
+    let path = write_input(fixture.directory.path(), "diagnostic-failure.json", &input)?;
+
+    let result = tokio::time::timeout(
+        IMPORT_TIMEOUT,
+        import_usda_with_diagnostics(&fixture.database, &path, |_| {
+            Err(io::Error::other("diagnostic output failed"))
+        }),
+    )
+    .await
+    .map_err(|_| io::Error::other("import deadlocked after diagnostic callback failed"))?;
+    let error = result
+        .err()
+        .ok_or_else(|| io::Error::other("import unexpectedly succeeded"))?;
+
+    assert!(
+        error.to_string().contains("diagnostic output failed"),
+        "{error}"
+    );
+    assert_eq!(error.report().committed().get(), 1);
+    assert_eq!(error.report().sanitized().get(), 1);
+    assert_eq!(error.report().rejected().get(), 0);
+    assert_eq!(food_count(&fixture.pool).await?, 1);
+    food_row(&fixture.pool, "usda", "9611").await?;
+    assert_row_absent(&fixture.pool, "usda", "9612").await?;
     Ok(())
 }
 
@@ -479,6 +686,9 @@ async fn late_framing_error_keeps_committed_food() -> Result<(), Box<dyn StdErro
     let error = require_import_error(&fixture.database, &path).await?;
 
     assert!(error.to_string().contains("committed 1 foods"), "{error}");
+    assert_eq!(error.report().committed().get(), 1);
+    assert_eq!(error.report().sanitized().get(), 0);
+    assert_eq!(error.report().rejected().get(), 0);
     assert!(error.source().is_some(), "import error lost its source");
     assert!(
         error.source().and_then(StdError::source).is_some(),
@@ -490,37 +700,27 @@ async fn late_framing_error_keeps_committed_food() -> Result<(), Box<dyn StdErro
 }
 
 #[tokio::test]
-async fn parse_failure_after_valid_food_keeps_earlier_commit_and_retry_succeeds()
--> Result<(), Box<dyn StdError>> {
+async fn malformed_required_header_rejects_food_and_continues() -> Result<(), Box<dyn StdError>> {
     let fixture = DatabaseFixture::open().await?;
     let path = write_input(
         fixture.directory.path(),
         "partial.json",
         r#"{"FoundationFoods":[
             {"fdcId":9101,"description":"First food","dataType":"Foundation"},
-            {"fdcId":9102,"description":"  ","dataType":"Foundation"}
+            {"fdcId":9102,"dataType":"Foundation"},
+            {"fdcId":9103,"description":"Third food","dataType":"Foundation"}
         ]}"#,
     )?;
 
-    let error = require_import_error(&fixture.database, &path).await?;
-
-    assert!(error.to_string().contains("record 2"), "{error}");
-    assert!(error.to_string().contains("committed 1 foods"), "{error}");
-    assert_eq!(food_count(&fixture.pool).await?, 1);
-    food_row(&fixture.pool, "usda", "9101").await?;
-
-    fs::write(
-        &path,
-        r#"{"FoundationFoods":[
-            {"fdcId":9101,"description":"First food","dataType":"Foundation"},
-            {"fdcId":9102,"description":"Second food","dataType":"Foundation"}
-        ]}"#,
-    )?;
     let report = import_usda(&fixture.database, &path).await?;
 
     assert_eq!(report.committed().get(), 2);
+    assert_eq!(report.sanitized().get(), 0);
+    assert_eq!(report.rejected().get(), 1);
     assert_eq!(food_count(&fixture.pool).await?, 2);
-    food_row(&fixture.pool, "usda", "9102").await?;
+    food_row(&fixture.pool, "usda", "9101").await?;
+    food_row(&fixture.pool, "usda", "9103").await?;
+    assert_row_absent(&fixture.pool, "usda", "9102").await?;
     Ok(())
 }
 
@@ -546,6 +746,9 @@ async fn write_failure_rolls_back_only_failed_food_and_retry_succeeds()
     assert!(error.to_string().contains("9202"), "{error}");
     assert!(error.to_string().contains("record 2"), "{error}");
     assert!(error.to_string().contains("committed 1 foods"), "{error}");
+    assert_eq!(error.report().committed().get(), 1);
+    assert_eq!(error.report().sanitized().get(), 0);
+    assert_eq!(error.report().rejected().get(), 0);
     assert!(
         error.to_string().contains("induced write failure"),
         "{error}"
@@ -585,6 +788,9 @@ async fn closed_pool_import_fails_with_bounded_termination() -> Result<(), Box<d
         "{message}"
     );
     assert!(message.contains("committed 0 foods"), "{message}");
+    assert_eq!(error.report().committed().get(), 0);
+    assert_eq!(error.report().sanitized().get(), 0);
+    assert_eq!(error.report().rejected().get(), 0);
     assert!(message.contains(&path.display().to_string()), "{message}");
     Ok(())
 }
@@ -598,6 +804,9 @@ async fn missing_input_reports_path_and_zero_committed() -> Result<(), Box<dyn S
 
     assert!(error.to_string().contains(&path.display().to_string()));
     assert!(error.to_string().contains("committed 0 foods"));
+    assert_eq!(error.report().committed().get(), 0);
+    assert_eq!(error.report().sanitized().get(), 0);
+    assert_eq!(error.report().rejected().get(), 0);
     assert_eq!(food_count(&fixture.pool).await?, 0);
     Ok(())
 }

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use ::config::ConfigError;
 use clap::{Parser, Subcommand};
 use crumbs_database::Database;
-use crumbs_import::ImportError;
+use crumbs_import::{FoodCount, ImportDiagnostic, ImportError, ImportReport};
 use crumbs_server::{ServerArgs, ServerCommand};
 
 mod cli;
@@ -52,6 +52,9 @@ pub enum Error {
     /// A USDA import failed.
     #[error(transparent)]
     Import(#[from] ImportError),
+    /// Some USDA food records were rejected.
+    #[error("rejected {} USDA foods", .count.get())]
+    RejectedFoods { count: FoodCount },
     /// Command output could not be written.
     #[error("failed to write command output: {0}")]
     Output(#[source] io::Error),
@@ -81,9 +84,13 @@ fn run_cli(cli: Cli) -> Result<(), Error> {
             }
         },
         Command::Db(DbArgs { command }) => match command {
-            DbCommand::ImportUsda { file, config } => {
+            DbCommand::ImportUsda {
+                file,
+                config,
+                verbose,
+            } => {
                 let app_config = AppConfig::from_file(config)?;
-                runtime()?.block_on(run_import_usda(app_config, file))
+                runtime()?.block_on(run_import_usda(app_config, file, verbose))
             }
         },
     }
@@ -105,16 +112,50 @@ async fn run_server(config: AppConfig) -> Result<(), Error> {
     Ok(())
 }
 
-async fn run_import_usda(config: AppConfig, file: PathBuf) -> Result<(), Error> {
+async fn run_import_usda(config: AppConfig, file: PathBuf, verbose: bool) -> Result<(), Error> {
     let database = Database::open(config.database).await?;
-    let import_result = crumbs_import::import_usda(&database, &file).await;
+    let import_result = crumbs_import::import_usda_with_diagnostics(
+        &database,
+        &file,
+        |diagnostic: &ImportDiagnostic| {
+            if verbose {
+                let mut stderr = io::stderr().lock();
+                writeln!(stderr, "{diagnostic}")?;
+                stderr.flush()?;
+            }
+            Ok(())
+        },
+    )
+    .await;
     database.close().await;
-    let report = import_result?;
+    let report = match import_result {
+        Ok(report) => report,
+        Err(error) => {
+            write_import_summary(error.report())?;
+            return Err(Error::Import(error));
+        }
+    };
 
-    let mut stdout = io::stdout().lock();
-    writeln!(stdout, "Imported {} foods", report.committed().get()).map_err(Error::Output)?;
-    stdout.flush().map_err(Error::Output)?;
+    write_import_summary(report)?;
+    if report.rejected().get() > 0 {
+        return Err(Error::RejectedFoods {
+            count: report.rejected(),
+        });
+    }
     Ok(())
+}
+
+fn write_import_summary(report: ImportReport) -> Result<(), Error> {
+    let mut stdout = io::stdout().lock();
+    writeln!(
+        stdout,
+        "Imported {} foods ({} sanitized); rejected {} foods",
+        report.committed().get(),
+        report.sanitized().get(),
+        report.rejected().get()
+    )
+    .map_err(Error::Output)?;
+    stdout.flush().map_err(Error::Output)
 }
 
 #[cfg(test)]

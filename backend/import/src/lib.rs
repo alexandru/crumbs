@@ -1,34 +1,35 @@
 //! Streaming USDA import orchestration.
 //!
-//! USDA FoodData Central records are identified by the exact `(source,
-//! source_food_id)` pair, with source fixed to `usda` and `source_food_id` set
-//! to the record's `fdcId`. A record with a different `fdcId` is a separate
-//! food identity: the importer never merges records by description, GTIN, or
-//! other metadata. Rows absent from an input are left untouched, so Foundation,
-//! branded, and other USDA subsets coexist.
-//!
-//! Parsing runs on a blocking worker and hands one prepared record at a time to
-//! the asynchronous consumer. Each prepared food is sent to the configured
-//! [`FoodWriter`], and successful writes advance import progress. The database
-//! implementation commits each food and its FTS5 update in one transaction.
+//! USDA foods retain the exact `(source, source_food_id)` identity, where the
+//! source is `usda` and the identifier is `fdcId`. Records with different IDs
+//! remain separate even when their descriptions or GTINs match. Rows absent
+//! from an input remain untouched, so USDA archive subsets coexist.
 
 mod usda;
 
+use std::fmt;
 use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 
 use tokio::sync::mpsc;
 use tokio::task::JoinError;
 
-use self::usda::{ParseError, PreparedFood, RecordPosition};
-use crumbs_database::{Food, FoodWriter, SourceFoodId};
+use self::usda::{ParseError, RecordPosition, StreamItem};
+use crumbs_database::{FoodWriter, Source, SourceFoodId};
 
-/// Number of foods committed by an import.
+pub use self::usda::RecordPosition as ImportRecordPosition;
+
+/// A field named in an import diagnostic.
+pub type DiagnosticField = String;
+/// A reason reported for a sanitized or rejected food.
+pub type DiagnosticReason = String;
+
+/// Number of foods in an import outcome.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ImportedFoods(usize);
+pub struct FoodCount(usize);
 
-impl ImportedFoods {
-    /// Returns the committed food count.
+impl FoodCount {
+    /// Returns the food count.
     pub const fn get(self) -> usize {
         self.0
     }
@@ -38,42 +39,132 @@ impl ImportedFoods {
     }
 }
 
-/// Result of a successful USDA import.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Summary of committed, sanitized, and rejected foods.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ImportReport {
-    committed: ImportedFoods,
+    committed: FoodCount,
+    sanitized: FoodCount,
+    rejected: FoodCount,
 }
 
 impl ImportReport {
     /// Returns the number of foods committed by this import.
-    pub const fn committed(self) -> ImportedFoods {
+    pub const fn committed(self) -> FoodCount {
         self.committed
+    }
+
+    /// Returns the number of committed foods whose source data was sanitized.
+    pub const fn sanitized(self) -> FoodCount {
+        self.sanitized
+    }
+
+    /// Returns the number of food records rejected during this import.
+    pub const fn rejected(self) -> FoodCount {
+        self.rejected
+    }
+}
+
+/// Kind of food-level diagnostic produced by an import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticKind {
+    /// The food was committed after one or more source values were omitted.
+    Sanitized,
+    /// The food record was skipped because its data could not be represented.
+    Rejected,
+}
+
+impl fmt::Display for DiagnosticKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sanitized => formatter.write_str("sanitized"),
+            Self::Rejected => formatter.write_str("rejected"),
+        }
+    }
+}
+
+/// One food-level event observed during a USDA import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportDiagnostic {
+    /// Food provider.
+    pub source: Source,
+    /// Provider's food identifier, when it could be read.
+    pub source_food_id: Option<SourceFoodId>,
+    /// One-based position in the archive.
+    pub position: ImportRecordPosition,
+    /// Whether the food was sanitized or rejected.
+    pub kind: DiagnosticKind,
+    /// Field affected by the diagnostic, when known.
+    pub field: Option<DiagnosticField>,
+    /// Human-readable explanation.
+    pub reason: DiagnosticReason,
+}
+
+impl fmt::Display for ImportDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{} food source={}", self.kind, self.source)?;
+        if let Some(source_food_id) = &self.source_food_id {
+            write!(formatter, " source_id={source_food_id}")?;
+        } else {
+            formatter.write_str(" source_id=unknown")?;
+        }
+        write!(formatter, " record={}", self.position)?;
+        if let Some(field) = &self.field {
+            write!(formatter, " field={field}")?;
+        }
+        write!(formatter, ": {}", self.reason)
     }
 }
 
 /// Error produced while importing a USDA FoodData Central file.
 #[derive(Debug, thiserror::Error)]
-#[error("{failure} for {} (committed {} foods)", path.display(), committed.get())]
+#[error("{failure} for {} (committed {} foods)", path.display(), report.committed.get())]
 pub struct ImportError {
     path: PathBuf,
-    committed: ImportedFoods,
+    report: ImportReport,
     #[source]
     failure: Box<ImportFailure>,
 }
 
 /// Imports a USDA file into a food-store implementation, one food per commit.
 ///
+/// Invalid food records are skipped and included in the returned report. Use
+/// [`import_usda_with_diagnostics`] to observe food-level details.
+///
 /// # Errors
 ///
-/// Reports input, parsing, worker, or storage failures with committed progress.
+/// Returns an error for input, framing, worker, storage, or diagnostic failures.
 pub async fn import_usda<S: FoodWriter + ?Sized>(
     store: &S,
     path: impl AsRef<Path>,
 ) -> Result<ImportReport, ImportError> {
+    import_usda_with_diagnostics(store, path, |_| Ok(())).await
+}
+
+/// Imports a USDA file and reports sanitized or rejected foods as they occur.
+///
+/// The callback runs on the async consumer task. Its error stops processing;
+/// counts returned by [`ImportError::report`] include all completed work.
+///
+/// # Errors
+///
+/// Returns an error for input, framing, worker, storage, or diagnostic failures.
+pub async fn import_usda_with_diagnostics<S, F>(
+    store: &S,
+    path: impl AsRef<Path>,
+    mut on_diagnostic: F,
+) -> Result<ImportReport, ImportError>
+where
+    S: FoodWriter + ?Sized,
+    F: FnMut(&ImportDiagnostic) -> io::Result<()>,
+{
     let path = path.as_ref();
-    let file = tokio::fs::File::open(path)
-        .await
-        .map_err(|source| ImportError::open(path, source))?;
+    let file = tokio::fs::File::open(path).await.map_err(|source| {
+        ImportError::new(
+            path,
+            ImportReport::default(),
+            ImportFailure::Open { source },
+        )
+    })?;
     let file = file.into_std().await;
     let (sender, receiver) = mpsc::channel(PRODUCER_QUEUE_CAPACITY);
     let producer = tokio::task::spawn_blocking(move || {
@@ -81,58 +172,36 @@ pub async fn import_usda<S: FoodWriter + ?Sized>(
         usda::stream_foods(reader, &sender)
     });
 
-    let consumer_result = consume(store, receiver, path).await;
+    let consumer_result = consume(store, receiver, path, &mut on_diagnostic).await;
     let producer_result = producer.await;
-
-    let committed = consumer_result?;
+    let report = consumer_result?;
 
     match producer_result {
-        Ok(Ok(())) => Ok(ImportReport { committed }),
-        Ok(Err(source)) => Err(ImportError::stream(path, committed, source)),
-        Err(source) => Err(ImportError::worker(path, committed, source)),
+        Ok(Ok(())) => Ok(report),
+        Ok(Err(source)) => Err(ImportError::new(
+            path,
+            report,
+            ImportFailure::Stream { source },
+        )),
+        Err(source) => Err(ImportError::new(
+            path,
+            report,
+            ImportFailure::Worker { source },
+        )),
     }
 }
 
 impl ImportError {
-    fn open(path: &Path, source: io::Error) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            committed: ImportedFoods::default(),
-            failure: Box::new(ImportFailure::Open { source }),
-        }
+    /// Returns import counts completed before the failure.
+    pub const fn report(&self) -> ImportReport {
+        self.report
     }
 
-    fn stream(path: &Path, committed: ImportedFoods, source: ParseError) -> Self {
+    fn new(path: &Path, report: ImportReport, failure: ImportFailure) -> Self {
         Self {
             path: path.to_path_buf(),
-            committed,
-            failure: Box::new(ImportFailure::Stream { source }),
-        }
-    }
-
-    fn worker(path: &Path, committed: ImportedFoods, source: JoinError) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            committed,
-            failure: Box::new(ImportFailure::Worker { source }),
-        }
-    }
-
-    fn write<E: std::error::Error + Send + Sync + 'static>(
-        path: &Path,
-        committed: ImportedFoods,
-        food: &Food,
-        position: RecordPosition,
-        source: E,
-    ) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            committed,
-            failure: Box::new(ImportFailure::Write {
-                fdc_id: food.source_food_id.clone(),
-                position,
-                source: Box::new(source),
-            }),
+            report,
+            failure: Box::new(failure),
         }
     }
 }
@@ -161,25 +230,83 @@ enum ImportFailure {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+    #[error("failed to write USDA import diagnostics: {source}")]
+    Diagnostics {
+        #[source]
+        source: io::Error,
+    },
 }
 
-async fn consume<S: FoodWriter + ?Sized>(
+async fn consume<S, F>(
     store: &S,
-    mut receiver: mpsc::Receiver<PreparedFood>,
+    mut receiver: mpsc::Receiver<StreamItem>,
     path: &Path,
-) -> Result<ImportedFoods, ImportError> {
-    let mut committed = ImportedFoods::default();
-    while let Some(food) = receiver.recv().await {
-        let position = food.position;
-        let food = food.into_food();
-        store
-            .upsert_food(&food)
-            .await
-            .map_err(|source| ImportError::write(path, committed, &food, position, source))?;
-        committed.increment();
+    on_diagnostic: &mut F,
+) -> Result<ImportReport, ImportError>
+where
+    S: FoodWriter + ?Sized,
+    F: FnMut(&ImportDiagnostic) -> io::Result<()>,
+{
+    let mut report = ImportReport::default();
+    while let Some(item) = receiver.recv().await {
+        match item {
+            Ok(prepared) => {
+                let mut prepared = prepared;
+                let position = prepared.position;
+                let sanitizations = std::mem::take(&mut prepared.sanitizations);
+                let food = prepared.into_food();
+                store.upsert_food(&food).await.map_err(|source| {
+                    ImportError::new(
+                        path,
+                        report,
+                        ImportFailure::Write {
+                            fdc_id: food.source_food_id.clone(),
+                            position,
+                            source: Box::new(source),
+                        },
+                    )
+                })?;
+                report.committed.increment();
+                if !sanitizations.is_empty() {
+                    report.sanitized.increment();
+                }
+                for sanitization in sanitizations {
+                    let diagnostic = ImportDiagnostic {
+                        source: food.source.clone(),
+                        source_food_id: Some(food.source_food_id.clone()),
+                        position,
+                        kind: DiagnosticKind::Sanitized,
+                        field: Some(sanitization.field),
+                        reason: sanitization.reason,
+                    };
+                    on_diagnostic(&diagnostic).map_err(|source| {
+                        ImportError::new(path, report, ImportFailure::Diagnostics { source })
+                    })?;
+                }
+            }
+            Err(rejected) => {
+                let usda::RejectedFood {
+                    position,
+                    source_food_id,
+                    field,
+                    reason,
+                } = rejected;
+                report.rejected.increment();
+                let diagnostic = ImportDiagnostic {
+                    source: std::borrow::Cow::Borrowed("usda"),
+                    source_food_id,
+                    position,
+                    kind: DiagnosticKind::Rejected,
+                    field,
+                    reason,
+                };
+                on_diagnostic(&diagnostic).map_err(|source| {
+                    ImportError::new(path, report, ImportFailure::Diagnostics { source })
+                })?;
+            }
+        }
     }
-
-    Ok(committed)
+    Ok(report)
 }
 
 const PRODUCER_QUEUE_CAPACITY: usize = 1;

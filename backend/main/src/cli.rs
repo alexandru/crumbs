@@ -23,5 +23,8 @@ pub enum DbCommand {
         /// Path to the TOML configuration file.
         #[arg(long, value_name = "PATH")]
         config: PathBuf,
+        /// Print details for foods with sanitized or rejected data.
+        #[arg(long)]
+        verbose: bool,
     },
 }

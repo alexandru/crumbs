@@ -42,9 +42,30 @@ fn parses_db_import_usda_command() -> Result<(), clap::Error> {
     assert!(matches!(
         cli.command,
         Command::Db(DbArgs {
-            command: DbCommand::ImportUsda { file, config }
+            command: DbCommand::ImportUsda { file, config, verbose: false }
         }) if file.as_path() == Path::new("/tmp/foundation.json")
             && config.as_path() == Path::new("/tmp/application.toml")
+    ));
+    Ok(())
+}
+
+#[test]
+fn parses_db_import_usda_verbose_flag() -> Result<(), clap::Error> {
+    let cli = Cli::try_parse_from([
+        "crumbs",
+        "db",
+        "import-usda",
+        "/tmp/foundation.json",
+        "--config",
+        "/tmp/application.toml",
+        "--verbose",
+    ])?;
+
+    assert!(matches!(
+        cli.command,
+        Command::Db(DbArgs {
+            command: DbCommand::ImportUsda { verbose: true, .. }
+        })
     ));
     Ok(())
 }

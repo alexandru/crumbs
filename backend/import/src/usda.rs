@@ -9,6 +9,7 @@ use std::io::Read;
 use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 
+use crate::{DiagnosticField, DiagnosticReason};
 use serde::Deserialize;
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_json::Deserializer;
@@ -19,7 +20,7 @@ use tokio::sync::mpsc;
 mod usda_nutrition;
 
 use crumbs_database::nutrition::FoodData;
-use crumbs_database::{Food, Source};
+use crumbs_database::{Food, Source, SourceFoodId};
 
 /// A validated food record ready for persistence.
 ///
@@ -37,6 +38,8 @@ pub(crate) struct PreparedFood {
     pub(crate) category: Option<FoodCategory>,
     /// Typed nutrition and serving details.
     pub(crate) parsed_data: FoodData,
+    /// Source fields omitted because their values could not be represented.
+    pub(crate) sanitizations: Vec<usda_nutrition::Sanitization>,
     /// One-based position of the record within the root array.
     pub(crate) position: RecordPosition,
 }
@@ -137,7 +140,7 @@ impl fmt::Display for FoodCategory {
 
 /// One-based position of a record within the root food array.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct RecordPosition(NonZeroUsize);
+pub struct RecordPosition(NonZeroUsize);
 
 impl RecordPosition {
     const fn first() -> Self {
@@ -150,6 +153,11 @@ impl RecordPosition {
             .checked_add(1)
             .and_then(NonZeroUsize::new)
             .map(Self)
+    }
+
+    /// Returns the one-based position as a number.
+    pub const fn get(self) -> usize {
+        self.0.get()
     }
 }
 
@@ -248,12 +256,32 @@ pub(crate) enum RecordError {
     Nutrition(#[source] usda_nutrition::NutritionError),
 }
 
+impl RecordError {
+    fn field(&self) -> Option<DiagnosticField> {
+        match self {
+            Self::Nutrition(source) => source.field(),
+            _ => None,
+        }
+    }
+}
+
+/// One rejected complete record, with any identity and field details that could be read.
+pub(crate) struct RejectedFood {
+    pub(crate) position: RecordPosition,
+    pub(crate) source_food_id: Option<SourceFoodId>,
+    pub(crate) field: Option<DiagnosticField>,
+    pub(crate) reason: DiagnosticReason,
+}
+
+pub(crate) type StreamItem = Result<PreparedFood, RejectedFood>;
+
 /// Streams food records from `reader` into `sender`.
 ///
 /// The input must be a single top-level object with exactly one recognized
 /// array: `FoundationFoods`, `SRLegacyFoods`, `SurveyFoods`, or `BrandedFoods`.
-/// The parser validates each record, maps supported nutrition and serving
-/// details, and never collects the array.
+/// The parser maps supported nutrition and serving details. It sends complete
+/// rejected records as `Err` stream items and continues; it never collects the
+/// array.
 ///
 /// The function uses [`mpsc::Sender::blocking_send`], so it must run on a
 /// blocking thread, such as one created by [`tokio::task::spawn_blocking`],
@@ -263,11 +291,11 @@ pub(crate) enum RecordError {
 ///
 /// Returns [`ParseError::Document`] for invalid root framing or trailing
 /// content, [`ParseError::Read`] for document-level input I/O failures,
-/// [`ParseError::Record`] for unreadable or invalid records, and
+/// [`ParseError::Record`] for unreadable or syntactically malformed records, and
 /// [`ParseError::ConsumerDisconnected`] when the receiver is dropped.
 pub(crate) fn stream_foods(
     reader: impl Read,
-    sender: &mpsc::Sender<PreparedFood>,
+    sender: &mpsc::Sender<StreamItem>,
 ) -> Result<(), ParseError> {
     let mut deserializer = Deserializer::from_reader(reader);
     let mut state = StreamState::Ready;
@@ -308,7 +336,7 @@ enum StreamState {
 }
 
 struct RootSeed<'a> {
-    sender: &'a mpsc::Sender<PreparedFood>,
+    sender: &'a mpsc::Sender<StreamItem>,
     state: &'a mut StreamState,
 }
 
@@ -327,7 +355,7 @@ impl<'de> DeserializeSeed<'de> for RootSeed<'_> {
 }
 
 struct RootVisitor<'a> {
-    sender: &'a mpsc::Sender<PreparedFood>,
+    sender: &'a mpsc::Sender<StreamItem>,
     state: &'a mut StreamState,
 }
 
@@ -374,7 +402,7 @@ impl<'de> Visitor<'de> for RootVisitor<'_> {
 }
 
 struct FoodListSeed<'a> {
-    sender: &'a mpsc::Sender<PreparedFood>,
+    sender: &'a mpsc::Sender<StreamItem>,
     state: &'a mut StreamState,
     root_kind: FoodKind,
 }
@@ -395,7 +423,7 @@ impl<'de> DeserializeSeed<'de> for FoodListSeed<'_> {
 }
 
 struct FoodListVisitor<'a> {
-    sender: &'a mpsc::Sender<PreparedFood>,
+    sender: &'a mpsc::Sender<StreamItem>,
     state: &'a mut StreamState,
     root_kind: FoodKind,
 }
@@ -428,15 +456,17 @@ impl<'de> Visitor<'de> for FoodListVisitor<'_> {
                 }
             };
 
-            let food = match prepare_food(&raw, root_kind, position) {
-                Ok(food) => food,
-                Err(source) => {
-                    *state = StreamState::Failure(ParseError::Record { position, source });
-                    return Err(serde::de::Error::custom(PROCESSING_FAILED));
-                }
+            let item = match prepare_food(&raw, root_kind, position) {
+                Ok(food) => Ok(food),
+                Err(source) => Err(RejectedFood {
+                    position,
+                    source_food_id: raw_fdc_id(raw.get()),
+                    field: source.field(),
+                    reason: source.to_string(),
+                }),
             };
 
-            match sender.blocking_send(food) {
+            match sender.blocking_send(item) {
                 Ok(()) => {}
                 Err(_) => {
                     *state = StreamState::Failure(ParseError::ConsumerDisconnected { position });
@@ -505,9 +535,28 @@ fn prepare_food(
         kind: header.data_type,
         description,
         category,
-        parsed_data,
+        parsed_data: parsed_data.food_data,
+        sanitizations: parsed_data.sanitizations,
         position,
     })
+}
+
+fn raw_fdc_id(raw: &str) -> Option<SourceFoodId> {
+    #[derive(Deserialize)]
+    struct Id {
+        #[serde(default, rename = "fdcId")]
+        id: Option<Box<RawValue>>,
+    }
+
+    let id = serde_json::from_str::<Id>(raw).ok()?.id?;
+    let raw_id = id.get().trim();
+    if raw_id.starts_with('"') {
+        serde_json::from_str::<String>(raw_id).ok()
+    } else {
+        serde_json::from_str::<serde_json::Number>(raw_id)
+            .ok()
+            .map(|_| raw_id.to_owned())
+    }
 }
 
 type RawFdcId = u64;

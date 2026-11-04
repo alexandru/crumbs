@@ -4,6 +4,10 @@ use std::io;
 use super::*;
 use crumbs_database::nutrition::{NutritionBasis, Qualifier, QuantityError, Reported};
 
+fn parse_data(input: &str, kind: FoodKind) -> Result<FoodData, NutritionError> {
+    super::parse_food_data(input, kind).map(|parsed| parsed.food_data)
+}
+
 #[test]
 fn maps_all_supported_usda_nutrient_categories() -> Result<(), Box<dyn Error>> {
     let input = r#"{
@@ -25,7 +29,7 @@ fn maps_all_supported_usda_nutrient_categories() -> Result<(), Box<dyn Error>> {
         {"nutrient":{"id":1293,"unitName":"g"},"amount":21}
       ]
     }"#;
-    let data = parse_food_data(input, FoodKind::Foundation)?;
+    let data = parse_data(input, FoodKind::Foundation)?;
     let profile = data
         .nutrition
         .as_ref()
@@ -80,14 +84,14 @@ fn supports_each_usda_food_kind_and_branded_mass_or_volume_basis() -> Result<(),
         let input = format!(
             r#"{{"foodNutrients":[{{"nutrient":{{"id":1003,"unitName":"g"}},"amount":1}}],"dataType":"{data_type}"}}"#
         );
-        let data = parse_food_data(&input, kind)?;
+        let data = parse_data(&input, kind)?;
         assert_eq!(
             data.nutrition.as_ref().map(|profile| profile.per),
             Some(NutritionBasis::Per100Grams)
         );
     }
 
-    let mass = parse_food_data(
+    let mass = parse_data(
         r#"{"servingSize":30,"servingSizeUnit":"G","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
         FoodKind::Branded,
     )?;
@@ -96,7 +100,7 @@ fn supports_each_usda_food_kind_and_branded_mass_or_volume_basis() -> Result<(),
         Some(NutritionBasis::Per100Grams)
     );
 
-    let volume = parse_food_data(
+    let volume = parse_data(
         r#"{"servingSize":250,"servingSizeUnit":"mL","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
         FoodKind::Branded,
     )?;
@@ -108,16 +112,16 @@ fn supports_each_usda_food_kind_and_branded_mass_or_volume_basis() -> Result<(),
         .serving_sizes
         .first()
         .ok_or_else(|| io::Error::other("branded measured serving is missing"))?;
-    assert_eq!(serving.quantity.to_string(), "250 ml");
+    assert_eq!(serving.quantity().to_string(), "250 ml");
     assert!(
-        parse_food_data(
+        parse_data(
             r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
             FoodKind::Branded,
         )
         .is_err()
     );
     assert!(
-        parse_food_data(
+        parse_data(
             r#"{"servingSize":0,"servingSizeUnit":"g"}"#,
             FoodKind::Branded,
         )
@@ -133,7 +137,7 @@ fn absent_or_empty_nutrient_arrays_produce_no_profile() -> Result<(), Box<dyn Er
         r#"{"foodNutrients":null}"#,
         r#"{"foodNutrients":[]}"#,
     ] {
-        let data = parse_food_data(input, FoodKind::Foundation)?;
+        let data = parse_data(input, FoodKind::Foundation)?;
         assert_eq!(data.nutrition, None);
     }
     Ok(())
@@ -148,7 +152,7 @@ fn selects_energy_in_project_priority_and_falls_through_missing_candidates()
       {"nutrient":{"id":2047,"unitName":"kcal"},"amount":20},
       {"nutrient":{"id":2048,"unitName":"kcal"},"amount":10}
     ]}"#;
-    let data = parse_food_data(input, FoodKind::Foundation)?;
+    let data = parse_data(input, FoodKind::Foundation)?;
     let profile = data
         .nutrition
         .as_ref()
@@ -173,7 +177,7 @@ fn selects_energy_in_project_priority_and_falls_through_missing_candidates()
         ),
     ] {
         let input = format!(r#"{{"foodNutrients":{nutrients}}}"#);
-        let data = parse_food_data(&input, FoodKind::Foundation)?;
+        let data = parse_data(&input, FoodKind::Foundation)?;
         let actual = data
             .nutrition
             .as_ref()
@@ -181,7 +185,7 @@ fn selects_energy_in_project_priority_and_falls_through_missing_candidates()
         assert_eq!(actual, Some(expected.to_owned()));
     }
 
-    let no_energy = parse_food_data(
+    let no_energy = parse_data(
         r#"{"foodNutrients":[{"nutrient":{"id":2048,"unitName":"kcal"},"amount":null}]}"#,
         FoodKind::Foundation,
     )?;
@@ -195,33 +199,73 @@ fn invalid_preferred_energy_is_not_hidden_by_lower_priority_value() -> Result<()
       {"nutrient":{"id":2048,"unitName":"g"},"amount":10},
       {"nutrient":{"id":2047,"unitName":"kcal"},"amount":20}
     ]}"#;
-    assert!(parse_food_data(input, FoodKind::Foundation).is_err());
+    assert!(parse_data(input, FoodKind::Foundation).is_err());
     Ok(())
 }
 
 #[test]
-fn rejects_negative_fdc_nutrient_and_energy_values() -> Result<(), Box<dyn Error>> {
-    let negative_carbohydrate =
-        r#"{"foodNutrients":[{"nutrient":{"id":1005,"unitName":"g"},"amount":-0.475}]}"#;
-    assert!(matches!(
-        parse_food_data(negative_carbohydrate, FoodKind::Foundation),
-        Err(NutritionError::Amount {
-            source: QuantityError::Negative,
-            ..
-        })
-    ));
-
-    let negative_preferred_energy = r#"{"foodNutrients":[
+fn sanitizes_negative_nutrients_and_falls_back_from_negative_energy() -> Result<(), Box<dyn Error>>
+{
+    let input = r#"{"foodNutrients":[
+      {"nutrient":{"id":1005,"unitName":"g"},"amount":-0.475},
+      {"nutrient":{"id":1003,"unitName":"g"},"amount":"< -0.1"},
       {"nutrient":{"id":2048,"unitName":"kcal"},"amount":-1},
       {"nutrient":{"id":2047,"unitName":"kcal"},"amount":20}
     ]}"#;
-    assert!(matches!(
-        parse_food_data(negative_preferred_energy, FoodKind::Foundation),
-        Err(NutritionError::Amount {
-            source: QuantityError::Negative,
-            ..
-        })
-    ));
+    let parsed = super::parse_food_data(input, FoodKind::Foundation)?;
+    let profile = parsed
+        .food_data
+        .nutrition
+        .as_ref()
+        .ok_or_else(|| io::Error::other("fallback energy profile is missing"))?;
+    assert_eq!(profile.carbohydrates.including_fibre, None);
+    assert_eq!(profile.protein, None);
+    assert_eq!(
+        profile.energy.as_ref().map(ToString::to_string),
+        Some("20 kcal".to_owned())
+    );
+    assert_eq!(parsed.sanitizations.len(), 3);
+    assert_eq!(
+        parsed.sanitizations[0].field,
+        "carbohydrates.including_fibre"
+    );
+    assert_eq!(parsed.sanitizations[1].field, "protein");
+    assert_eq!(parsed.sanitizations[2].field, "energy");
+    Ok(())
+}
+
+#[test]
+fn unavailable_or_negative_loq_does_not_invent_a_bound_or_restore_a_negative_amount()
+-> Result<(), Box<dyn Error>> {
+    let input = r#"{"foodNutrients":[
+      {"nutrient":{"id":1079,"unitName":"g"},"amount":0.2,"loq":0},
+      {"nutrient":{"id":1003,"unitName":"g"},"amount":null,"loq":0},
+      {"nutrient":{"id":1004,"unitName":"mg"},"amount":3,"loq":-1},
+      {"nutrient":{"id":1005,"unitName":"g"},"amount":-0.2,"loq":0.1}
+    ]}"#;
+    let parsed = super::parse_food_data(input, FoodKind::Foundation)?;
+    let profile = parsed
+        .food_data
+        .nutrition
+        .as_ref()
+        .ok_or_else(|| io::Error::other("nutrition profile is missing"))?;
+    assert_eq!(amount_text(&profile.fibre), Some("0.2 g".to_owned()));
+    assert_eq!(profile.protein, None);
+    assert_eq!(amount_text(&profile.fat.total), Some("3 mg".to_owned()));
+    assert_eq!(profile.carbohydrates.including_fibre, None);
+    assert_eq!(parsed.sanitizations.len(), 4);
+    assert!(
+        parsed
+            .sanitizations
+            .iter()
+            .any(|entry| entry.reason.contains("zero or negative limit"))
+    );
+    assert!(
+        parsed
+            .sanitizations
+            .iter()
+            .any(|entry| entry.reason.contains("negative source amount"))
+    );
     Ok(())
 }
 
@@ -231,7 +275,7 @@ fn preserves_exact_decimal_lexemes_and_source_qualifiers() -> Result<(), Box<dyn
       {"nutrient":{"id":1003,"unitName":"g"},"amount":0.1000000000000000000000000001},
       {"nutrient":{"id":1093,"unitName":"mg"},"amount":"< 0.5"}
     ]}"#;
-    let data = parse_food_data(input, FoodKind::Foundation)?;
+    let data = parse_data(input, FoodKind::Foundation)?;
     let profile = data
         .nutrition
         .as_ref()
@@ -241,12 +285,12 @@ fn preserves_exact_decimal_lexemes_and_source_qualifiers() -> Result<(), Box<dyn
         Some("0.1000000000000000000000000001 g".to_owned())
     );
     assert_eq!(
-        profile.sodium.as_ref().map(|value| value.qualifier),
+        profile.sodium.as_ref().map(Reported::qualifier),
         Some(Qualifier::LessThan)
     );
     assert_eq!(amount_text(&profile.sodium), Some("< 0.5 mg".to_owned()));
 
-    let loq = parse_food_data(
+    let loq = parse_data(
         r#"{"foodNutrients":[{"nutrient":{"id":1079,"unitName":"µg"},"amount":0,"loq":0.55}]}"#,
         FoodKind::Foundation,
     )?;
@@ -255,10 +299,10 @@ fn preserves_exact_decimal_lexemes_and_source_qualifiers() -> Result<(), Box<dyn
         .as_ref()
         .and_then(|profile| profile.fibre.as_ref())
         .ok_or_else(|| io::Error::other("LOQ fibre value is missing"))?;
-    assert_eq!(fibre.qualifier, Qualifier::LessThan);
+    assert_eq!(fibre.qualifier(), Qualifier::LessThan);
     assert_eq!(fibre.to_string(), "< 0.55 µg");
 
-    let measured = parse_food_data(
+    let measured = parse_data(
         r#"{"foodNutrients":[{"nutrient":{"id":1079,"unitName":"g"},"amount":0.2,"loq":0.55}]}"#,
         FoodKind::Foundation,
     )?;
@@ -275,13 +319,13 @@ fn preserves_exact_decimal_lexemes_and_source_qualifiers() -> Result<(), Box<dyn
 
 #[test]
 fn missing_zero_and_partial_nutrients_remain_distinct() -> Result<(), Box<dyn Error>> {
-    let missing = parse_food_data(
+    let missing = parse_data(
         r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":null},{"nutrient":{"id":1013,"unitName":"g"},"amount":null}]}"#,
         FoodKind::Foundation,
     )?;
     assert_eq!(missing.nutrition, None);
 
-    let partial = parse_food_data(
+    let partial = parse_data(
         r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":0},{"nutrient":{"id":1013,"unitName":"g"},"amount":null}]}"#,
         FoodKind::Foundation,
     )?;
@@ -301,23 +345,23 @@ fn stores_multiple_measured_portions_without_inventing_volume() -> Result<(), Bo
       {"portionDescription":"two slices","gramWeight":60,"amount":2,"measureUnit":{"name":"slice"}},
       {"portionDescription":"unmeasured","gramWeight":null}
     ]}"#;
-    let data = parse_food_data(input, FoodKind::Foundation)?;
+    let data = parse_data(input, FoodKind::Foundation)?;
     assert_eq!(data.nutrition, None);
     assert_eq!(data.serving_sizes.len(), 2);
     assert_eq!(
         data.serving_sizes
             .first()
-            .map(|serving| serving.quantity.to_string()),
+            .map(|serving| serving.quantity().to_string()),
         Some("30 g".to_owned())
     );
     assert_eq!(
         data.serving_sizes
             .get(1)
-            .map(|serving| serving.quantity.to_string()),
+            .map(|serving| serving.quantity().to_string()),
         Some("60 g".to_owned())
     );
 
-    let no_volume = parse_food_data(
+    let no_volume = parse_data(
         r#"{"foodPortions":[{"portionDescription":"cup","gramWeight":null}]}"#,
         FoodKind::Foundation,
     )?;
@@ -329,10 +373,9 @@ fn stores_multiple_measured_portions_without_inventing_volume() -> Result<(), Bo
 fn rejects_invalid_units_and_duplicate_same_id_values() -> Result<(), Box<dyn Error>> {
     for input in [
         r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"kcal"},"amount":1}]}"#,
-        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":-1}]}"#,
         r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1},{"nutrient":{"id":1003,"unitName":"g"},"amount":2}]}"#,
     ] {
-        assert!(parse_food_data(input, FoodKind::Foundation).is_err());
+        assert!(parse_data(input, FoodKind::Foundation).is_err());
     }
     Ok(())
 }
@@ -347,6 +390,7 @@ fn preserves_measurement_error_order_and_text() -> Result<(), Box<dyn Error>> {
         NutritionError::Amount {
             value,
             source: QuantityError::Decimal(source),
+            ..
         } if value == "bad g" && source == "bad"
     ));
     assert_eq!(
@@ -374,6 +418,7 @@ fn preserves_measurement_error_order_and_text() -> Result<(), Box<dyn Error>> {
         NutritionError::Amount {
             value,
             source: QuantityError::Decimal(source),
+            ..
         } if value == "bad g" && source == "bad"
     ));
     assert_eq!(
@@ -455,7 +500,7 @@ fn defers_energy_duplicates_but_rejects_sugar_duplicates_during_parsing()
 
 #[test]
 fn accepts_numeric_escaped_and_whitespace_source_scalars() -> Result<(), Box<dyn Error>> {
-    let numeric = parse_food_data(
+    let numeric = parse_data(
         r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":0.5}]}"#,
         FoodKind::Foundation,
     )?;
@@ -466,7 +511,7 @@ fn accepts_numeric_escaped_and_whitespace_source_scalars() -> Result<(), Box<dyn
         .map(ToString::to_string);
     assert_eq!(numeric_amount, Some("0.5 g".to_owned()));
 
-    let escaped = parse_food_data(
+    let escaped = parse_data(
         r#"{"foodNutrients":[{"nutrient":{"id":1093,"unitName":"m\u0067"},"amount":"  \u003c 0.500  "}]}"#,
         FoodKind::Foundation,
     )?;
@@ -477,7 +522,7 @@ fn accepts_numeric_escaped_and_whitespace_source_scalars() -> Result<(), Box<dyn
         .map(ToString::to_string);
     assert_eq!(escaped_amount, Some("< 0.500 mg".to_owned()));
 
-    let whitespace = parse_food_data(
+    let whitespace = parse_data(
         r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":"  ~ 0.500  "}]}"#,
         FoodKind::Foundation,
     )?;
@@ -488,7 +533,7 @@ fn accepts_numeric_escaped_and_whitespace_source_scalars() -> Result<(), Box<dyn
         .map(ToString::to_string);
     assert_eq!(whitespace_amount, Some("~ 0.500 g".to_owned()));
 
-    let unsupported = parse_food_data(
+    let unsupported = parse_data(
         r#"{"foodNutrients":[{"nutrient":{"id":999999,"unitName":{"ignored":true}},"amount":"invalid"}]}"#,
         FoodKind::Foundation,
     )?;
@@ -497,11 +542,11 @@ fn accepts_numeric_escaped_and_whitespace_source_scalars() -> Result<(), Box<dyn
 }
 
 fn parse_error(input: &str) -> Result<NutritionError, Box<dyn Error>> {
-    parse_food_data(input, FoodKind::Foundation)
+    parse_data(input, FoodKind::Foundation)
         .err()
         .ok_or_else(|| io::Error::other("input unexpectedly parsed successfully").into())
 }
 
-fn amount_text<T: std::fmt::Display>(amount: &Option<Reported<T>>) -> Option<String> {
+fn amount_text<T: Measurement>(amount: &Option<Reported<T>>) -> Option<String> {
     amount.as_ref().map(ToString::to_string)
 }
