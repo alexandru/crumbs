@@ -8,7 +8,7 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
 clap = { version = "4.6.7", features = ["derive"] }
 config = { version = "0.15.27", default-features = false, features = ["toml"] }
 crumbs-database = { path = "database" }
@@ -19,6 +19,7 @@ http = "1"
 nix = { version = "0.31.3", features = ["process", "signal"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["raw_value"] }
+rmcp = { version = "3.8.0", default-features = false, features = ["server", "transport-streamable-http-server"] }
 rust_decimal = { version = "1.43.0", default-features = false, features = ["std"] }
 sqlx = { version = "0.9.0", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite-bundled"] }
 tempfile = "3.27.0"
@@ -26,6 +27,7 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.1", default-features = false, features = ["fs", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 unicase = "2.10.0"
 unicode-normalization = "0.1.26"
+tower = { version = "0.5", features = ["util"] }
 
 [workspace.lints.rust]
 warnings = "deny"

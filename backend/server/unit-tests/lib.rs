@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use super::{ServerArgs, ServerCommand};
-use axum::Json;
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -42,15 +41,4 @@ fn rejects_server_start_without_config() {
 #[test]
 fn rejects_unknown_server_operation() {
     assert!(TestCli::try_parse_from(["crumbs", "server", "stop"]).is_err());
-}
-
-#[tokio::test]
-async fn root_handler_serializes_greeting() -> Result<(), serde_json::Error> {
-    let Json(greeting) = super::hello().await;
-
-    assert_eq!(
-        serde_json::to_value(greeting)?,
-        serde_json::json!({ "greeting": "Hello, world!" })
-    );
-    Ok(())
 }

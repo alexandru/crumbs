@@ -6,6 +6,7 @@
 
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use ::config::ConfigError;
 use clap::{Parser, Subcommand};
@@ -105,8 +106,8 @@ fn runtime() -> Result<tokio::runtime::Runtime, Error> {
 }
 
 async fn run_server(config: AppConfig) -> Result<(), Error> {
-    let database = Database::open(config.database).await?;
-    let result = crumbs_server::start(&database, config.http).await;
+    let database = Arc::new(Database::open(config.database).await?);
+    let result = crumbs_server::start(Arc::clone(&database), config.http).await;
     database.close().await;
     result?;
     Ok(())

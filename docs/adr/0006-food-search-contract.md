@@ -1,0 +1,7 @@
+# Expose a storage-independent food search contract
+
+Food search exposes Crumbs full-text expression syntax over descriptions, categories, and tags. Supported forms include terms combined with implicit AND, quoted phrases, prefix matching with a trailing `*` (for example, `chick*`), `AND`/`OR`/`NOT`, parentheses, and field selectors such as `description:chicken`, `category:dairy`, and `tags:organic`. The current SQLite adapter binds query values and delegates parsing to FTS5; a future adapter may parse or translate the Crumbs syntax. No separate parser is added now. Expressions rejected by the current parser become HTTP 400 responses or MCP tool errors.
+
+The database crate exposes search through `FoodReader`. The server exposes the same behavior through `GET /foods/search` with `query` and optional `limit` parameters and an MCP `search_foods` tool over Streamable HTTP at `/mcp`, for applications and hosted agent harnesses.
+
+Results include full nutrition data and use best-effort relevance ranking, with food ID breaking ties. Search has no pagination: an omitted limit defaults to 20; a supplied limit is clamped with `max(min(limit, 1000), 20)`. Empty queries are rejected. Access is public initially; authentication is deferred. The public database API remains independent of its storage engine; see ADR-0007.

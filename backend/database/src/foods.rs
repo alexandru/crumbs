@@ -5,12 +5,16 @@ use std::error::Error as StdError;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 
+use serde::Serialize;
 use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::nutrition::FoodData;
 
+mod search;
 mod sqlite;
+
+pub use search::{FoodSearchResult, SearchError, SearchLimit, SearchQuery, SearchQueryError};
 
 /// Persists source-scoped foods independently of their import format.
 pub trait FoodWriter: Sync {
@@ -25,6 +29,33 @@ pub trait FoodWriter: Sync {
     fn upsert_food(&self, food: &Food) -> impl Future<Output = Result<FoodId, Self::Error>> + Send;
 }
 
+/// Searches source-independent food data.
+pub trait FoodReader: Sync {
+    /// Failure reported by this storage implementation.
+    type Error: StdError + Send + Sync + 'static;
+
+    /// Searches indexed descriptions, categories, and tags with a Crumbs full-text expression.
+    ///
+    /// Results include full parsed nutrition data. Implementations use
+    /// best-effort relevance ranking and food ID to break ties.
+    /// An expression may contain plain terms (combined as AND), quoted phrases,
+    /// prefix matching with a trailing `*` (for example, `chick*`),
+    /// `AND`/`OR`/`NOT`, parentheses, and field selectors such as
+    /// `description:chicken`, `category:dairy`, or `tags:organic`. The default
+    /// limit is 20, and supplied limits are clamped to 20–1,000.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SearchError::InvalidQuery`] if the search adapter rejects the
+    /// expression. Returns [`SearchError::Storage`] if the data store cannot
+    /// search or decode matching data.
+    fn search_foods(
+        &self,
+        query: &SearchQuery,
+        limit: SearchLimit,
+    ) -> impl Future<Output = Result<Vec<FoodSearchResult>, SearchError<Self::Error>>> + Send;
+}
+
 /// Provider identifier; providers may use static or dynamically supplied names.
 pub type Source = Cow<'static, str>;
 /// Opaque identifier assigned to a food by its source.
@@ -37,7 +68,7 @@ pub type FoodDescription = String;
 pub type FoodCategory = String;
 
 /// A complete food entry supplied by any source.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Food {
     pub source: Source,
     pub source_food_id: SourceFoodId,
@@ -49,7 +80,7 @@ pub struct Food {
 }
 
 /// Local food identity, independent of source identifiers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct FoodId(pub i64);
 
 /// Food metadata returned by source-identity lookup, without loading the source document.
