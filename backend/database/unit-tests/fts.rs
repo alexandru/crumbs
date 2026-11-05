@@ -17,6 +17,7 @@ type TagId = i64;
 type FoodCount = i64;
 type MigrationCount = i64;
 type IndexedTags = String;
+type DatasetText = String;
 type FtsTerm = String;
 type Source<'a> = &'a str;
 type SourceFoodId<'a> = &'a str;
@@ -857,7 +858,7 @@ async fn description(database: &Database, id: FoodId) -> Result<FoodDescription,
         .await
 }
 
-async fn dataset(database: &Database, id: FoodId) -> Result<String, sqlx::Error> {
+async fn dataset(database: &Database, id: FoodId) -> Result<DatasetText, sqlx::Error> {
     query_scalar("SELECT dataset FROM crumbs_foods WHERE id = ?")
         .bind(id)
         .fetch_one(&database.pool)
@@ -913,7 +914,7 @@ async fn assert_matches(
 
 async fn assert_search_matches(
     database: &Database,
-    expression: &str,
+    expression: FtsQuery<'_>,
     expected: &[FoodId],
 ) -> Result<(), Box<dyn StdError>> {
     let query = SearchQuery::new(expression)?;

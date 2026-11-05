@@ -17,6 +17,10 @@ use tower::ServiceExt;
 
 use super::{config, search::NAME};
 
+type SourceFoodIdRef<'a> = &'a str;
+type DatasetRef = &'static str;
+type FoodDescriptionRef<'a> = &'a str;
+
 struct TestApplication {
     _directory: TempDir,
     database: Arc<Database>,
@@ -193,9 +197,9 @@ async fn mcp_call_router(
 
 async fn add_usda_food(
     database: &Database,
-    source_food_id: &str,
-    dataset: &'static str,
-    description: &str,
+    source_food_id: SourceFoodIdRef<'_>,
+    dataset: DatasetRef,
+    description: FoodDescriptionRef<'_>,
 ) -> Result<(), Box<dyn Error>> {
     database
         .upsert_food(&Food {
