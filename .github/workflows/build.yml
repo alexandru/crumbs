@@ -113,7 +113,7 @@ jobs:
           ready=0
           for _ in $(seq 1 30); do
             status="$(curl --silent --show-error --connect-timeout 1 --max-time 2 --output "$BODY" --dump-header "$HEADERS" --write-out '%{http_code}' "http://127.0.0.1:${host_port}/" 2>/dev/null || true)"
-            if [ "$status" = "200" ] && grep -qiE '^content-type:[[:space:]]*application/json([[:space:]]*;.*)?[[:space:]]*$' "$HEADERS"; then
+            if [ "$status" = "200" ] && grep -qiE '^content-type:[[:space:]]*text/html([[:space:]]*;.*)?[[:space:]]*$' "$HEADERS"; then
               ready=1
               break
             fi
@@ -126,10 +126,26 @@ jobs:
           done
 
           if [ "$ready" -ne 1 ]; then
-            echo "timed out waiting for GET / to return HTTP 200 with application/json (last status: ${status:-none})" >&2
+            echo "timed out waiting for GET / to return HTTP 200 with text/html (last status: ${status:-none})" >&2
             if [ -s "$HEADERS" ]; then
               cat "$HEADERS" >&2
             fi
+            exit 1
+          fi
+
+          grep -q 'Hello, welcome to Crumbs\.' "$BODY"
+
+          for path in '/foods/search?query=chicken' '/mcp'; do
+            status="$(curl --silent --show-error --connect-timeout 1 --max-time 2 --output "$BODY" --dump-header "$HEADERS" --write-out '%{http_code}' "http://127.0.0.1:${host_port}${path}" 2>/dev/null || true)"
+            if [ "$status" != "401" ] || ! grep -qi '^www-authenticate:' "$HEADERS"; then
+              echo "expected unauthenticated ${path} request to return 401 with WWW-Authenticate (got ${status:-none})" >&2
+              exit 1
+            fi
+          done
+
+          status="$(curl --silent --show-error --connect-timeout 1 --max-time 2 --output "$BODY" --dump-header "$HEADERS" --write-out '%{http_code}' "http://127.0.0.1:${host_port}/.well-known/oauth-authorization-server" 2>/dev/null || true)"
+          if [ "$status" != "200" ] || ! grep -qiE '^content-type:[[:space:]]*application/json([[:space:]]*;.*)?[[:space:]]*$' "$HEADERS"; then
+            echo "expected OAuth authorization-server discovery to return JSON (got ${status:-none})" >&2
             exit 1
           fi
 
@@ -140,8 +156,11 @@ jobs:
           with open(sys.argv[1], encoding="utf-8") as response:
               payload = json.load(response)
 
-          if payload != {"greeting": "Hello, world!"}:
-              raise SystemExit(f"unexpected JSON payload: {payload!r}")
+          expected_issuer = "https://crumbs.example.com"
+          if payload.get("issuer") != expected_issuer:
+              raise SystemExit(f"unexpected OAuth issuer: {payload.get('issuer')!r}")
+          if "S256" not in payload.get("code_challenge_methods_supported", []):
+              raise SystemExit("OAuth discovery does not advertise PKCE S256")
           PY
 
           sleep 2

@@ -23,7 +23,7 @@ use tempfile::TempDir;
 /// Maximum time to wait for a clean shutdown.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// TOML configuration that asks the operating system for an available port.
-pub const EPHEMERAL_PORT_CONFIG: &str = "[http]\nport = 0\n\n[database]\npath = \"crumbs.db\"\n";
+pub const EPHEMERAL_PORT_CONFIG: &str = "[http]\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"crumbs.db\"\n";
 
 /// A running `crumbs server start` process listening on an ephemeral port.
 pub struct ServerProcess {

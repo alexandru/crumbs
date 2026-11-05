@@ -28,11 +28,11 @@ fn terminates_cleanly_on_interrupt() -> Result<(), Box<dyn Error>> {
 fn assert_clean_shutdown(signal: Signal) -> Result<(), Box<dyn Error>> {
     let mut server = ServerProcess::spawn(EPHEMERAL_PORT_CONFIG)?;
 
-    let response = common::get(&server, "/")?;
+    let response = common::get(&server, "/.well-known/oauth-authorization-server")?;
     assert_eq!(
         response.status(),
         HttpStatusCode::OK,
-        "server did not answer HTTP before {signal:?}"
+        "OAuth discovery did not answer before {signal:?}"
     );
 
     server.signal(signal)?;

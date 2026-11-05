@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::error::Error;
 use std::sync::Arc;
 
-use axum::Json;
 use axum::body::to_bytes;
 use axum::extract::{Query, State};
 use axum::http::{StatusCode, Uri};
@@ -12,14 +11,19 @@ use serde_json::{Value, json};
 use super::*;
 
 #[tokio::test]
-async fn root_handler_serializes_greeting() -> Result<(), serde_json::Error> {
-    let Json(greeting) = hello().await;
+async fn root_handler_renders_welcome_page() {
+    let markup = hello().await.into_string();
 
-    assert_eq!(
-        serde_json::to_value(greeting)?,
-        serde_json::json!({ "greeting": "Hello, world!" })
-    );
-    Ok(())
+    for text in [
+        "Hello, welcome to Crumbs.",
+        "A little clarity about what you eat.",
+        "Your food library is ready.",
+    ] {
+        assert!(markup.contains(text), "missing welcome text {text:?}");
+    }
+    assert!(markup.contains("class=\"crumb crumb-three\""));
+    assert!(!markup.contains("<form"));
+    assert!(!markup.contains("<a "));
 }
 
 #[tokio::test]

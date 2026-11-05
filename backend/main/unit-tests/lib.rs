@@ -71,6 +71,45 @@ fn parses_db_import_usda_verbose_flag() -> Result<(), clap::Error> {
 }
 
 #[test]
+fn parses_db_create_user_with_default_config() -> Result<(), clap::Error> {
+    let cli = Cli::try_parse_from(["crumbs", "db", "create-user", "--username", "alice"])?;
+
+    assert!(matches!(
+        cli.command,
+        Command::Db(DbArgs {
+            command: DbCommand::CreateUser { username, config }
+        }) if username == "alice" && config.as_path() == Path::new("application.toml")
+    ));
+    Ok(())
+}
+
+#[test]
+fn parses_db_create_user_with_config() -> Result<(), clap::Error> {
+    let cli = Cli::try_parse_from([
+        "crumbs",
+        "db",
+        "create-user",
+        "--username",
+        "alice",
+        "--config",
+        "/tmp/application.toml",
+    ])?;
+
+    assert!(matches!(
+        cli.command,
+        Command::Db(DbArgs {
+            command: DbCommand::CreateUser { username, config }
+        }) if username == "alice" && config.as_path() == Path::new("/tmp/application.toml")
+    ));
+    Ok(())
+}
+
+#[test]
+fn rejects_db_create_user_without_username() {
+    assert!(Cli::try_parse_from(["crumbs", "db", "create-user"]).is_err());
+}
+
+#[test]
 fn rejects_db_import_usda_without_file() {
     assert!(
         Cli::try_parse_from([

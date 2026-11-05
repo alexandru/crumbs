@@ -8,19 +8,42 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use crumbs_database::{FoodReader, SearchError};
+use maud::{DOCTYPE, Markup, html};
 use serde::Serialize;
 
 use crate::search::{self, SearchRequest};
 
-#[derive(Debug, Serialize)]
-pub(super) struct Greeting {
-    greeting: &'static str,
-}
+pub(super) async fn hello() -> Markup {
+    html! {
+        (DOCTYPE)
+        html lang="en" {
+            head {
+                meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1";
+                title { "Crumbs" }
+                link rel="stylesheet" href="/assets/login.css";
+            }
+            body {
+                main class="page-shell" {
+                    section class="login-card" aria-labelledby="page-title" {
+                        header class="brand" aria-label="Crumbs" {
+                            span class="brand-mark" aria-hidden="true" {
+                                span class="crumb crumb-one" {}
+                                span class="crumb crumb-two" {}
+                                span class="crumb crumb-three" {}
+                            }
+                            span class="brand-name" { "crumbs" }
+                        }
 
-pub(super) async fn hello() -> Json<Greeting> {
-    Json(Greeting {
-        greeting: "Hello, world!",
-    })
+                        p class="eyebrow" { "Food library" }
+                        h1 id="page-title" { "Hello, welcome to Crumbs." }
+                        p class="intro" { "A little clarity about what you eat." }
+                        p class="safety-note" { "Your food library is ready." }
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub(super) async fn search_foods<S: FoodReader + Send + 'static>(

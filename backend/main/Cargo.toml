@@ -9,6 +9,8 @@ name = "crumbs"
 path = "src/main.rs"
 
 [dependencies]
+rpassword.workspace = true
+zeroize.workspace = true
 clap.workspace = true
 config.workspace = true
 crumbs-database.workspace = true

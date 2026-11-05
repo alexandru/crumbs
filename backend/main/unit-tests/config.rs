@@ -1,10 +1,11 @@
 use std::error::Error;
 use std::fs;
 use std::io;
+use std::net::Ipv4Addr;
 use std::path::Path;
 
 use crumbs_database::{DatabaseConfig, DatabasePath};
-use crumbs_server::HttpConfig;
+use crumbs_server::{HttpConfig, IssuerUrl, OAuthConfig};
 use tempfile::NamedTempFile;
 
 use super::AppConfig;
@@ -25,7 +26,7 @@ fn loads_sample_configuration() -> Result<(), Box<dyn Error>> {
             database: DatabaseConfig {
                 path: parent.join("data/crumbs.db")
             },
-            http: HttpConfig { port: 8080 },
+            http: http_config(8080, "https://crumbs.example.com")?,
         }
     );
     Ok(())
@@ -33,7 +34,9 @@ fn loads_sample_configuration() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn loads_valid_nested_configuration() -> Result<(), Box<dyn Error>> {
-    let file = temporary_config("[http]\nport = 49152\n\n[database]\npath = \"data/crumbs.db\"\n")?;
+    let file = temporary_config(
+        "[http]\nport = 49152\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"data/crumbs.db\"\n",
+    )?;
     let parent = file
         .path()
         .parent()
@@ -47,7 +50,7 @@ fn loads_valid_nested_configuration() -> Result<(), Box<dyn Error>> {
             database: DatabaseConfig {
                 path: parent.join("data/crumbs.db")
             },
-            http: HttpConfig { port: 49152 },
+            http: http_config(49152, "http://127.0.0.1")?,
         }
     );
     Ok(())
@@ -61,7 +64,7 @@ fn resolves_relative_database_path_against_config_directory() -> Result<(), Box<
     let config_path = config_directory.join("application.toml");
     fs::write(
         &config_path,
-        "[http]\nport = 8080\n\n[database]\npath = \"state/crumbs.db\"\n",
+        "[http]\nport = 8080\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"state/crumbs.db\"\n",
     )?;
 
     let config = AppConfig::from_file(&config_path)?;
@@ -78,7 +81,7 @@ fn preserves_absolute_database_path() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     let database_path = directory.path().join("elsewhere").join("crumbs.db");
     let file = temporary_config(&format!(
-        "[http]\nport = 8080\n\n[database]\npath = \"{}\"\n",
+        "[http]\nport = 8080\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"{}\"\n",
         database_path.display()
     ))?;
 
@@ -107,7 +110,8 @@ fn rejects_malformed_toml() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn rejects_missing_database_section() -> Result<(), Box<dyn Error>> {
-    let file = temporary_config("[http]\nport = 8080\n")?;
+    let file =
+        temporary_config("[http]\nport = 8080\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n")?;
 
     assert!(AppConfig::from_file(file.path()).is_err());
     Ok(())
@@ -123,7 +127,9 @@ fn rejects_missing_http_section() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn rejects_missing_port() -> Result<(), Box<dyn Error>> {
-    let file = temporary_config("[http]\n\n[database]\npath = \"data/crumbs.db\"\n")?;
+    let file = temporary_config(
+        "[http]\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"data/crumbs.db\"\n",
+    )?;
 
     assert!(AppConfig::from_file(file.path()).is_err());
     Ok(())
@@ -131,8 +137,9 @@ fn rejects_missing_port() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn rejects_wrong_port_type() -> Result<(), Box<dyn Error>> {
-    let file =
-        temporary_config("[http]\nport = [8080]\n\n[database]\npath = \"data/crumbs.db\"\n")?;
+    let file = temporary_config(
+        "[http]\nport = [8080]\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"data/crumbs.db\"\n",
+    )?;
 
     assert!(AppConfig::from_file(file.path()).is_err());
     Ok(())
@@ -140,7 +147,9 @@ fn rejects_wrong_port_type() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn rejects_out_of_range_port() -> Result<(), Box<dyn Error>> {
-    let file = temporary_config("[http]\nport = 70000\n\n[database]\npath = \"data/crumbs.db\"\n")?;
+    let file = temporary_config(
+        "[http]\nport = 70000\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"data/crumbs.db\"\n",
+    )?;
 
     assert!(AppConfig::from_file(file.path()).is_err());
     Ok(())
@@ -148,7 +157,9 @@ fn rejects_out_of_range_port() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn rejects_missing_database_path() -> Result<(), Box<dyn Error>> {
-    let file = temporary_config("[http]\nport = 8080\n\n[database]\n")?;
+    let file = temporary_config(
+        "[http]\nport = 8080\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\n",
+    )?;
 
     assert!(AppConfig::from_file(file.path()).is_err());
     Ok(())
@@ -156,8 +167,9 @@ fn rejects_missing_database_path() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn rejects_wrong_database_path_type() -> Result<(), Box<dyn Error>> {
-    let file =
-        temporary_config("[http]\nport = 8080\n\n[database]\npath = [\"data/crumbs.db\"]\n")?;
+    let file = temporary_config(
+        "[http]\nport = 8080\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = [\"data/crumbs.db\"]\n",
+    )?;
 
     assert!(AppConfig::from_file(file.path()).is_err());
     Ok(())
@@ -166,7 +178,7 @@ fn rejects_wrong_database_path_type() -> Result<(), Box<dyn Error>> {
 #[test]
 fn rejects_unknown_root_section() -> Result<(), Box<dyn Error>> {
     let file = temporary_config(
-        "[http]\nport = 8080\n\n[database]\npath = \"data/crumbs.db\"\n\n[server]\nport = 8080\n",
+        "[http]\nport = 8080\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"data/crumbs.db\"\n\n[server]\nport = 8080\n",
     )?;
 
     assert!(AppConfig::from_file(file.path()).is_err());
@@ -176,7 +188,7 @@ fn rejects_unknown_root_section() -> Result<(), Box<dyn Error>> {
 #[test]
 fn rejects_unknown_http_key() -> Result<(), Box<dyn Error>> {
     let file = temporary_config(
-        "[http]\nport = 8080\nhost = \"127.0.0.1\"\n\n[database]\npath = \"data/crumbs.db\"\n",
+        "[http]\nport = 8080\nhost = \"127.0.0.1\"\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"data/crumbs.db\"\n",
     )?;
 
     assert!(AppConfig::from_file(file.path()).is_err());
@@ -186,7 +198,7 @@ fn rejects_unknown_http_key() -> Result<(), Box<dyn Error>> {
 #[test]
 fn rejects_unknown_database_key() -> Result<(), Box<dyn Error>> {
     let file = temporary_config(
-        "[http]\nport = 8080\n\n[database]\npath = \"data/crumbs.db\"\nmode = \"wal\"\n",
+        "[http]\nport = 8080\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"data/crumbs.db\"\nmode = \"wal\"\n",
     )?;
 
     assert!(AppConfig::from_file(file.path()).is_err());
@@ -203,4 +215,14 @@ fn temporary_config(contents: &str) -> Result<NamedTempFile, Box<dyn Error>> {
     let file = NamedTempFile::new()?;
     fs::write(file.path(), contents)?;
     Ok(file)
+}
+
+fn http_config(port: u16, issuer: &str) -> Result<HttpConfig, crumbs_server::InvalidIssuerUrl> {
+    Ok(HttpConfig {
+        bind: Ipv4Addr::LOCALHOST.into(),
+        port,
+        oauth: OAuthConfig {
+            issuer: IssuerUrl::new(issuer)?,
+        },
+    })
 }

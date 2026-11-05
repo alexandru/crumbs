@@ -5,6 +5,14 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64.workspace = true
+getrandom.workspace = true
+maud.workspace = true
+rust-embed.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+url.workspace = true
+zeroize.workspace = true
 axum.workspace = true
 clap.workspace = true
 crumbs-database.workspace = true

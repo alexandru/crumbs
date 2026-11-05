@@ -6,8 +6,6 @@ use std::error::Error;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 
-use http::HeaderValue;
-use http::header::CONTENT_TYPE;
 use serde_json::{Value, json};
 
 use common::{
@@ -16,23 +14,60 @@ use common::{
 };
 
 #[test]
-fn root_returns_greeting_json() -> Result<(), Box<dyn Error>> {
+fn root_is_public_and_food_apis_require_bearer_tokens() -> Result<(), Box<dyn Error>> {
     let server = ServerProcess::spawn(EPHEMERAL_PORT_CONFIG)?;
-    assert_eq!(server.address().ip(), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    assert_eq!(server.address().ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
 
     let response = get(&server, "/")?;
 
     assert_eq!(response.status(), HttpStatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get(CONTENT_TYPE)
-            .map(HeaderValue::as_bytes),
-        Some(b"application/json".as_slice()),
-    );
-    assert_eq!(response.body(), r#"{"greeting":"Hello, world!"}"#);
+    assert!(response.headers().get("content-type").is_some_and(|value| {
+        value
+            .to_str()
+            .is_ok_and(|value| value.starts_with("text/html"))
+    }));
+    for text in [
+        "Hello, welcome to Crumbs.",
+        "A little clarity about what you eat.",
+        "Your food library is ready.",
+    ] {
+        assert!(
+            response.body().contains(text),
+            "missing welcome text {text:?}"
+        );
+    }
+
+    for path in ["/foods/search?query=chicken", "/mcp"] {
+        let protected = get(&server, path)?;
+        assert_eq!(
+            protected.status(),
+            HttpStatusCode::UNAUTHORIZED,
+            "{path} should require a bearer token"
+        );
+        assert!(protected.headers().contains_key("www-authenticate"));
+    }
+    Ok(())
+}
+
+#[test]
+fn https_issuer_allows_public_listener_for_a_tls_proxy() -> Result<(), Box<dyn Error>> {
+    let config = "[http]\nbind = \"0.0.0.0\"\nport = 0\n\n[http.oauth]\nissuer = \"https://crumbs.example.com\"\n\n[database]\npath = \"crumbs.db\"\n";
+    let server = ServerProcess::spawn(config)?;
+
+    assert_eq!(server.address().ip(), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    Ok(())
+}
+
+#[test]
+fn oauth_discovery_is_available_without_authentication() -> Result<(), Box<dyn Error>> {
+    let server = ServerProcess::spawn(EPHEMERAL_PORT_CONFIG)?;
+
+    let response = get(&server, "/.well-known/oauth-authorization-server")?;
+
+    assert_eq!(response.status(), HttpStatusCode::OK);
     let body: Value = serde_json::from_str(response.body())?;
-    assert_eq!(body, json!({ "greeting": "Hello, world!" }));
+    assert_eq!(body["issuer"], "http://127.0.0.1");
+    assert_eq!(body["code_challenge_methods_supported"], json!(["S256"]));
     Ok(())
 }
 
@@ -51,7 +86,7 @@ fn startup_creates_the_configured_database_file() -> Result<(), Box<dyn Error>> 
     let directory = tempfile::tempdir()?;
     let database_path = directory.path().join("nested").join("crumbs.db");
     let config = format!(
-        "[http]\nport = 0\n\n[database]\npath = \"{}\"\n",
+        "[http]\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"{}\"\n",
         database_path.display()
     );
 
@@ -89,10 +124,29 @@ fn occupied_port_fails_before_serving() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))?;
     let port = listener.local_addr()?.port();
     let config = temporary_config(&format!(
-        "[http]\nport = {port}\n\n[database]\npath = \"crumbs.db\"\n"
+        "[http]\nport = {port}\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"crumbs.db\"\n"
     ))?;
 
     assert_failed_start(&run_server_to_exit(config.path())?);
+    Ok(())
+}
+
+#[test]
+fn loopback_http_issuer_cannot_bind_a_public_interface() -> Result<(), Box<dyn Error>> {
+    let config = temporary_config(
+        "[http]\nbind = \"0.0.0.0\"\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1:8080\"\n\n[database]\npath = \"crumbs.db\"\n",
+    )?;
+
+    let output = run_server_to_exit(config.path())?;
+
+    assert_failed_start(&output);
+    assert!(
+        output
+            .stderr
+            .contains("HTTP OAuth issuer requires a loopback bind address"),
+        "unexpected startup error: {}",
+        output.stderr
+    );
     Ok(())
 }
 
@@ -103,7 +157,7 @@ fn database_initialization_failure_fails_before_serving() -> Result<(), Box<dyn 
     fs::write(&blocker, b"not a directory")?;
     let database_path = blocker.join("nested").join("crumbs.db");
     let config = temporary_config(&format!(
-        "[http]\nport = 0\n\n[database]\npath = \"{}\"\n",
+        "[http]\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"{}\"\n",
         database_path.display()
     ))?;
 
