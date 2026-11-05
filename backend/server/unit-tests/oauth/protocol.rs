@@ -4,6 +4,17 @@ use std::time::Duration;
 
 use super::*;
 
+fn redirect_matches(registered: &str, requested: &str) -> bool {
+    let Ok(registered) = redirect_uri(registered) else {
+        return false;
+    };
+    let Ok(requested) = redirect_uri(requested) else {
+        return false;
+    };
+
+    redirect_matches_parsed(&registered, &requested)
+}
+
 #[test]
 fn secret_is_a_32_byte_url_safe_credential() -> Result<(), ProtocolError> {
     let value = secret()?;

@@ -69,12 +69,15 @@ where
         Ok(None) => return oauth_error(StatusCode::BAD_REQUEST, "invalid_client"),
         Err(_) => return internal_error(),
     };
-    if protocol::redirect_uri(&request.redirect_uri).is_err()
-        || !client
-            .redirect_uris
-            .iter()
-            .any(|registered| protocol::redirect_matches(registered, &request.redirect_uri))
-    {
+    let requested_redirect = match protocol::redirect_uri(&request.redirect_uri) {
+        Ok(redirect) => redirect,
+        Err(_) => return oauth_error(StatusCode::BAD_REQUEST, "invalid_request"),
+    };
+    if !client.redirect_uris.iter().any(|registered| {
+        protocol::redirect_uri(registered).is_ok_and(|registered| {
+            protocol::redirect_matches_parsed(&registered, &requested_redirect)
+        })
+    }) {
         return oauth_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
     let failure = if request.response_type != "code" {
@@ -213,29 +216,25 @@ where
         hash.verify(&password)
     })
     .await;
-    let valid = matches!(verified, Ok(Ok(true)))
-        && credentials
-            .as_ref()
-            .is_some_and(|credentials| credentials.user.active);
-    if !valid {
-        let client = match server.store.oauth_client(&pending.grant.client_id).await {
-            Ok(Some(client)) => client,
-            _ => return internal_error(),
-        };
-        return (
-            StatusCode::UNAUTHORIZED,
-            render(
-                &pending,
-                &form.request_id,
-                &form.csrf_token,
-                &client.name,
-                Some("The username or password is incorrect."),
-            ),
-        )
-            .into_response();
-    }
-    let Some(credentials) = credentials else {
-        return internal_error();
+    let credentials = match (verified, credentials) {
+        (Ok(Ok(true)), Some(credentials)) if credentials.user.active => credentials,
+        _ => {
+            let client = match server.store.oauth_client(&pending.grant.client_id).await {
+                Ok(Some(client)) => client,
+                _ => return internal_error(),
+            };
+            return (
+                StatusCode::UNAUTHORIZED,
+                render(
+                    &pending,
+                    &form.request_id,
+                    &form.csrf_token,
+                    &client.name,
+                    Some("The username or password is incorrect."),
+                ),
+            )
+                .into_response();
+        }
     };
     let (Ok(code), Ok(now)) = (protocol::secret(), protocol::now()) else {
         return internal_error();

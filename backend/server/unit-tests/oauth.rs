@@ -8,7 +8,7 @@ use crumbs_database::oauth::{
     Approval, AuthorizationGrant, ClientAuthentication, CodeRedemption, OAuthClient, OAuthStore,
     PendingAuthorization, TokenPair,
 };
-use crumbs_database::users::{PasswordHash, UserId, Username, Users};
+use crumbs_database::users::{PasswordHash, UserError, UserId, Username, Users};
 use crumbs_database::{Database, DatabaseConfig};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -51,7 +51,7 @@ pub(crate) async fn test_authorization_server(
         TEST_REST_REFRESH_TOKEN,
     )
     .await?;
-    Ok(AuthorizationServer::new(store, oauth_config()).await?)
+    Ok(AuthorizationServer::new(store, oauth_config()?).await?)
 }
 
 pub(crate) async fn seed_session(
@@ -130,10 +130,10 @@ pub(crate) async fn seed_session(
     Ok(())
 }
 
-pub(crate) fn oauth_config() -> OAuthConfig {
-    OAuthConfig {
-        issuer: IssuerUrl::new(TEST_ISSUER).expect("test issuer is valid"),
-    }
+pub(crate) fn oauth_config() -> TestResult<OAuthConfig> {
+    Ok(OAuthConfig {
+        issuer: IssuerUrl::new(TEST_ISSUER)?,
+    })
 }
 
 pub(crate) struct Application {
@@ -171,17 +171,19 @@ async fn test_user(store: &Database) -> TestResult<(UserId, PasswordHash)> {
     match store.user_by_username(&username).await? {
         Some(credentials) => Ok((credentials.user.id, credentials.password_hash)),
         None => {
-            let password_hash = test_password_hash();
+            let password_hash = test_password_hash()?;
             let user = store.create_user(&username, &password_hash).await?;
             Ok((user.id, password_hash))
         }
     }
 }
 
-fn test_password_hash() -> PasswordHash {
-    static HASH: OnceLock<PasswordHash> = OnceLock::new();
-    HASH.get_or_init(|| PasswordHash::hash(TEST_PASSWORD).expect("test password is valid"))
-        .clone()
+fn test_password_hash() -> TestResult<PasswordHash> {
+    static HASH: OnceLock<Result<PasswordHash, UserError>> = OnceLock::new();
+    match HASH.get_or_init(|| PasswordHash::hash(TEST_PASSWORD)) {
+        Ok(hash) => Ok(hash.clone()),
+        Err(error) => Err(std::io::Error::other(error.to_string()).into()),
+    }
 }
 
 struct ResponseBody {

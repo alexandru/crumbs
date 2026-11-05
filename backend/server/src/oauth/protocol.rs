@@ -3,9 +3,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::http::{HeaderMap, header::AUTHORIZATION};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use crumbs_database::oauth::{AuthTimestamp, CredentialHash, PkceChallenge, RedirectUri};
+use crumbs_database::oauth::{AuthTimestamp, CredentialHash, PkceChallenge};
 use sha2::{Digest, Sha256};
 use url::{Host, Url};
+
+pub(super) struct ParsedRedirect<'a> {
+    original: &'a str,
+    url: Url,
+    raw_scheme: &'a str,
+    raw_host: &'a str,
+    raw_suffix: &'a str,
+}
 
 const MAX_REDIRECT_URI_BYTES: usize = 2048;
 const MAX_BEARER_TOKEN_BYTES: usize = 256;
@@ -72,50 +80,33 @@ pub(super) fn valid_challenge(value: &str) -> bool {
     decoded.len() == 32 && URL_SAFE_NO_PAD.encode(decoded) == value
 }
 
-pub(super) fn redirect_uri(value: &str) -> Result<RedirectUri, ProtocolError> {
-    validated_redirect(value)?;
-    Ok(value.to_owned())
+pub(super) fn redirect_uri(value: &str) -> Result<ParsedRedirect<'_>, ProtocolError> {
+    parse_redirect(value)
 }
 
-pub(super) fn redirect_matches(registered: &str, requested: &str) -> bool {
-    let Ok(registered_url) = validated_redirect(registered) else {
-        return false;
-    };
-    let Ok(requested_url) = validated_redirect(requested) else {
-        return false;
-    };
-
-    if registered == requested {
+pub(super) fn redirect_matches_parsed(
+    registered: &ParsedRedirect<'_>,
+    requested: &ParsedRedirect<'_>,
+) -> bool {
+    if registered.original == requested.original {
         return true;
     }
 
-    if registered_url.scheme() != "http"
-        || requested_url.scheme() != "http"
-        || !is_loopback_ip(&registered_url)
-        || !is_loopback_ip(&requested_url)
+    if registered.url.scheme() != "http"
+        || requested.url.scheme() != "http"
+        || !is_loopback_ip(&registered.url)
+        || !is_loopback_ip(&requested.url)
     {
         return false;
     }
 
-    let (
-        Some((registered_scheme, registered_authority, registered_suffix)),
-        Some((requested_scheme, requested_authority, requested_suffix)),
-    ) = (raw_uri_parts(registered), raw_uri_parts(requested))
-    else {
-        return false;
-    };
-
-    if registered_scheme != requested_scheme || registered_suffix != requested_suffix {
+    if registered.raw_scheme != requested.raw_scheme
+        || registered.raw_suffix != requested.raw_suffix
+    {
         return false;
     }
 
-    let Ok((registered_host, _)) = authority_without_port(registered_authority) else {
-        return false;
-    };
-    let Ok((requested_host, _)) = authority_without_port(requested_authority) else {
-        return false;
-    };
-    registered_host == requested_host
+    registered.raw_host == requested.raw_host
 }
 
 pub(super) fn redirect_response(
@@ -124,7 +115,7 @@ pub(super) fn redirect_response(
     issuer: &str,
     result: Result<&str, &str>,
 ) -> Result<String, ProtocolError> {
-    validated_redirect(uri)?;
+    parse_redirect(uri)?;
 
     let mut encoded_query = url::form_urlencoded::Serializer::new(String::new());
     match result {
@@ -203,7 +194,7 @@ pub(super) fn bearer(headers: &HeaderMap) -> Option<&str> {
     value.get(token_start..)
 }
 
-fn validated_redirect(value: &str) -> Result<Url, ProtocolError> {
+fn parse_redirect(value: &str) -> Result<ParsedRedirect<'_>, ProtocolError> {
     if value.len() > MAX_REDIRECT_URI_BYTES
         || value
             .bytes()
@@ -212,7 +203,7 @@ fn validated_redirect(value: &str) -> Result<Url, ProtocolError> {
         return Err(ProtocolError::InvalidRequest);
     }
 
-    let (raw_scheme, raw_authority, _) =
+    let (raw_scheme, raw_authority, raw_suffix) =
         raw_uri_parts(value).ok_or(ProtocolError::InvalidRequest)?;
     if raw_scheme.is_empty() || raw_authority.is_empty() || raw_authority.contains('@') {
         return Err(ProtocolError::InvalidRequest);
@@ -232,7 +223,7 @@ fn validated_redirect(value: &str) -> Result<Url, ProtocolError> {
         _ => return Err(ProtocolError::InvalidRequest),
     }
 
-    authority_without_port(raw_authority)?;
+    let (raw_host, _) = authority_without_port(raw_authority)?;
 
     if url.query_pairs().any(|(name, _)| {
         matches!(
@@ -243,7 +234,13 @@ fn validated_redirect(value: &str) -> Result<Url, ProtocolError> {
         return Err(ProtocolError::InvalidRequest);
     }
 
-    Ok(url)
+    Ok(ParsedRedirect {
+        original: value,
+        url,
+        raw_scheme,
+        raw_host,
+        raw_suffix,
+    })
 }
 
 fn raw_uri_parts(value: &str) -> Option<(&str, &str, &str)> {

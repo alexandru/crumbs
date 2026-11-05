@@ -61,10 +61,13 @@ where
     let name = request
         .client_name
         .unwrap_or_else(|| "MCP client".to_owned());
-    let method = request
+    let method_name = request
         .token_endpoint_auth_method
         .as_deref()
         .unwrap_or("client_secret_basic");
+    let Some(method) = ClientAuthenticationMethod::parse(method_name) else {
+        return oauth_error(StatusCode::BAD_REQUEST, "invalid_client_metadata");
+    };
     let grants = request
         .grant_types
         .unwrap_or_else(|| vec!["authorization_code".to_owned()]);
@@ -77,10 +80,6 @@ where
             .redirect_uris
             .iter()
             .any(|uri| protocol::redirect_uri(uri).is_err())
-        || !matches!(
-            method,
-            "none" | "client_secret_basic" | "client_secret_post"
-        )
         || !grants.iter().any(|grant| grant == "authorization_code")
         || grants
             .iter()
@@ -102,10 +101,13 @@ where
     };
     let secret = Zeroizing::new(secret);
     let authentication = match method {
-        "none" => ClientAuthentication::Public,
-        "client_secret_basic" => ClientAuthentication::SecretBasic(protocol::digest(&secret)),
-        "client_secret_post" => ClientAuthentication::SecretPost(protocol::digest(&secret)),
-        _ => return oauth_error(StatusCode::BAD_REQUEST, "invalid_client_metadata"),
+        ClientAuthenticationMethod::Public => ClientAuthentication::Public,
+        ClientAuthenticationMethod::SecretBasic => {
+            ClientAuthentication::SecretBasic(protocol::digest(&secret))
+        }
+        ClientAuthenticationMethod::SecretPost => {
+            ClientAuthentication::SecretPost(protocol::digest(&secret))
+        }
     };
     let client = OAuthClient {
         id,
@@ -122,12 +124,12 @@ where
         "client_id_issued_at": now / 1000,
         "client_name": client.name,
         "redirect_uris": client.redirect_uris,
-        "token_endpoint_auth_method": method,
+        "token_endpoint_auth_method": method.as_str(),
         "grant_types": grants,
         "response_types": ["code"],
         "scope": READ_SCOPE,
     });
-    if method != "none" {
+    if !matches!(method, ClientAuthenticationMethod::Public) {
         response["client_secret"] = json!(secret.as_str());
         response["client_secret_expires_at"] = json!(0);
     }
@@ -272,6 +274,32 @@ where
     {
         Ok(()) => StatusCode::OK.into_response(),
         Err(_) => internal_error(),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ClientAuthenticationMethod {
+    Public,
+    SecretBasic,
+    SecretPost,
+}
+
+impl ClientAuthenticationMethod {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::Public),
+            "client_secret_basic" => Some(Self::SecretBasic),
+            "client_secret_post" => Some(Self::SecretPost),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "none",
+            Self::SecretBasic => "client_secret_basic",
+            Self::SecretPost => "client_secret_post",
+        }
     }
 }
 
