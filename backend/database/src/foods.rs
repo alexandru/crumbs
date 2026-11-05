@@ -42,10 +42,10 @@ pub trait FoodReader: Sync {
     /// An expression may contain plain terms (combined as AND), quoted phrases,
     /// prefix matching with a trailing `*` (for example, `chick*`),
     /// `AND`/`OR`/`NOT`, parentheses, and field selectors such as
-    /// `source:USDA`, `food_type:USDA/Foundation`, `description:chicken`,
-    /// `category:dairy`, or `tags:organic`. Multiword values can be quoted, such as
-    /// `food_type:"USDA/SR Legacy"`. The default limit is 20, and supplied limits are
-    /// clamped to 20–1,000.
+    /// `source:USDA`, `food_type:USDA_Foundation`, `description:chicken`,
+    /// `category:dairy`, or `tags:organic`. USDA food types include
+    /// `USDA_SR_Legacy` and `USDA_Survey_FNDDS`. The default limit is 20, and supplied
+    /// limits are clamped to 20–1,000.
     ///
     /// # Errors
     ///

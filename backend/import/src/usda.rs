@@ -105,10 +105,10 @@ impl FoodKind {
     /// Returns the source-qualified food type stored by Crumbs.
     pub(crate) const fn persisted_as_str(self) -> &'static str {
         match self {
-            Self::Foundation => "USDA/Foundation",
-            Self::SrLegacy => "USDA/SR Legacy",
-            Self::Survey => "USDA/Survey (FNDDS)",
-            Self::Branded => "USDA/Branded",
+            Self::Foundation => "USDA_Foundation",
+            Self::SrLegacy => "USDA_SR_Legacy",
+            Self::Survey => "USDA_Survey_FNDDS",
+            Self::Branded => "USDA_Branded",
         }
     }
 }

@@ -306,18 +306,18 @@ async fn mcp_search_supports_source_and_namespaced_food_type_filters() -> Result
     add_usda_food(
         &app.database,
         "foundation-1",
-        "USDA/Foundation",
+        "USDA_Foundation",
         "Chicken breast, raw",
     )
     .await?;
-    add_usda_food(&app.database, "branded-1", "USDA/Branded", "Chicken broth").await?;
+    add_usda_food(&app.database, "branded-1", "USDA_Branded", "Chicken broth").await?;
 
     mcp_initialize(&app).await?;
     let foundation = mcp_call(
         &app,
         2,
         NAME,
-        json!({"query":"chicken food_type:USDA/Foundation"}),
+        json!({"query":"chicken food_type:USDA_Foundation"}),
     )
     .await?;
     assert_eq!(foundation.status, StatusCode::OK, "{:?}", foundation.json);
@@ -501,11 +501,14 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         "category:dairy",
         "tags:organic",
         "source:USDA",
-        "food_type:USDA/Foundation",
-        "food_type:USDA/Branded",
-        "food_type:\"USDA/SR Legacy\"",
-        "food_type:\"USDA/Survey (FNDDS)\"",
+        "food_type:USDA_Foundation",
+        "chicken food_type:USDA_Foundation",
+        "food_type:USDA_Branded",
+        "food_type:USDA_SR_Legacy",
+        "food_type:USDA_Survey_FNDDS",
         "stored as usda",
+        "values requiring quotes, such as values containing spaces, hyphens, or slashes",
+        "passes expressions to search unchanged and does not add quotes",
         "empty foods list",
         "invalid expressions return an error",
     ] {
