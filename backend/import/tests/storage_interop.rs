@@ -60,7 +60,7 @@ async fn food_upserts_and_usda_reimports_preserve_tag_assignments() -> Result<()
     assert_eq!(first_import.committed().get(), 2);
     let imported = find_food(&fixture.database, &source, source_food_id).await?;
     assert_eq!(imported.id, initial_id);
-    assert_eq!(imported.food_type.as_ref(), "Foundation");
+    assert_eq!(imported.food_type.as_ref(), "USDA/Foundation");
     assert_eq!(imported.description, "Hummus, commercial");
     assert_eq!(
         imported.category.as_deref(),

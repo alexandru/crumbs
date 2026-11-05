@@ -40,7 +40,7 @@ pub(super) fn tool() -> Tool {
                 "query": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Nonblank Crumbs full-text expression over description, category, and tags. Terms separated by spaces match all terms. Use quoted phrases, prefix matching with a trailing * (for example, chick*), AND/OR/NOT, parentheses, or selectors such as description:chicken, category:dairy, and tags:organic. Examples: chicken breast, \"chicken breast\", chick*, chicken OR turkey, tags:organic."
+                    "description": "Nonblank Crumbs full-text expression. Terms separated by spaces use AND. Supports quoted phrases, prefix matching with a trailing * (for example, chick*), AND/OR/NOT, parentheses, and field selectors for description, category, tags, source, and food_type. Terms are case-insensitive. Examples: chicken breast, \"chicken breast\", chick*, chicken OR turkey, description:chicken, category:dairy, tags:organic, source:USDA, chicken source:USDA, food_type:USDA/Foundation, chicken food_type:USDA/Foundation, food_type:USDA/Branded, food_type:\"USDA/SR Legacy\", food_type:\"USDA/Survey (FNDDS)\". USDA source values are stored as usda. No matches return an empty foods list; invalid expressions return an error."
                 },
                 "limit": {
                     "type": "integer",
@@ -52,7 +52,7 @@ pub(super) fn tool() -> Tool {
     ]);
     Tool::new_with_raw(
         NAME,
-        Some("Search food descriptions, categories, and tags. Return matching foods with full nutrition data, ordered by best-effort relevance then food ID. No pagination.".into()),
+        Some("Search foods with Crumbs full-text expressions over descriptions, categories, tags, source, and food type. Results include full nutrition data and are ordered by best-effort relevance, then food ID. No matches return an empty foods list. Invalid search expressions return an error. There is no pagination.".into()),
         schema,
     )
     .with_annotations(

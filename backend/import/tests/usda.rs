@@ -53,7 +53,7 @@ async fn imports_foundation_foods_with_typed_data() -> Result<(), Box<dyn StdErr
     let food = food_row(&fixture.pool, "usda", "321358").await?;
     assert!(food.id > 0);
     assert_eq!(food.source, "usda");
-    assert_eq!(food.food_type, "Foundation");
+    assert_eq!(food.food_type, "USDA/Foundation");
     assert_eq!(food.description, "Hummus, commercial");
     assert_eq!(
         food.category.as_deref(),
@@ -87,7 +87,7 @@ async fn imports_branded_food_with_typed_data() -> Result<(), Box<dyn StdError>>
     assert_eq!(report.committed().get(), 1);
     let food = food_row(&fixture.pool, "usda", "1106281").await?;
     assert_eq!(food.source, "usda");
-    assert_eq!(food.food_type, "Branded");
+    assert_eq!(food.food_type, "USDA/Branded");
     assert_eq!(food.description, "GRANOLA, CINNAMON, RAISIN");
     assert_eq!(food.category.as_deref(), Some("Cereal"));
     assert!(fixture.database.list_tags().await?.is_empty());
@@ -401,7 +401,8 @@ async fn importing_a_subset_retains_absent_rows_and_coexists() -> Result<(), Box
 }
 
 #[tokio::test]
-async fn imports_supported_roots_with_exact_food_types() -> Result<(), Box<dyn StdError>> {
+async fn imports_supported_roots_with_source_qualified_food_types() -> Result<(), Box<dyn StdError>>
+{
     let fixture = DatabaseFixture::open().await?;
     let sr = write_input(
         fixture.directory.path(),
@@ -419,8 +420,8 @@ async fn imports_supported_roots_with_exact_food_types() -> Result<(), Box<dyn S
 
     let sr_food = food_row(&fixture.pool, "usda", "9301").await?;
     let survey_food = food_row(&fixture.pool, "usda", "9302").await?;
-    assert_eq!(sr_food.food_type, "SR Legacy");
-    assert_eq!(survey_food.food_type, "Survey (FNDDS)");
+    assert_eq!(sr_food.food_type, "USDA/SR Legacy");
+    assert_eq!(survey_food.food_type, "USDA/Survey (FNDDS)");
     Ok(())
 }
 
@@ -828,7 +829,7 @@ async fn imports_into_generic_food_writer_and_passes_typed_data() -> Result<(), 
         .find(|food| food.source_food_id == "7301")
         .ok_or_else(|| io::Error::other("recording store did not receive the food"))?;
     assert_eq!(first_food.source, "usda");
-    assert_eq!(first_food.food_type, "Foundation");
+    assert_eq!(first_food.food_type, "USDA/Foundation");
     assert_eq!(first_food.description, "Alternative food");
     assert_eq!(first_food.category.as_deref(), Some("Shelf Stable"));
     assert_eq!(first_food.parsed_data, FoodData::default());

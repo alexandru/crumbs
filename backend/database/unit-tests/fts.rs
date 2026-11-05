@@ -5,10 +5,14 @@ use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{SqliteConnection, query, query_scalar};
 
-use crate::{Database, DatabaseConfig, FoodCategory, FoodDescription, TagName};
+use crate::{
+    Database, DatabaseConfig, FoodCategory, FoodDescription, FoodReader, SearchLimit, SearchQuery,
+    TagName,
+};
 
 const MIGRATION_0001: &str = include_str!("../migrations/0001_create_crumbs_sources.sql");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_create_crumbs_foods.sql");
+const MIGRATION_0003: &str = include_str!("../migrations/0003_create_crumbs_foods_fts.sql");
 type FoodId = i64;
 type TagId = i64;
 type FoodCount = i64;
@@ -80,6 +84,52 @@ async fn english_matching_is_case_insensitive_without_stemming() -> Result<(), B
     assert_matches(&database, "heddar", &[]).await?;
     assert_matches(&database, "cheeses", &[]).await?;
     assert_eq!(description(&database, 1).await?, "Crunchy Peanut Butter");
+    assert_fts_integrity(&database).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn source_and_food_type_are_searchable_fields() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    insert_food(&database, 1, "usda", "fdc-1", "Chicken breast", None, "").await?;
+    insert_food(&database, 2, "other", "other-1", "Chicken breast", None, "").await?;
+    insert_food(&database, 3, "usda", "fdc-2", "Chicken thigh", None, "").await?;
+    query("UPDATE crumbs_foods SET food_type = 'USDA/Foundation' WHERE id = 1")
+        .execute(&database.pool)
+        .await?;
+    query("UPDATE crumbs_foods SET food_type = 'USDA/Branded' WHERE id = 2")
+        .execute(&database.pool)
+        .await?;
+    query("UPDATE crumbs_foods SET food_type = 'USDA/SR Legacy' WHERE id = 3")
+        .execute(&database.pool)
+        .await?;
+
+    assert_search_matches(&database, "food_type:USDA/Foundation", &[1]).await?;
+    assert_search_matches(&database, "source:USDA", &[1, 3]).await?;
+    assert_search_matches(&database, "chicken source:USDA", &[1, 3]).await?;
+    assert_search_matches(&database, "source:USDA AND food_type:USDA/Foundation", &[1]).await?;
+    assert_search_matches(&database, "food_type:\"USDA/SR Legacy\"", &[3]).await?;
+    assert_search_matches(&database, "food_type:USDA/Branded", &[2]).await?;
+    query("INSERT INTO crumbs_sources (id, created_at) VALUES ('community', 0)")
+        .execute(&database.pool)
+        .await?;
+    query("UPDATE crumbs_foods SET source = 'community' WHERE id = 1")
+        .execute(&database.pool)
+        .await?;
+    assert_search_matches(&database, "source:USDA", &[3]).await?;
+    assert_search_matches(&database, "source:community", &[1]).await?;
+    query("UPDATE crumbs_foods SET food_type = 'Community/Custom' WHERE id = 1")
+        .execute(&database.pool)
+        .await?;
+    assert_search_matches(&database, "food_type:USDA/Foundation", &[]).await?;
+    assert_search_matches(&database, "food_type:Community/Custom", &[1]).await?;
+    let invalid_query = SearchQuery::new("food_type:USDA/!")?;
+    assert!(matches!(
+        database
+            .search_foods(&invalid_query, SearchLimit::default())
+            .await,
+        Err(crate::SearchError::InvalidQuery(_))
+    ));
     assert_fts_integrity(&database).await?;
     Ok(())
 }
@@ -689,6 +739,10 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         migrations.join("0002_create_crumbs_foods.sql"),
         MIGRATION_0002,
     )?;
+    fs::write(
+        migrations.join("0003_create_crumbs_foods_fts.sql"),
+        MIGRATION_0003,
+    )?;
     let migrator = Migrator::new(migrations.as_path()).await?;
     let database_path = directory.path().join("crumbs.db");
     let options = SqliteConnectOptions::new()
@@ -697,15 +751,22 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         .foreign_keys(true);
     let pool = SqlitePool::connect_with(options).await?;
     migrator.run(&pool).await?;
-    query("INSERT INTO crumbs_sources (id, created_at) VALUES ('usda', 0)")
-        .execute(&pool)
-        .await?;
+    query(
+        "INSERT INTO crumbs_sources (id, created_at)
+         VALUES ('usda', 0), ('other', 0)",
+    )
+    .execute(&pool)
+    .await?;
     query(
         "INSERT INTO crumbs_foods
             (id, source, source_food_id, food_type, description, category, parsed_data, created_at)
          VALUES
             (1, 'usda', 'old-1', 'Foundation', 'Roșii coapte', 'Legume', '{}', 0),
-            (2, 'usda', 'old-2', 'Foundation', 'Cheddar Cheese', 'Dairy', '{}', 0)",
+            (2, 'usda', 'old-2', 'SR Legacy', 'Cheddar Cheese', 'Dairy', '{}', 0),
+            (3, 'usda', 'old-3', 'Survey (FNDDS)', 'Survey food', NULL, '{}', 0),
+            (4, 'usda', 'old-4', 'Branded', 'Branded food', NULL, '{}', 0),
+            (5, 'other', 'old-5', 'Foundation', 'Other source food', NULL, '{}', 0),
+            (6, 'usda', 'old-6', 'USDA/Branded', 'Already namespaced', NULL, '{}', 0)",
     )
     .execute(&pool)
     .await?;
@@ -728,12 +789,26 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         path: database_path.clone(),
     })
     .await?;
-    assert_eq!(migration_count(&database).await?, 3);
+    assert_eq!(migration_count(&database).await?, 4);
     assert_matches(&database, "rosii", &[1]).await?;
     assert_matches(&database, "cheddar", &[2]).await?;
     assert_matches(&database, "dairy", &[2]).await?;
     assert_matches(&database, "sharp", &[2]).await?;
-    assert_eq!(fts_row_count(&database).await?, 2);
+    assert_search_matches(&database, "food_type:USDA/Foundation", &[1]).await?;
+    assert_search_matches(&database, "food_type:\"USDA/SR Legacy\"", &[2]).await?;
+    assert_search_matches(&database, "food_type:\"USDA/Survey (FNDDS)\"", &[3]).await?;
+    assert_search_matches(&database, "food_type:USDA/Branded", &[4, 6]).await?;
+    assert_search_matches(&database, "source:USDA", &[1, 2, 3, 4, 6]).await?;
+    assert_search_matches(&database, "source:USDA AND food_type:USDA/Foundation", &[1]).await?;
+    assert_search_matches(&database, "SOURCE:usda", &[1, 2, 3, 4, 6]).await?;
+    assert_search_matches(&database, "food_type:Foundation", &[1, 5]).await?;
+    assert_eq!(food_type(&database, 1).await?, "USDA/Foundation");
+    assert_eq!(food_type(&database, 2).await?, "USDA/SR Legacy");
+    assert_eq!(food_type(&database, 3).await?, "USDA/Survey (FNDDS)");
+    assert_eq!(food_type(&database, 4).await?, "USDA/Branded");
+    assert_eq!(food_type(&database, 5).await?, "Foundation");
+    assert_eq!(food_type(&database, 6).await?, "USDA/Branded");
+    assert_eq!(fts_row_count(&database).await?, 6);
     assert_eq!(description(&database, 1).await?, "Roșii coapte");
     assert_fts_integrity(&database).await?;
     database.close().await;
@@ -742,11 +817,56 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         path: database_path,
     })
     .await?;
-    assert_eq!(migration_count(&reopened).await?, 3);
+    assert_eq!(migration_count(&reopened).await?, 4);
     assert_matches(&reopened, "rosii", &[1]).await?;
     assert_matches(&reopened, "cheddar", &[2]).await?;
-    assert_eq!(fts_row_count(&reopened).await?, 2);
+    assert_search_matches(&reopened, "food_type:USDA/Foundation", &[1]).await?;
+    assert_eq!(fts_row_count(&reopened).await?, 6);
     assert_fts_integrity(&reopened).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn pre_fts_foods_are_backfilled_during_upgrade() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let migrations = directory.path().join("migrations");
+    fs::create_dir(&migrations)?;
+    fs::write(
+        migrations.join("0001_create_crumbs_sources.sql"),
+        MIGRATION_0001,
+    )?;
+    fs::write(
+        migrations.join("0002_create_crumbs_foods.sql"),
+        MIGRATION_0002,
+    )?;
+    let migrator = Migrator::new(migrations.as_path()).await?;
+    let database_path = directory.path().join("crumbs.db");
+    let options = SqliteConnectOptions::new()
+        .filename(&database_path)
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let pool = SqlitePool::connect_with(options).await?;
+    migrator.run(&pool).await?;
+    query("INSERT INTO crumbs_sources (id, created_at) VALUES ('usda', 0)")
+        .execute(&pool)
+        .await?;
+    query(
+        "INSERT INTO crumbs_foods
+            (id, source, source_food_id, food_type, description, category, parsed_data, created_at)
+         VALUES (1, 'usda', 'pre-fts-1', 'Foundation', 'Pre-indexed food', 'Pantry', '{}', 0)",
+    )
+    .execute(&pool)
+    .await?;
+    pool.close().await;
+
+    let database = Database::open(DatabaseConfig {
+        path: database_path,
+    })
+    .await?;
+    assert_matches(&database, "indexed", &[1]).await?;
+    assert_matches(&database, "pantry", &[1]).await?;
+    assert_search_matches(&database, "food_type:USDA/Foundation", &[1]).await?;
+    assert_fts_integrity(&database).await?;
     Ok(())
 }
 
@@ -798,6 +918,13 @@ async fn description(database: &Database, id: FoodId) -> Result<FoodDescription,
         .await
 }
 
+async fn food_type(database: &Database, id: FoodId) -> Result<String, sqlx::Error> {
+    query_scalar("SELECT food_type FROM crumbs_foods WHERE id = ?")
+        .bind(id)
+        .fetch_one(&database.pool)
+        .await
+}
+
 async fn category(database: &Database, id: FoodId) -> Result<Option<FoodCategory>, sqlx::Error> {
     query_scalar("SELECT category FROM crumbs_foods WHERE id = ?")
         .bind(id)
@@ -842,6 +969,24 @@ async fn assert_matches(
 ) -> Result<(), Box<dyn StdError>> {
     let actual = matching_ids(database, query).await?;
     assert_eq!(actual, expected, "MATCH {query:?}");
+    Ok(())
+}
+
+async fn assert_search_matches(
+    database: &Database,
+    expression: &str,
+    expected: &[FoodId],
+) -> Result<(), Box<dyn StdError>> {
+    let query = SearchQuery::new(expression)?;
+    let results = database
+        .search_foods(&query, SearchLimit::default())
+        .await?;
+    let mut actual = results
+        .into_iter()
+        .map(|result| result.id.0)
+        .collect::<Vec<_>>();
+    actual.sort_unstable();
+    assert_eq!(actual, expected, "search {expression:?}");
     Ok(())
 }
 

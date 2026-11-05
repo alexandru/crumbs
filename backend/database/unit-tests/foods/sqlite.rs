@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use sqlx::{FromRow, query_scalar};
 
+use super::quote_slash_terms;
 use crate::clock::{Clock, UnixMillis};
 use crate::{
     Database, DatabaseConfig, Food, FoodId, FoodReader, FoodSearchResult, FoodWriter, SearchError,
@@ -573,6 +574,23 @@ async fn missing_search_column_is_reported_as_storage_failure() -> Result<(), Bo
     database
         .upsert_food(&make_food("usda", "1", "Milk")?)
         .await?;
+    for statement in [
+        "DROP TRIGGER crumbs_foods_fts_after_insert",
+        "DROP TRIGGER crumbs_foods_fts_before_delete",
+        "DROP TRIGGER crumbs_foods_fts_before_update",
+        "DROP TRIGGER crumbs_foods_fts_after_update",
+        "DROP TRIGGER crumbs_food_tags_fts_before_insert",
+        "DROP TRIGGER crumbs_food_tags_fts_after_insert",
+        "DROP TRIGGER crumbs_food_tags_fts_before_delete",
+        "DROP TRIGGER crumbs_food_tags_fts_after_delete",
+        "DROP TRIGGER crumbs_food_tags_fts_before_update",
+        "DROP TRIGGER crumbs_food_tags_fts_after_update",
+        "DROP TRIGGER crumbs_tags_fts_before_delete",
+        "DROP TRIGGER crumbs_tags_fts_before_update",
+        "DROP TRIGGER crumbs_tags_fts_after_update",
+    ] {
+        sqlx::query(statement).execute(&database.pool).await?;
+    }
     sqlx::query("ALTER TABLE crumbs_foods RENAME COLUMN source TO source_broken")
         .execute(&database.pool)
         .await?;
@@ -659,4 +677,34 @@ async fn search_food_ids(
             .map(|result| result.id)
             .collect(),
     )
+}
+#[test]
+fn slash_terms_are_quoted_without_changing_other_query_syntax() {
+    for (query, expected) in [
+        ("food_type:USDA/Foundation", "food_type:\"USDA/Foundation\""),
+        (
+            "source:USDA AND food_type:USDA/Foundation",
+            "source:USDA AND food_type:\"USDA/Foundation\"",
+        ),
+        (
+            "(source:USDA OR food_type:USDA/Foundation)",
+            "(source:USDA OR food_type:\"USDA/Foundation\")",
+        ),
+        (
+            "food_type:USDA/Foundation*",
+            "food_type:\"USDA/Foundation\"*",
+        ),
+        (
+            "food_type:\"USDA/SR Legacy\"",
+            "food_type:\"USDA/SR Legacy\"",
+        ),
+        (
+            "description:\"foo\"\"bar/food\"",
+            "description:\"foo\"\"bar/food\"",
+        ),
+        ("food_type:USDA/Şor", "food_type:\"USDA/Şor\""),
+        ("description:chicken!", "description:chicken!"),
+    ] {
+        assert_eq!(quote_slash_terms(query), expected, "query {query:?}");
+    }
 }

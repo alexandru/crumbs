@@ -28,7 +28,7 @@ const SANITIZED_FOOD_IDS: [&str; 10] = [
     "2747656", "2747673",
 ];
 const EXPECTED_SOURCE: SourceRef<'_> = "usda";
-const EXPECTED_FOOD_TYPE: FoodTypeRef<'_> = "Foundation";
+const EXPECTED_FOOD_TYPE: FoodTypeRef<'_> = "USDA/Foundation";
 
 type RawFoodId = i64;
 type ReleaseDate = &'static str;

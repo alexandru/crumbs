@@ -49,7 +49,7 @@ impl PreparedFood {
         Food {
             source: USDA_SOURCE,
             source_food_id: self.fdc_id.0,
-            food_type: self.kind.as_str().into(),
+            food_type: self.kind.persisted_as_str().into(),
             description: self.description.0,
             category: self.category.map(|category| category.0),
             parsed_data: self.parsed_data,
@@ -99,6 +99,16 @@ impl FoodKind {
             Self::SrLegacy => "SR Legacy",
             Self::Survey => "Survey (FNDDS)",
             Self::Branded => "Branded",
+        }
+    }
+
+    /// Returns the source-qualified food type stored by Crumbs.
+    pub(crate) const fn persisted_as_str(self) -> &'static str {
+        match self {
+            Self::Foundation => "USDA/Foundation",
+            Self::SrLegacy => "USDA/SR Legacy",
+            Self::Survey => "USDA/Survey (FNDDS)",
+            Self::Branded => "USDA/Branded",
         }
     }
 }

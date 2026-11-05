@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use sqlx::error::DatabaseError;
@@ -66,7 +67,7 @@ impl FoodReader for Database {
     ) -> Result<Vec<FoodSearchResult>, SearchError<Self::Error>> {
         let mut connection = self.pool.acquire().await.map_err(SearchError::Storage)?;
         let rows = match sqlx::query_as::<_, FoodSearchRow>(SEARCH_SQL)
-            .bind(query.as_str())
+            .bind(quote_slash_terms(query.as_str()))
             .bind(limit.get())
             .fetch_all(&mut *connection)
             .await
@@ -232,6 +233,61 @@ LIMIT ?
 ";
 
 const FTS_ERROR_PROBE_QUERY: &str = "crumbsftsvalidation";
+
+fn quote_slash_terms(query: &str) -> Cow<'_, str> {
+    if !query.contains('/') {
+        return Cow::Borrowed(query);
+    }
+
+    let mut characters = query.char_indices().peekable();
+    let mut inside_quotes = false;
+    let mut copied_through = 0;
+    let mut quoted = None;
+
+    while let Some((index, character)) = characters.next() {
+        if character == '"' {
+            if inside_quotes && characters.peek().is_some_and(|(_, next)| *next == '"') {
+                characters.next();
+            } else {
+                inside_quotes = !inside_quotes;
+            }
+        } else if !inside_quotes && is_search_word_character(character) {
+            let start = index;
+            while characters
+                .peek()
+                .is_some_and(|(_, next)| is_search_word_character(*next))
+            {
+                characters.next();
+            }
+            let end = characters.peek().map_or(query.len(), |(next, _)| *next);
+            let token = &query[start..end];
+            if token.contains('/') {
+                let output = quoted.get_or_insert_with(|| String::with_capacity(query.len()));
+                output.push_str(&query[copied_through..start]);
+                output.push('"');
+                output.push_str(token);
+                output.push('"');
+                copied_through = end;
+            }
+        }
+    }
+
+    match quoted {
+        Some(mut quoted) => {
+            quoted.push_str(&query[copied_through..]);
+            Cow::Owned(quoted)
+        }
+        None => Cow::Borrowed(query),
+    }
+}
+
+fn is_search_word_character(character: char) -> bool {
+    character == '\u{001a}'
+        || character == '_'
+        || character == '/'
+        || character.is_ascii_alphanumeric()
+        || character >= '\u{0080}'
+}
 
 impl FoodSearchRow {
     fn into_result(self) -> Result<FoodSearchResult, SearchError<sqlx::Error>> {

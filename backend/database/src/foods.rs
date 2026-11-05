@@ -34,15 +34,18 @@ pub trait FoodReader: Sync {
     /// Failure reported by this storage implementation.
     type Error: StdError + Send + Sync + 'static;
 
-    /// Searches indexed descriptions, categories, and tags with a Crumbs full-text expression.
+    /// Searches indexed sources, food types, descriptions, categories, and tags with a Crumbs
+    /// full-text expression.
     ///
     /// Results include full parsed nutrition data. Implementations use
     /// best-effort relevance ranking and food ID to break ties.
     /// An expression may contain plain terms (combined as AND), quoted phrases,
     /// prefix matching with a trailing `*` (for example, `chick*`),
     /// `AND`/`OR`/`NOT`, parentheses, and field selectors such as
-    /// `description:chicken`, `category:dairy`, or `tags:organic`. The default
-    /// limit is 20, and supplied limits are clamped to 20–1,000.
+    /// `source:USDA`, `food_type:USDA/Foundation`, `description:chicken`,
+    /// `category:dairy`, or `tags:organic`. Multiword values can be quoted, such as
+    /// `food_type:"USDA/SR Legacy"`. The default limit is 20, and supplied limits are
+    /// clamped to 20–1,000.
     ///
     /// # Errors
     ///
