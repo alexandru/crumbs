@@ -483,6 +483,7 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
     let description = tool["description"]
         .as_str()
         .ok_or("MCP search tool has no description")?;
+    assert!(description.contains('\n'));
     for guidance in [
         "descriptions, categories, tags, source, and dataset",
         "No matches return an empty foods list",
@@ -493,8 +494,12 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
     let query_description = tool["inputSchema"]["properties"]["query"]["description"]
         .as_str()
         .ok_or("MCP search query has no description")?;
+    assert!(query_description.contains('\n'));
     for guidance in [
-        "AND/OR/NOT",
+        "### Syntax",
+        "### Search fields",
+        "### Examples",
+        "`AND`, `OR`, `NOT`",
         "case-insensitive",
         "description:chicken",
         "category:dairy",
@@ -505,11 +510,11 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         "dataset:usda_branded",
         "dataset:usda_sr_legacy",
         "dataset:usda_survey_fndds",
-        "stored as usda",
+        "source values are stored as `usda`",
         "values requiring quotes, such as values containing spaces, hyphens, or slashes",
         "passes expressions to search unchanged and does not add quotes",
         "empty foods list",
-        "invalid expressions return an error",
+        "Invalid expressions return an error.",
     ] {
         assert!(query_description.contains(guidance), "missing {guidance:?}");
     }
