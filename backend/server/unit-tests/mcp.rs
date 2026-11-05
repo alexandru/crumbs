@@ -8,7 +8,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use crumbs_database::nutrition::FoodData;
 use crumbs_database::{
-    Database, DatabaseConfig, Food, FoodId, FoodReader, FoodSearchResult, FoodType, FoodWriter,
+    Database, DatabaseConfig, Dataset, Food, FoodId, FoodReader, FoodSearchResult, FoodWriter,
     SearchError, SearchLimit, SearchQuery, Source, TagName,
 };
 use serde_json::{Value, json};
@@ -16,6 +16,10 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use super::{config, search::NAME};
+
+type SourceFoodIdRef<'a> = &'a str;
+type DatasetRef = &'static str;
+type FoodDescriptionRef<'a> = &'a str;
 
 struct TestApplication {
     _directory: TempDir,
@@ -54,7 +58,7 @@ impl TestApplication {
             .upsert_food(&Food {
                 source: Source::Borrowed("test"),
                 source_food_id: source_food_id.to_owned(),
-                food_type: FoodType::Borrowed("ingredient"),
+                dataset: Dataset::Borrowed("ingredient"),
                 description: description.to_owned(),
                 category: Some("Protein".to_owned()),
                 parsed_data,
@@ -191,6 +195,25 @@ async fn mcp_call_router(
     .await
 }
 
+async fn add_usda_food(
+    database: &Database,
+    source_food_id: SourceFoodIdRef<'_>,
+    dataset: DatasetRef,
+    description: FoodDescriptionRef<'_>,
+) -> Result<(), Box<dyn Error>> {
+    database
+        .upsert_food(&Food {
+            source: Source::Borrowed("usda"),
+            source_food_id: source_food_id.to_owned(),
+            dataset: Dataset::Borrowed(dataset),
+            description: description.to_owned(),
+            category: None,
+            parsed_data: FoodData::default(),
+        })
+        .await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result<(), Box<dyn Error>>
 {
@@ -280,6 +303,51 @@ async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result
     Ok(())
 }
 
+#[tokio::test]
+async fn mcp_search_supports_source_and_namespaced_dataset_filters() -> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    add_usda_food(
+        &app.database,
+        "foundation-1",
+        "usda_foundation",
+        "Chicken breast, raw",
+    )
+    .await?;
+    add_usda_food(&app.database, "branded-1", "usda_branded", "Chicken broth").await?;
+
+    mcp_initialize(&app).await?;
+    let foundation = mcp_call(
+        &app,
+        2,
+        NAME,
+        json!({"query":"chicken dataset:usda_foundation"}),
+    )
+    .await?;
+    assert_eq!(foundation.status, StatusCode::OK, "{:?}", foundation.json);
+    assert_eq!(foundation.json["result"]["isError"], false);
+    assert_eq!(
+        foundation.json["result"]["structuredContent"]["foods"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        foundation.json["result"]["structuredContent"]["foods"][0]["description"],
+        "Chicken breast, raw"
+    );
+
+    let usda = mcp_call(&app, 3, NAME, json!({"query":"chicken source:usda"})).await?;
+    assert_eq!(usda.status, StatusCode::OK, "{:?}", usda.json);
+    assert_eq!(usda.json["result"]["isError"], false);
+    assert_eq!(
+        usda.json["result"]["structuredContent"]["foods"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReaderOutcome {
     Success,
@@ -361,7 +429,7 @@ impl FoodReader for RecordingFoodReader {
                     food: Food {
                         source: Source::Borrowed("recording"),
                         source_food_id: "fixture-42".to_owned(),
-                        food_type: FoodType::Borrowed("ingredient"),
+                        dataset: Dataset::Borrowed("ingredient"),
                         description: "Test lentils".to_owned(),
                         category: Some("Legumes".to_owned()),
                         parsed_data,
@@ -416,6 +484,46 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
     assert_eq!(tool["inputSchema"]["required"], json!(["query"]));
     assert_eq!(tool["inputSchema"]["properties"]["limit"]["default"], 20);
     assert_eq!(tool["annotations"]["readOnlyHint"], true);
+    let description = tool["description"]
+        .as_str()
+        .ok_or("MCP search tool has no description")?;
+    for guidance in [
+        "descriptions, categories, tags, source, and dataset",
+        "No matches return an empty foods list",
+        "Invalid search expressions return an error",
+    ] {
+        assert!(description.contains(guidance), "missing {guidance:?}");
+    }
+    let query_description = tool["inputSchema"]["properties"]["query"]["description"]
+        .as_str()
+        .ok_or("MCP search query has no description")?;
+    assert!(query_description.contains('\n'));
+    for guidance in [
+        "Syntax:",
+        "Search fields:",
+        "Examples:",
+        "`AND`, `OR`, `NOT`",
+        "case-insensitive",
+        "description:chicken",
+        "category:dairy",
+        "tags:organic",
+        "source:usda",
+        "dataset:usda_foundation",
+        "chicken dataset:usda_foundation",
+        "dataset:usda_branded",
+        "dataset:usda_sr_legacy",
+        "dataset:usda_survey_fndds",
+        "source values are stored as `usda`",
+        "values requiring quotes, such as values containing spaces, hyphens, or slashes",
+        "empty foods list",
+        "Invalid expressions return an error.",
+    ] {
+        assert!(query_description.contains(guidance), "missing {guidance:?}");
+    }
+    let limit_description = tool["inputSchema"]["properties"]["limit"]["description"]
+        .as_str()
+        .ok_or("MCP search limit has no description")?;
+    assert!(limit_description.contains("20 through 1000"));
 
     let mcp = mcp_call(&app, 3, NAME, json!({"query":"tags:vegan"})).await?;
     assert_eq!(mcp.status, StatusCode::OK, "{:?}", mcp.json);

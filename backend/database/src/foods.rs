@@ -34,15 +34,18 @@ pub trait FoodReader: Sync {
     /// Failure reported by this storage implementation.
     type Error: StdError + Send + Sync + 'static;
 
-    /// Searches indexed descriptions, categories, and tags with a Crumbs full-text expression.
+    /// Searches indexed sources, datasets, descriptions, categories, and tags with a Crumbs
+    /// full-text expression.
     ///
     /// Results include full parsed nutrition data. Implementations use
     /// best-effort relevance ranking and food ID to break ties.
     /// An expression may contain plain terms (combined as AND), quoted phrases,
     /// prefix matching with a trailing `*` (for example, `chick*`),
     /// `AND`/`OR`/`NOT`, parentheses, and field selectors such as
-    /// `description:chicken`, `category:dairy`, or `tags:organic`. The default
-    /// limit is 20, and supplied limits are clamped to 20–1,000.
+    /// `source:usda`, `dataset:usda_foundation`, `description:chicken`,
+    /// `category:dairy`, or `tags:organic`. USDA datasets include
+    /// `usda_sr_legacy` and `usda_survey_fndds`. The default limit is 20, and supplied
+    /// limits are clamped to 20–1,000.
     ///
     /// # Errors
     ///
@@ -60,8 +63,8 @@ pub trait FoodReader: Sync {
 pub type Source = Cow<'static, str>;
 /// Opaque identifier assigned to a food by its source.
 pub type SourceFoodId = String;
-/// Source-defined kind of food.
-pub type FoodType = Cow<'static, str>;
+/// Identifier of a named collection of foods supplied by a source.
+pub type Dataset = Cow<'static, str>;
 /// Display description supplied by a source.
 pub type FoodDescription = String;
 /// Optional display category supplied by a source.
@@ -72,7 +75,7 @@ pub type FoodCategory = String;
 pub struct Food {
     pub source: Source,
     pub source_food_id: SourceFoodId,
-    pub food_type: FoodType,
+    pub dataset: Dataset,
     pub description: FoodDescription,
     pub category: Option<FoodCategory>,
     /// Shared Crumbs model parsed from the source record.
@@ -89,7 +92,7 @@ pub struct FoodSummary {
     pub id: FoodId,
     pub source: Source,
     pub source_food_id: SourceFoodId,
-    pub food_type: FoodType,
+    pub dataset: Dataset,
     pub description: FoodDescription,
     pub category: Option<FoodCategory>,
 }

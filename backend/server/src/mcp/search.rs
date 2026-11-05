@@ -40,7 +40,33 @@ pub(super) fn tool() -> Tool {
                 "query": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Nonblank Crumbs full-text expression over description, category, and tags. Terms separated by spaces match all terms. Use quoted phrases, prefix matching with a trailing * (for example, chick*), AND/OR/NOT, parentheses, or selectors such as description:chicken, category:dairy, and tags:organic. Examples: chicken breast, \"chicken breast\", chick*, chicken OR turkey, tags:organic."
+                    "description": r#"Nonblank Crumbs full-text expression.
+
+Syntax:
+- Terms separated by spaces use AND.
+- Quoted phrases match exact phrases.
+- A trailing `*` performs prefix matching, for example `chick*`.
+- Use `AND`, `OR`, `NOT`, and parentheses to combine expressions.
+- Terms are case-insensitive.
+
+Search fields:
+- `description`: food descriptions.
+- `category`: food categories.
+- `tags`: assigned tags.
+- `source`: data provider. USDA source values are stored as `usda`.
+- `dataset`: named collection supplied by a provider, such as `usda_foundation` or `usda_branded`.
+
+Examples:
+- `chicken breast`
+- `"chicken breast"`
+- `chick*`
+- `chicken OR turkey`
+- `description:chicken`, `category:dairy`, `tags:organic`
+- `source:usda`, `chicken source:usda`
+- `dataset:usda_foundation`, `chicken dataset:usda_foundation`
+- `dataset:usda_branded`, `dataset:usda_sr_legacy`, `dataset:usda_survey_fndds`
+
+Clients must quote values requiring quotes, such as values containing spaces, hyphens, or slashes. No matches return an empty foods list. Invalid expressions return an error."#
                 },
                 "limit": {
                     "type": "integer",
@@ -52,7 +78,7 @@ pub(super) fn tool() -> Tool {
     ]);
     Tool::new_with_raw(
         NAME,
-        Some("Search food descriptions, categories, and tags. Return matching foods with full nutrition data, ordered by best-effort relevance then food ID. No pagination.".into()),
+        Some("Search foods with Crumbs full-text expressions over descriptions, categories, tags, source, and dataset. Results include full nutrition data and are ordered by best-effort relevance, then food ID. No matches return an empty foods list. Invalid search expressions return an error. There is no pagination.".into()),
         schema,
     )
     .with_annotations(

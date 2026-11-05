@@ -60,7 +60,7 @@ async fn food_upserts_and_usda_reimports_preserve_tag_assignments() -> Result<()
     assert_eq!(first_import.committed().get(), 2);
     let imported = find_food(&fixture.database, &source, source_food_id).await?;
     assert_eq!(imported.id, initial_id);
-    assert_eq!(imported.food_type.as_ref(), "Foundation");
+    assert_eq!(imported.dataset.as_ref(), "usda_foundation");
     assert_eq!(imported.description, "Hummus, commercial");
     assert_eq!(
         imported.category.as_deref(),
@@ -209,7 +209,7 @@ async fn import_failure_keeps_earlier_food_searchable_and_retry_succeeds()
 fn make_food(
     source: Source,
     source_food_id: &str,
-    food_type: &'static str,
+    dataset: &'static str,
     description: &str,
     category: Option<&str>,
     parsed_data: &str,
@@ -217,7 +217,7 @@ fn make_food(
     Ok(Food {
         source,
         source_food_id: source_food_id.to_owned(),
-        food_type: Cow::Borrowed(food_type),
+        dataset: Cow::Borrowed(dataset),
         description: description.to_owned(),
         category: category.map(str::to_owned),
         parsed_data: serde_json::from_str(parsed_data)?,

@@ -10,6 +10,9 @@ A food entry supplied by a source, whether an ordinary ingredient or a branded p
 **Source**:
 The provider of a food entry, such as USDA FoodData Central.
 
+**Dataset**:
+A named collection of food entries supplied by a source, such as USDA Foundation Foods or USDA Branded Foods.
+
 **Source food ID**:
 The identifier a source assigns to a food entry. It identifies the entry within that source, not across different sources.
 

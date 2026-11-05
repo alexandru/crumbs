@@ -24,9 +24,9 @@ pub mod nutrition;
 
 pub use config::{DatabaseConfig, DatabasePath};
 pub use foods::{
-    Food, FoodCategory, FoodDescription, FoodId, FoodReader, FoodSearchResult, FoodSummary,
-    FoodType, FoodWriter, InvalidTagName, SearchError, SearchLimit, SearchQuery, SearchQueryError,
-    Source, SourceFoodId, Tag, TagId, TagName,
+    Dataset, Food, FoodCategory, FoodDescription, FoodId, FoodReader, FoodSearchResult,
+    FoodSummary, FoodWriter, InvalidTagName, SearchError, SearchLimit, SearchQuery,
+    SearchQueryError, Source, SourceFoodId, Tag, TagId, TagName,
 };
 
 /// Handle to the application database.

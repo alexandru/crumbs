@@ -28,13 +28,13 @@ const SANITIZED_FOOD_IDS: [&str; 10] = [
     "2747656", "2747673",
 ];
 const EXPECTED_SOURCE: SourceRef<'_> = "usda";
-const EXPECTED_FOOD_TYPE: FoodTypeRef<'_> = "Foundation";
+const EXPECTED_DATASET: DatasetRef<'_> = "usda_foundation";
 
 type RawFoodId = i64;
 type ReleaseDate = &'static str;
 type FoodCount = usize;
 type SourceRef<'a> = &'a str;
-type FoodTypeRef<'a> = &'a str;
+type DatasetRef<'a> = &'a str;
 type FtsQuery<'a> = &'a str;
 type FtsPhrase = String;
 type MigrationCount = i64;
@@ -42,7 +42,7 @@ type Source = String;
 type SourceFoodId = String;
 type RawFdcId = i64;
 type RawNutrientId = i64;
-type FoodType = String;
+type Dataset = String;
 type FoodDescription = String;
 type FoodCategory = String;
 type FoodTags = String;
@@ -98,7 +98,7 @@ struct StoredFood {
     local_id: RawFoodId,
     source: Source,
     source_food_id: SourceFoodId,
-    food_type: FoodType,
+    dataset: Dataset,
     description: FoodDescription,
     category: Option<FoodCategory>,
     tags: FoodTags,
@@ -209,7 +209,7 @@ fn load_reference(path: &Path) -> Result<ReferenceFoods, Box<dyn StdError>> {
 
 async fn read_stored(pool: &SqlitePool) -> Result<Vec<StoredFood>, sqlx::Error> {
     sqlx::query_as::<_, StoredFood>(
-        "SELECT f.id, f.source, f.source_food_id, f.food_type, f.description, f.category,
+        "SELECT f.id, f.source, f.source_food_id, f.dataset, f.description, f.category,
                 s.tags AS tags, f.parsed_data
          FROM crumbs_foods AS f
          JOIN crumbs_foods_search_content AS s ON s.id = f.id
@@ -236,7 +236,7 @@ fn verify_reference(stored: &[StoredFood], reference: &ReferenceFoods) -> TestRe
             .as_ref()
             .and_then(|category| category.description.as_deref());
         assert_eq!(food.source, EXPECTED_SOURCE, "source {source_food_id}");
-        assert_eq!(food.food_type, EXPECTED_FOOD_TYPE, "type {source_food_id}");
+        assert_eq!(food.dataset, EXPECTED_DATASET, "dataset {source_food_id}");
         assert_eq!(
             food.description, *description,
             "description {source_food_id}"

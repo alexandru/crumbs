@@ -281,7 +281,7 @@ async fn open_database() -> Result<(tempfile::TempDir, Database), Box<dyn StdErr
 fn make_food(
     source: Source,
     source_food_id: &str,
-    food_type: &'static str,
+    dataset: &'static str,
     description: &str,
     category: Option<&str>,
     parsed_data: &str,
@@ -289,7 +289,7 @@ fn make_food(
     Ok(Food {
         source,
         source_food_id: source_food_id.to_owned(),
-        food_type: Cow::Borrowed(food_type),
+        dataset: Cow::Borrowed(dataset),
         description: description.to_owned(),
         category: category.map(str::to_owned),
         parsed_data: serde_json::from_str(parsed_data)?,

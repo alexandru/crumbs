@@ -5,7 +5,10 @@ use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{SqliteConnection, query, query_scalar};
 
-use crate::{Database, DatabaseConfig, FoodCategory, FoodDescription, TagName};
+use crate::{
+    Database, DatabaseConfig, FoodCategory, FoodDescription, FoodReader, SearchLimit, SearchQuery,
+    TagName,
+};
 
 const MIGRATION_0001: &str = include_str!("../migrations/0001_create_crumbs_sources.sql");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_create_crumbs_foods.sql");
@@ -14,6 +17,7 @@ type TagId = i64;
 type FoodCount = i64;
 type MigrationCount = i64;
 type IndexedTags = String;
+type DatasetText = String;
 type FtsTerm = String;
 type Source<'a> = &'a str;
 type SourceFoodId<'a> = &'a str;
@@ -80,6 +84,50 @@ async fn english_matching_is_case_insensitive_without_stemming() -> Result<(), B
     assert_matches(&database, "heddar", &[]).await?;
     assert_matches(&database, "cheeses", &[]).await?;
     assert_eq!(description(&database, 1).await?, "Crunchy Peanut Butter");
+    assert_fts_integrity(&database).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn source_and_dataset_are_searchable_fields() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    insert_food(&database, 1, "usda", "fdc-1", "Chicken breast", None, "").await?;
+    insert_food(&database, 2, "other", "other-1", "Chicken breast", None, "").await?;
+    insert_food(&database, 3, "usda", "fdc-2", "Chicken thigh", None, "").await?;
+    insert_food(&database, 4, "usda", "fdc-3", "Survey pancakes", None, "").await?;
+    query("UPDATE crumbs_foods SET dataset = 'usda_foundation' WHERE id = 1")
+        .execute(&database.pool)
+        .await?;
+    query("UPDATE crumbs_foods SET dataset = 'usda_branded' WHERE id = 2")
+        .execute(&database.pool)
+        .await?;
+    query("UPDATE crumbs_foods SET dataset = 'usda_sr_legacy' WHERE id = 3")
+        .execute(&database.pool)
+        .await?;
+    query("UPDATE crumbs_foods SET dataset = 'usda_survey_fndds' WHERE id = 4")
+        .execute(&database.pool)
+        .await?;
+
+    assert_search_matches(&database, "dataset:usda_foundation", &[1]).await?;
+    assert_search_matches(&database, "source:USDA", &[1, 3, 4]).await?;
+    assert_search_matches(&database, "chicken source:usda", &[1, 3]).await?;
+    assert_search_matches(&database, "source:usda AND dataset:usda_foundation", &[1]).await?;
+    assert_search_matches(&database, "dataset:usda_sr_legacy", &[3]).await?;
+    assert_search_matches(&database, "dataset:usda_survey_fndds", &[4]).await?;
+    assert_search_matches(&database, "dataset:usda_branded", &[2]).await?;
+    query("INSERT INTO crumbs_sources (id, created_at) VALUES ('community', 0)")
+        .execute(&database.pool)
+        .await?;
+    query("UPDATE crumbs_foods SET source = 'community' WHERE id = 1")
+        .execute(&database.pool)
+        .await?;
+    assert_search_matches(&database, "source:usda", &[3, 4]).await?;
+    assert_search_matches(&database, "source:community", &[1]).await?;
+    query("UPDATE crumbs_foods SET dataset = 'Community_Custom' WHERE id = 1")
+        .execute(&database.pool)
+        .await?;
+    assert_search_matches(&database, "dataset:usda_foundation", &[]).await?;
+    assert_search_matches(&database, "dataset:Community_Custom", &[1]).await?;
     assert_fts_integrity(&database).await?;
     Ok(())
 }
@@ -663,7 +711,7 @@ async fn transaction_rollback_restores_food_and_index() -> Result<(), Box<dyn St
     let mut insert = database.pool.begin().await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, parsed_data, created_at)
+            (id, source, source_food_id, dataset, description, category, parsed_data, created_at)
          VALUES (3, 'usda', 'rolled-insert', 'Foundation', 'Rolled back insert', NULL, '{}', 0)",
     )
     .execute(&mut *insert)
@@ -702,10 +750,10 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         .await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, parsed_data, created_at)
+            (id, source, source_food_id, dataset, description, category, parsed_data, created_at)
          VALUES
-            (1, 'usda', 'old-1', 'Foundation', 'Roșii coapte', 'Legume', '{}', 0),
-            (2, 'usda', 'old-2', 'Foundation', 'Cheddar Cheese', 'Dairy', '{}', 0)",
+            (1, 'usda', 'old-1', 'usda_foundation', 'Roșii coapte', 'Legume', '{}', 0),
+            (2, 'usda', 'old-2', 'usda_foundation', 'Cheddar Cheese', 'Dairy', '{}', 0)",
     )
     .execute(&pool)
     .await?;
@@ -733,6 +781,17 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
     assert_matches(&database, "cheddar", &[2]).await?;
     assert_matches(&database, "dairy", &[2]).await?;
     assert_matches(&database, "sharp", &[2]).await?;
+    assert_search_matches(&database, "dataset:usda_foundation", &[1, 2]).await?;
+    assert_search_matches(&database, "source:usda", &[1, 2]).await?;
+    assert_search_matches(
+        &database,
+        "source:usda AND dataset:usda_foundation",
+        &[1, 2],
+    )
+    .await?;
+    assert_search_matches(&database, "SOURCE:usda", &[1, 2]).await?;
+    assert_eq!(dataset(&database, 1).await?, "usda_foundation");
+    assert_eq!(dataset(&database, 2).await?, "usda_foundation");
     assert_eq!(fts_row_count(&database).await?, 2);
     assert_eq!(description(&database, 1).await?, "Roșii coapte");
     assert_fts_integrity(&database).await?;
@@ -745,6 +804,7 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
     assert_eq!(migration_count(&reopened).await?, 3);
     assert_matches(&reopened, "rosii", &[1]).await?;
     assert_matches(&reopened, "cheddar", &[2]).await?;
+    assert_search_matches(&reopened, "dataset:usda_foundation", &[1, 2]).await?;
     assert_eq!(fts_row_count(&reopened).await?, 2);
     assert_fts_integrity(&reopened).await?;
     Ok(())
@@ -774,7 +834,7 @@ async fn insert_food(
         .await?;
     query(
         "INSERT INTO crumbs_foods
-            (id, source, source_food_id, food_type, description, category, parsed_data, created_at)
+            (id, source, source_food_id, dataset, description, category, parsed_data, created_at)
          VALUES (?, ?, ?, 'Foundation', ?, ?, '{}', 0)",
     )
     .bind(id)
@@ -793,6 +853,13 @@ async fn insert_food(
 
 async fn description(database: &Database, id: FoodId) -> Result<FoodDescription, sqlx::Error> {
     query_scalar("SELECT description FROM crumbs_foods WHERE id = ?")
+        .bind(id)
+        .fetch_one(&database.pool)
+        .await
+}
+
+async fn dataset(database: &Database, id: FoodId) -> Result<DatasetText, sqlx::Error> {
+    query_scalar("SELECT dataset FROM crumbs_foods WHERE id = ?")
         .bind(id)
         .fetch_one(&database.pool)
         .await
@@ -842,6 +909,24 @@ async fn assert_matches(
 ) -> Result<(), Box<dyn StdError>> {
     let actual = matching_ids(database, query).await?;
     assert_eq!(actual, expected, "MATCH {query:?}");
+    Ok(())
+}
+
+async fn assert_search_matches(
+    database: &Database,
+    expression: FtsQuery<'_>,
+    expected: &[FoodId],
+) -> Result<(), Box<dyn StdError>> {
+    let query = SearchQuery::new(expression)?;
+    let results = database
+        .search_foods(&query, SearchLimit::default())
+        .await?;
+    let mut actual = results
+        .into_iter()
+        .map(|result| result.id.0)
+        .collect::<Vec<_>>();
+    actual.sort_unstable();
+    assert_eq!(actual, expected, "search {expression:?}");
     Ok(())
 }
 
