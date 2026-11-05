@@ -22,6 +22,8 @@ issuer = "https://crumbs.example.invalid"
 
 The server does not terminate TLS. Put a reverse proxy in front of it, set `issuer` to the externally visible HTTPS origin, and keep the HTTP listener private. Binding to `0.0.0.0` requires network controls that prevent public access to the plaintext listener. The server does not trust forwarded host or client-IP headers. Rate limits use the socket peer address, so requests passing through one proxy share its peer bucket.
 
+The Docker image binds to `0.0.0.0` inside the container so container port forwarding can reach the listener. Keep any published host port private behind a TLS reverse proxy. Mount an `application.toml` over `/app/application.toml` to replace the placeholder issuer with the public HTTPS origin.
+
 Start the server with:
 
 ```text

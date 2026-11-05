@@ -19,7 +19,7 @@ ARG APP_GID=65532
 LABEL org.opencontainers.image.source="https://github.com/alexandru/crumbs"
 
 WORKDIR /app
-COPY resources/application-sample.toml /app/application.toml
+COPY resources/application-docker.toml /app/application.toml
 COPY --from=builder /build/crumbs /usr/local/bin/crumbs
 RUN mkdir -p /app/data && chown ${APP_UID}:${APP_GID} /app/data
 
