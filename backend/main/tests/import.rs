@@ -14,7 +14,7 @@ type DatabaseFilename<'a> = &'a str;
 
 const BIN: &str = env!("CARGO_BIN_EXE_crumbs");
 const FOUNDATION_JSON: &str = include_str!("../../import/test-fixtures/foundation.json");
-const CONFIG: &str = "[http]\nport = 0\n\n[database]\npath = \"crumbs.db\"\n";
+const CONFIG: &str = "[http]\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"crumbs.db\"\n";
 
 #[test]
 fn imports_foundation_fixture_and_reports_count() -> Result<(), Box<dyn Error>> {
@@ -88,7 +88,9 @@ fn assert_literal_database_path(database_name: DatabaseFilename<'_>) -> Result<(
     fs::write(directory.path().join("foundation.json"), FOUNDATION_JSON)?;
     fs::write(
         directory.path().join("application.toml"),
-        format!("[http]\nport = 0\n\n[database]\npath = \"{database_name}\"\n"),
+        format!(
+            "[http]\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"{database_name}\"\n"
+        ),
     )?;
 
     let first = run_import_in(directory.path())?;

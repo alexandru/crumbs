@@ -776,7 +776,7 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         path: database_path.clone(),
     })
     .await?;
-    assert_eq!(migration_count(&database).await?, 3);
+    assert_eq!(migration_count(&database).await?, 5);
     assert_matches(&database, "rosii", &[1]).await?;
     assert_matches(&database, "cheddar", &[2]).await?;
     assert_matches(&database, "dairy", &[2]).await?;
@@ -801,7 +801,7 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         path: database_path,
     })
     .await?;
-    assert_eq!(migration_count(&reopened).await?, 3);
+    assert_eq!(migration_count(&reopened).await?, 5);
     assert_matches(&reopened, "rosii", &[1]).await?;
     assert_matches(&reopened, "cheddar", &[2]).await?;
     assert_search_matches(&reopened, "dataset:usda_foundation", &[1, 2]).await?;

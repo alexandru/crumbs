@@ -27,4 +27,13 @@ pub enum DbCommand {
         #[arg(long)]
         verbose: bool,
     },
+    /// Create a user account.
+    CreateUser {
+        /// Username for the new account.
+        #[arg(long, value_name = "NAME")]
+        username: String,
+        /// Path to the TOML configuration file.
+        #[arg(long, value_name = "PATH", default_value = "application.toml")]
+        config: PathBuf,
+    },
 }

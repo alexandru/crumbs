@@ -1,5 +1,10 @@
 [http]
+bind = "127.0.0.1"
 port = 8080
+
+[http.oauth]
+# Public HTTPS origin. Forward this origin to the HTTP listener using a TLS proxy.
+issuer = "https://crumbs.example.com"
 
 [database]
 path = "data/crumbs.db"

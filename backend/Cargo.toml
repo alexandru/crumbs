@@ -8,7 +8,17 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+axum = { version = "0.8.9", default-features = false, features = ["form", "http1", "json", "query", "tokio"] }
+base64 = "0.22"
+bcrypt = "0.19.3"
+getrandom = "0.3"
+maud = { version = "0.27", features = ["axum"] }
+rpassword = "7"
+rust-embed = "8.13"
+sha2 = "0.10"
+subtle = "2.6"
+url = { version = "2", features = ["serde"] }
+zeroize = "1"
 clap = { version = "4.6.7", features = ["derive"] }
 config = { version = "0.15.27", default-features = false, features = ["toml"] }
 crumbs-database = { path = "database" }

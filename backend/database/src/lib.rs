@@ -21,6 +21,8 @@ mod config;
 mod foods;
 mod fts;
 pub mod nutrition;
+pub mod oauth;
+pub mod users;
 
 pub use config::{DatabaseConfig, DatabasePath};
 pub use foods::{

@@ -16,6 +16,9 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use super::{config, search::NAME};
+use crate::oauth::tests::{
+    TEST_MCP_ACCESS_TOKEN, TEST_REST_ACCESS_TOKEN, test_authorization_server,
+};
 
 type SourceFoodIdRef<'a> = &'a str;
 type DatasetRef = &'static str;
@@ -24,6 +27,7 @@ type FoodDescriptionRef<'a> = &'a str;
 struct TestApplication {
     _directory: TempDir,
     database: Arc<Database>,
+    _authorization_database: Arc<Database>,
     router: Router,
 }
 
@@ -36,10 +40,18 @@ impl TestApplication {
             })
             .await?,
         );
-        let router = crate::routes::application(Arc::clone(&database), config());
+        let authorization_database = Arc::new(
+            Database::open(DatabaseConfig {
+                path: directory.path().join("authorization.db"),
+            })
+            .await?,
+        );
+        let authorization = test_authorization_server(Arc::clone(&authorization_database)).await?;
+        let router = crate::routes::application(Arc::clone(&database), config(), authorization);
         Ok(Self {
             _directory: directory,
             database,
+            _authorization_database: authorization_database,
             router,
         })
     }
@@ -101,6 +113,10 @@ fn http_request(uri: &str) -> Result<Request<Body>, Box<dyn Error>> {
     Ok(Request::builder()
         .uri(uri)
         .header(header::HOST, "foods.example")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {TEST_REST_ACCESS_TOKEN}"),
+        )
         .body(Body::empty())?)
 }
 
@@ -118,6 +134,10 @@ fn mcp_request_with_origin(
         .header(header::HOST, "foods.example")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ACCEPT, "application/json, text/event-stream");
+    builder = builder.header(
+        header::AUTHORIZATION,
+        format!("Bearer {TEST_MCP_ACCESS_TOKEN}"),
+    );
     if let Some(origin) = origin {
         builder = builder.header(header::ORIGIN, origin);
     }
@@ -131,6 +151,10 @@ fn protocol_request(body: Value) -> Result<Request<Body>, Box<dyn Error>> {
         .header(header::HOST, "foods.example")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ACCEPT, "application/json, text/event-stream")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {TEST_MCP_ACCESS_TOKEN}"),
+        )
         .header("MCP-Protocol-Version", "2025-11-25")
         .body(Body::from(serde_json::to_vec(&body)?))?)
 }
@@ -218,7 +242,31 @@ async fn add_usda_food(
 async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result<(), Box<dyn Error>>
 {
     let reader = Arc::new(RecordingFoodReader::default());
-    let router = crate::routes::application(Arc::clone(&reader), config());
+    let directory = tempfile::tempdir()?;
+    let authorization_database = Arc::new(
+        Database::open(DatabaseConfig {
+            path: directory.path().join("authorization.db"),
+        })
+        .await?,
+    );
+    let authorization = test_authorization_server(Arc::clone(&authorization_database)).await?;
+    let router = crate::routes::application(Arc::clone(&reader), config(), authorization);
+
+    let unauthorized_mcp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ACCEPT, "application/json, text/event-stream")
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"unauthenticated","version":"1"}}}"#,
+                ))?,
+        )
+        .await?;
+    assert_eq!(unauthorized_mcp.status(), StatusCode::UNAUTHORIZED);
+    assert!(reader.invocations()?.is_empty());
 
     let http = request_router(&router, http_request("/foods/search?query=beans&limit=1")?).await?;
     assert_eq!(http.status, StatusCode::OK, "{:?}", http.json);

@@ -16,6 +16,7 @@ use crumbs_server::{ServerArgs, ServerCommand};
 
 mod cli;
 mod config;
+mod users;
 
 pub use cli::{DbArgs, DbCommand};
 use config::AppConfig;
@@ -56,6 +57,9 @@ pub enum Error {
     /// Some USDA food records were rejected.
     #[error("rejected {} USDA foods", .count.get())]
     RejectedFoods { count: FoodCount },
+    /// A user could not be created.
+    #[error(transparent)]
+    CreateUser(#[from] users::Error),
     /// Command output could not be written.
     #[error("failed to write command output: {0}")]
     Output(#[source] io::Error),
@@ -92,6 +96,27 @@ fn run_cli(cli: Cli) -> Result<(), Error> {
             } => {
                 let app_config = AppConfig::from_file(config)?;
                 runtime()?.block_on(run_import_usda(app_config, file, verbose))
+            }
+            DbCommand::CreateUser { username, config } => {
+                let app_config = AppConfig::from_file(config)?;
+                let (username, password_hash) = users::prompt_credentials(username, |prompt| {
+                    rpassword::prompt_password(prompt)
+                })?;
+                let user = runtime()?.block_on(users::create_user(
+                    app_config.database,
+                    username,
+                    password_hash,
+                ))?;
+                let mut stdout = io::stdout().lock();
+                writeln!(
+                    stdout,
+                    "Created user {} ({})",
+                    user.username.as_str(),
+                    user.id.get()
+                )
+                .map_err(Error::Output)?;
+                stdout.flush().map_err(Error::Output)?;
+                Ok(())
             }
         },
     }
