@@ -512,7 +512,6 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         "dataset:usda_survey_fndds",
         "source values are stored as `usda`",
         "values requiring quotes, such as values containing spaces, hyphens, or slashes",
-        "passes expressions to search unchanged and does not add quotes",
         "empty foods list",
         "Invalid expressions return an error.",
     ] {

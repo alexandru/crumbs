@@ -69,7 +69,7 @@ pub(super) fn tool() -> Tool {
 - `dataset:usda_foundation`, `chicken dataset:usda_foundation`
 - `dataset:usda_branded`, `dataset:usda_sr_legacy`, `dataset:usda_survey_fndds`
 
-Clients must quote values requiring quotes, such as values containing spaces, hyphens, or slashes. The server passes expressions to search unchanged and does not add quotes.
+Clients must quote values requiring quotes, such as values containing spaces, hyphens, or slashes.
 
 No matches return an empty foods list. Invalid expressions return an error."#
                 },
