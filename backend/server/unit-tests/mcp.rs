@@ -332,7 +332,7 @@ async fn mcp_search_supports_source_and_namespaced_dataset_filters() -> Result<(
         "Chicken breast, raw"
     );
 
-    let usda = mcp_call(&app, 3, NAME, json!({"query":"chicken source:USDA"})).await?;
+    let usda = mcp_call(&app, 3, NAME, json!({"query":"chicken source:usda"})).await?;
     assert_eq!(usda.status, StatusCode::OK, "{:?}", usda.json);
     assert_eq!(usda.json["result"]["isError"], false);
     assert_eq!(
@@ -499,7 +499,7 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         "description:chicken",
         "category:dairy",
         "tags:organic",
-        "source:USDA",
+        "source:usda",
         "dataset:usda_foundation",
         "chicken dataset:usda_foundation",
         "dataset:usda_branded",

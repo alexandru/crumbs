@@ -42,7 +42,7 @@ pub trait FoodReader: Sync {
     /// An expression may contain plain terms (combined as AND), quoted phrases,
     /// prefix matching with a trailing `*` (for example, `chick*`),
     /// `AND`/`OR`/`NOT`, parentheses, and field selectors such as
-    /// `source:USDA`, `dataset:usda_foundation`, `description:chicken`,
+    /// `source:usda`, `dataset:usda_foundation`, `description:chicken`,
     /// `category:dairy`, or `tags:organic`. USDA datasets include
     /// `usda_sr_legacy` and `usda_survey_fndds`. The default limit is 20, and supplied
     /// limits are clamped to 20–1,000.

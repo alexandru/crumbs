@@ -109,7 +109,7 @@ async fn source_and_dataset_are_searchable_fields() -> Result<(), Box<dyn StdErr
 
     assert_search_matches(&database, "dataset:usda_foundation", &[1]).await?;
     assert_search_matches(&database, "source:USDA", &[1, 3, 4]).await?;
-    assert_search_matches(&database, "chicken source:USDA", &[1, 3]).await?;
+    assert_search_matches(&database, "chicken source:usda", &[1, 3]).await?;
     assert_search_matches(&database, "source:usda AND dataset:usda_foundation", &[1]).await?;
     assert_search_matches(&database, "dataset:usda_sr_legacy", &[3]).await?;
     assert_search_matches(&database, "dataset:usda_survey_fndds", &[4]).await?;
@@ -120,7 +120,7 @@ async fn source_and_dataset_are_searchable_fields() -> Result<(), Box<dyn StdErr
     query("UPDATE crumbs_foods SET source = 'community' WHERE id = 1")
         .execute(&database.pool)
         .await?;
-    assert_search_matches(&database, "source:USDA", &[3, 4]).await?;
+    assert_search_matches(&database, "source:usda", &[3, 4]).await?;
     assert_search_matches(&database, "source:community", &[1]).await?;
     query("UPDATE crumbs_foods SET dataset = 'Community_Custom' WHERE id = 1")
         .execute(&database.pool)
@@ -781,7 +781,7 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
     assert_matches(&database, "dairy", &[2]).await?;
     assert_matches(&database, "sharp", &[2]).await?;
     assert_search_matches(&database, "dataset:usda_foundation", &[1, 2]).await?;
-    assert_search_matches(&database, "source:USDA", &[1, 2]).await?;
+    assert_search_matches(&database, "source:usda", &[1, 2]).await?;
     assert_search_matches(
         &database,
         "source:usda AND dataset:usda_foundation",
