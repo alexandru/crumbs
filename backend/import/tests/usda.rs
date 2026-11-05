@@ -53,7 +53,7 @@ async fn imports_foundation_foods_with_typed_data() -> Result<(), Box<dyn StdErr
     let food = food_row(&fixture.pool, "usda", "321358").await?;
     assert!(food.id > 0);
     assert_eq!(food.source, "usda");
-    assert_eq!(food.food_type, "USDA_Foundation");
+    assert_eq!(food.dataset, "usda_foundation");
     assert_eq!(food.description, "Hummus, commercial");
     assert_eq!(
         food.category.as_deref(),
@@ -87,7 +87,7 @@ async fn imports_branded_food_with_typed_data() -> Result<(), Box<dyn StdError>>
     assert_eq!(report.committed().get(), 1);
     let food = food_row(&fixture.pool, "usda", "1106281").await?;
     assert_eq!(food.source, "usda");
-    assert_eq!(food.food_type, "USDA_Branded");
+    assert_eq!(food.dataset, "usda_branded");
     assert_eq!(food.description, "GRANOLA, CINNAMON, RAISIN");
     assert_eq!(food.category.as_deref(), Some("Cereal"));
     assert!(fixture.database.list_tags().await?.is_empty());
@@ -347,7 +347,7 @@ async fn cross_source_same_food_id_is_isolated() -> Result<(), Box<dyn StdError>
         .await?;
     let other_food_id: RowId = query_scalar(
         "INSERT INTO crumbs_foods (
-            source, source_food_id, food_type, description, category, parsed_data, created_at
+            source, source_food_id, dataset, description, category, parsed_data, created_at
          ) VALUES ('other', '321358', 'Foundation', 'Other source food', NULL, '{}', 0)
          RETURNING id",
     )
@@ -401,8 +401,7 @@ async fn importing_a_subset_retains_absent_rows_and_coexists() -> Result<(), Box
 }
 
 #[tokio::test]
-async fn imports_supported_roots_with_source_qualified_food_types() -> Result<(), Box<dyn StdError>>
-{
+async fn imports_supported_roots_with_source_qualified_datasets() -> Result<(), Box<dyn StdError>> {
     let fixture = DatabaseFixture::open().await?;
     let sr = write_input(
         fixture.directory.path(),
@@ -420,8 +419,8 @@ async fn imports_supported_roots_with_source_qualified_food_types() -> Result<()
 
     let sr_food = food_row(&fixture.pool, "usda", "9301").await?;
     let survey_food = food_row(&fixture.pool, "usda", "9302").await?;
-    assert_eq!(sr_food.food_type, "USDA_SR_Legacy");
-    assert_eq!(survey_food.food_type, "USDA_Survey_FNDDS");
+    assert_eq!(sr_food.dataset, "usda_sr_legacy");
+    assert_eq!(survey_food.dataset, "usda_survey_fndds");
     Ok(())
 }
 
@@ -829,7 +828,7 @@ async fn imports_into_generic_food_writer_and_passes_typed_data() -> Result<(), 
         .find(|food| food.source_food_id == "7301")
         .ok_or_else(|| io::Error::other("recording store did not receive the food"))?;
     assert_eq!(first_food.source, "usda");
-    assert_eq!(first_food.food_type, "USDA_Foundation");
+    assert_eq!(first_food.dataset, "usda_foundation");
     assert_eq!(first_food.description, "Alternative food");
     assert_eq!(first_food.category.as_deref(), Some("Shelf Stable"));
     assert_eq!(first_food.parsed_data, FoodData::default());
@@ -957,7 +956,7 @@ async fn food_count(pool: &SqlitePool) -> Result<FoodCount, sqlx::Error> {
 }
 
 type SourceText = String;
-type FoodTypeText = String;
+type DatasetText = String;
 type ParsedDataText = String;
 type RawFdcId = u64;
 type RawNutrientId = u16;
@@ -969,7 +968,7 @@ type WriteCount = usize;
 struct FoodRow {
     id: RowId,
     source: SourceText,
-    food_type: FoodTypeText,
+    dataset: DatasetText,
     description: FoodDescription,
     category: Option<FoodCategory>,
     parsed_data: ParsedDataText,
@@ -987,7 +986,7 @@ async fn food_row(
     source_food_id: &str,
 ) -> Result<FoodRow, sqlx::Error> {
     sqlx::query_as(
-        "SELECT id, source, food_type, description, category, parsed_data
+        "SELECT id, source, dataset, description, category, parsed_data
          FROM crumbs_foods
          WHERE source = ? AND source_food_id = ?",
     )
@@ -1079,7 +1078,7 @@ struct RecordedFood {
     id: FoodId,
     source: SourceText,
     source_food_id: SourceFoodId,
-    food_type: FoodTypeText,
+    dataset: DatasetText,
     description: FoodDescription,
     category: Option<FoodCategory>,
     parsed_data: FoodData,
@@ -1134,7 +1133,7 @@ impl FoodWriter for RecordingFoodWriter {
             id,
             source,
             source_food_id,
-            food_type: food.food_type.to_string(),
+            dataset: food.dataset.to_string(),
             description: food.description.clone(),
             category: food.category.clone(),
             parsed_data: food.parsed_data.clone(),

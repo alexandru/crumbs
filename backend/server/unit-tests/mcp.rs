@@ -8,7 +8,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use crumbs_database::nutrition::FoodData;
 use crumbs_database::{
-    Database, DatabaseConfig, Food, FoodId, FoodReader, FoodSearchResult, FoodType, FoodWriter,
+    Database, DatabaseConfig, Dataset, Food, FoodId, FoodReader, FoodSearchResult, FoodWriter,
     SearchError, SearchLimit, SearchQuery, Source, TagName,
 };
 use serde_json::{Value, json};
@@ -54,7 +54,7 @@ impl TestApplication {
             .upsert_food(&Food {
                 source: Source::Borrowed("test"),
                 source_food_id: source_food_id.to_owned(),
-                food_type: FoodType::Borrowed("ingredient"),
+                dataset: Dataset::Borrowed("ingredient"),
                 description: description.to_owned(),
                 category: Some("Protein".to_owned()),
                 parsed_data,
@@ -194,14 +194,14 @@ async fn mcp_call_router(
 async fn add_usda_food(
     database: &Database,
     source_food_id: &str,
-    food_type: &'static str,
+    dataset: &'static str,
     description: &str,
 ) -> Result<(), Box<dyn Error>> {
     database
         .upsert_food(&Food {
             source: Source::Borrowed("usda"),
             source_food_id: source_food_id.to_owned(),
-            food_type: FoodType::Borrowed(food_type),
+            dataset: Dataset::Borrowed(dataset),
             description: description.to_owned(),
             category: None,
             parsed_data: FoodData::default(),
@@ -300,24 +300,23 @@ async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result
 }
 
 #[tokio::test]
-async fn mcp_search_supports_source_and_namespaced_food_type_filters() -> Result<(), Box<dyn Error>>
-{
+async fn mcp_search_supports_source_and_namespaced_dataset_filters() -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
     add_usda_food(
         &app.database,
         "foundation-1",
-        "USDA_Foundation",
+        "usda_foundation",
         "Chicken breast, raw",
     )
     .await?;
-    add_usda_food(&app.database, "branded-1", "USDA_Branded", "Chicken broth").await?;
+    add_usda_food(&app.database, "branded-1", "usda_branded", "Chicken broth").await?;
 
     mcp_initialize(&app).await?;
     let foundation = mcp_call(
         &app,
         2,
         NAME,
-        json!({"query":"chicken food_type:USDA_Foundation"}),
+        json!({"query":"chicken dataset:usda_foundation"}),
     )
     .await?;
     assert_eq!(foundation.status, StatusCode::OK, "{:?}", foundation.json);
@@ -426,7 +425,7 @@ impl FoodReader for RecordingFoodReader {
                     food: Food {
                         source: Source::Borrowed("recording"),
                         source_food_id: "fixture-42".to_owned(),
-                        food_type: FoodType::Borrowed("ingredient"),
+                        dataset: Dataset::Borrowed("ingredient"),
                         description: "Test lentils".to_owned(),
                         category: Some("Legumes".to_owned()),
                         parsed_data,
@@ -485,7 +484,7 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         .as_str()
         .ok_or("MCP search tool has no description")?;
     for guidance in [
-        "descriptions, categories, tags, source, and food type",
+        "descriptions, categories, tags, source, and dataset",
         "No matches return an empty foods list",
         "Invalid search expressions return an error",
     ] {
@@ -501,11 +500,11 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         "category:dairy",
         "tags:organic",
         "source:USDA",
-        "food_type:USDA_Foundation",
-        "chicken food_type:USDA_Foundation",
-        "food_type:USDA_Branded",
-        "food_type:USDA_SR_Legacy",
-        "food_type:USDA_Survey_FNDDS",
+        "dataset:usda_foundation",
+        "chicken dataset:usda_foundation",
+        "dataset:usda_branded",
+        "dataset:usda_sr_legacy",
+        "dataset:usda_survey_fndds",
         "stored as usda",
         "values requiring quotes, such as values containing spaces, hyphens, or slashes",
         "passes expressions to search unchanged and does not add quotes",

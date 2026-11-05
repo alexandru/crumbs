@@ -2,7 +2,7 @@ CREATE TABLE crumbs_foods (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL REFERENCES crumbs_sources(id),
     source_food_id TEXT NOT NULL,
-    food_type TEXT NOT NULL,
+    dataset TEXT NOT NULL,
     description TEXT NOT NULL CHECK (length(trim(description)) > 0),
     category TEXT,
     parsed_data TEXT NOT NULL CHECK (json_valid(parsed_data)),

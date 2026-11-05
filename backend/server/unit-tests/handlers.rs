@@ -36,7 +36,7 @@ async fn search_handler_returns_food_nutrition_and_reports_invalid_fts_syntax()
         .upsert_food(&Food {
             source: Cow::Borrowed("test"),
             source_food_id: "food-1".to_owned(),
-            food_type: Cow::Borrowed("Foundation"),
+            dataset: Cow::Borrowed("Foundation"),
             description: "Hummus, commercial".to_owned(),
             category: Some("Legumes".to_owned()),
             parsed_data: serde_json::from_value(json!({

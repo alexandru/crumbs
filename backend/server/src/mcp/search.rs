@@ -40,7 +40,7 @@ pub(super) fn tool() -> Tool {
                 "query": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Nonblank Crumbs full-text expression. Terms separated by spaces use AND. Supports quoted phrases, prefix matching with a trailing * (for example, chick*), AND/OR/NOT, parentheses, and field selectors for description, category, tags, source, and food_type. Terms are case-insensitive. Examples: chicken breast, \"chicken breast\", chick*, chicken OR turkey, description:chicken, category:dairy, tags:organic, source:USDA, chicken source:USDA, food_type:USDA_Foundation, chicken food_type:USDA_Foundation, food_type:USDA_Branded, food_type:USDA_SR_Legacy, food_type:USDA_Survey_FNDDS. USDA source values are stored as usda. Clients must quote values requiring quotes, such as values containing spaces, hyphens, or slashes. The server passes expressions to search unchanged and does not add quotes. No matches return an empty foods list; invalid expressions return an error."
+                    "description": "Nonblank Crumbs full-text expression. Terms separated by spaces use AND. Supports quoted phrases, prefix matching with a trailing * (for example, chick*), AND/OR/NOT, parentheses, and field selectors for description, category, tags, source, and dataset. Terms are case-insensitive. Examples: chicken breast, \"chicken breast\", chick*, chicken OR turkey, description:chicken, category:dairy, tags:organic, source:USDA, chicken source:USDA, dataset:usda_foundation, chicken dataset:usda_foundation, dataset:usda_branded, dataset:usda_sr_legacy, dataset:usda_survey_fndds. USDA source values are stored as usda. Clients must quote values requiring quotes, such as values containing spaces, hyphens, or slashes. The server passes expressions to search unchanged and does not add quotes. No matches return an empty foods list; invalid expressions return an error."
                 },
                 "limit": {
                     "type": "integer",
@@ -52,7 +52,7 @@ pub(super) fn tool() -> Tool {
     ]);
     Tool::new_with_raw(
         NAME,
-        Some("Search foods with Crumbs full-text expressions over descriptions, categories, tags, source, and food type. Results include full nutrition data and are ordered by best-effort relevance, then food ID. No matches return an empty foods list. Invalid search expressions return an error. There is no pagination.".into()),
+        Some("Search foods with Crumbs full-text expressions over descriptions, categories, tags, source, and dataset. Results include full nutrition data and are ordered by best-effort relevance, then food ID. No matches return an empty foods list. Invalid search expressions return an error. There is no pagination.".into()),
         schema,
     )
     .with_annotations(

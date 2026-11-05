@@ -366,7 +366,7 @@ fn make_food(
     Ok(Food {
         source: Source::Borrowed(source),
         source_food_id: source_food_id.to_owned(),
-        food_type: Cow::Borrowed("Foundation"),
+        dataset: Cow::Borrowed("Foundation"),
         description: description.to_owned(),
         category: None,
         parsed_data: crate::nutrition::FoodData::default(),

@@ -2,7 +2,7 @@ CREATE VIEW crumbs_foods_search_content AS
 SELECT
     f.id,
     f.source,
-    f.food_type,
+    f.dataset,
     f.description,
     f.category,
     COALESCE(
@@ -18,7 +18,7 @@ FROM crumbs_foods AS f;
 
 CREATE VIRTUAL TABLE crumbs_foods_fts USING fts5(
     source,
-    food_type,
+    dataset,
     description,
     category,
     tags,
@@ -30,8 +30,8 @@ CREATE VIRTUAL TABLE crumbs_foods_fts USING fts5(
 CREATE TRIGGER crumbs_foods_fts_after_insert
 AFTER INSERT ON crumbs_foods
 BEGIN
-    INSERT INTO crumbs_foods_fts (rowid, source, food_type, description, category, tags)
-    SELECT id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (rowid, source, dataset, description, category, tags)
+    SELECT id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id = new.id;
 END;
@@ -39,36 +39,36 @@ END;
 CREATE TRIGGER crumbs_foods_fts_before_delete
 BEFORE DELETE ON crumbs_foods
 BEGIN
-    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, food_type, description, category, tags)
-    SELECT 'delete', id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, dataset, description, category, tags)
+    SELECT 'delete', id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id = old.id;
 END;
 
 CREATE TRIGGER crumbs_foods_fts_before_update
-BEFORE UPDATE OF id, source, food_type, description, category ON crumbs_foods
+BEFORE UPDATE OF id, source, dataset, description, category ON crumbs_foods
 WHEN old.id IS NOT new.id
     OR old.source IS NOT new.source
-    OR old.food_type IS NOT new.food_type
+    OR old.dataset IS NOT new.dataset
     OR old.description IS NOT new.description
     OR old.category IS NOT new.category
 BEGIN
-    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, food_type, description, category, tags)
-    SELECT 'delete', id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, dataset, description, category, tags)
+    SELECT 'delete', id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id = old.id;
 END;
 
 CREATE TRIGGER crumbs_foods_fts_after_update
-AFTER UPDATE OF id, source, food_type, description, category ON crumbs_foods
+AFTER UPDATE OF id, source, dataset, description, category ON crumbs_foods
 WHEN old.id IS NOT new.id
     OR old.source IS NOT new.source
-    OR old.food_type IS NOT new.food_type
+    OR old.dataset IS NOT new.dataset
     OR old.description IS NOT new.description
     OR old.category IS NOT new.category
 BEGIN
-    INSERT INTO crumbs_foods_fts (rowid, source, food_type, description, category, tags)
-    SELECT id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (rowid, source, dataset, description, category, tags)
+    SELECT id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id = new.id;
 END;
@@ -81,8 +81,8 @@ WHEN NOT EXISTS (
     WHERE food_id = new.food_id AND tag_id = new.tag_id
 )
 BEGIN
-    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, food_type, description, category, tags)
-    SELECT 'delete', id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, dataset, description, category, tags)
+    SELECT 'delete', id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id = new.food_id;
 END;
@@ -90,8 +90,8 @@ END;
 CREATE TRIGGER crumbs_food_tags_fts_after_insert
 AFTER INSERT ON crumbs_food_tags
 BEGIN
-    INSERT INTO crumbs_foods_fts (rowid, source, food_type, description, category, tags)
-    SELECT id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (rowid, source, dataset, description, category, tags)
+    SELECT id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id = new.food_id;
 END;
@@ -103,8 +103,8 @@ BEFORE DELETE ON crumbs_food_tags
 WHEN EXISTS (SELECT 1 FROM crumbs_foods WHERE id = old.food_id)
     AND EXISTS (SELECT 1 FROM crumbs_tags WHERE id = old.tag_id)
 BEGIN
-    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, food_type, description, category, tags)
-    SELECT 'delete', id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, dataset, description, category, tags)
+    SELECT 'delete', id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id = old.food_id;
 END;
@@ -114,8 +114,8 @@ AFTER DELETE ON crumbs_food_tags
 WHEN EXISTS (SELECT 1 FROM crumbs_foods WHERE id = old.food_id)
     AND EXISTS (SELECT 1 FROM crumbs_tags WHERE id = old.tag_id)
 BEGIN
-    INSERT INTO crumbs_foods_fts (rowid, source, food_type, description, category, tags)
-    SELECT id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (rowid, source, dataset, description, category, tags)
+    SELECT id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id = old.food_id;
 END;
@@ -128,8 +128,8 @@ WHEN (old.food_id IS NOT new.food_id OR old.tag_id IS NOT new.tag_id)
     AND EXISTS (SELECT 1 FROM crumbs_foods WHERE id = old.food_id)
     AND EXISTS (SELECT 1 FROM crumbs_tags WHERE id = old.tag_id)
 BEGIN
-    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, food_type, description, category, tags)
-    SELECT 'delete', id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, dataset, description, category, tags)
+    SELECT 'delete', id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id IN (old.food_id, new.food_id);
 END;
@@ -140,8 +140,8 @@ WHEN (old.food_id IS NOT new.food_id OR old.tag_id IS NOT new.tag_id)
     AND EXISTS (SELECT 1 FROM crumbs_foods WHERE id = old.food_id)
     AND EXISTS (SELECT 1 FROM crumbs_tags WHERE id = old.tag_id)
 BEGIN
-    INSERT INTO crumbs_foods_fts (rowid, source, food_type, description, category, tags)
-    SELECT id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (rowid, source, dataset, description, category, tags)
+    SELECT id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id IN (old.food_id, new.food_id);
 END;
@@ -159,8 +159,8 @@ WHEN old.id IS NOT new.id
     OR old.name IS NOT new.name
     OR old.name_key IS NOT new.name_key
 BEGIN
-    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, food_type, description, category, tags)
-    SELECT 'delete', id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (crumbs_foods_fts, rowid, source, dataset, description, category, tags)
+    SELECT 'delete', id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id IN (SELECT food_id FROM crumbs_food_tags WHERE tag_id = old.id);
 END;
@@ -171,8 +171,8 @@ WHEN old.id IS NOT new.id
     OR old.name IS NOT new.name
     OR old.name_key IS NOT new.name_key
 BEGIN
-    INSERT INTO crumbs_foods_fts (rowid, source, food_type, description, category, tags)
-    SELECT id, source, food_type, description, category, tags
+    INSERT INTO crumbs_foods_fts (rowid, source, dataset, description, category, tags)
+    SELECT id, source, dataset, description, category, tags
     FROM crumbs_foods_search_content
     WHERE id IN (SELECT food_id FROM crumbs_food_tags WHERE tag_id = new.id);
 END;

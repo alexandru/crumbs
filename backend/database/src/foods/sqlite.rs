@@ -5,9 +5,9 @@ use sqlx::sqlite::SqliteError;
 use sqlx::{FromRow, Row};
 
 use super::{
-    Food, FoodCategory, FoodDescription, FoodId, FoodReader, FoodSearchResult, FoodSummary,
-    FoodType, FoodWriter, SearchError, SearchLimit, SearchQuery, Source, SourceFoodId, Tag, TagId,
-    TagKey, TagName,
+    Dataset, Food, FoodCategory, FoodDescription, FoodId, FoodReader, FoodSearchResult,
+    FoodSummary, FoodWriter, SearchError, SearchLimit, SearchQuery, Source, SourceFoodId, Tag,
+    TagId, TagKey, TagName,
 };
 use crate::Database;
 use crate::clock::{ClockError, UnixMillis};
@@ -31,10 +31,10 @@ impl FoodWriter for Database {
         .await?;
         let id = sqlx::query_scalar(
             "INSERT INTO crumbs_foods (
-                source, source_food_id, food_type, description, category, parsed_data, created_at
+                source, source_food_id, dataset, description, category, parsed_data, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (source, source_food_id) DO UPDATE SET
-                food_type = excluded.food_type,
+                dataset = excluded.dataset,
                 description = excluded.description,
                 category = excluded.category,
                 parsed_data = excluded.parsed_data,
@@ -43,7 +43,7 @@ impl FoodWriter for Database {
         )
         .bind(food.source.as_ref())
         .bind(&food.source_food_id)
-        .bind(food.food_type.as_ref())
+        .bind(food.dataset.as_ref())
         .bind(&food.description)
         .bind(food.category.as_deref())
         .bind(parsed_data)
@@ -107,7 +107,7 @@ impl Database {
         source_food_id: &SourceFoodId,
     ) -> Result<Option<FoodSummary>, sqlx::Error> {
         let row = sqlx::query_as::<_, FoodRow>(
-            "SELECT id, source, source_food_id, food_type, description, category
+            "SELECT id, source, source_food_id, dataset, description, category
              FROM crumbs_foods WHERE source = ? AND source_food_id = ?",
         )
         .bind(source.as_ref())
@@ -207,7 +207,7 @@ impl From<ClockError> for sqlx::Error {
 
 type RowId = i64;
 type SourceText = String;
-type FoodTypeText = String;
+type DatasetText = String;
 type ParsedFoodDataText = String;
 
 #[derive(FromRow)]
@@ -215,14 +215,14 @@ struct FoodSearchRow {
     id: RowId,
     source: SourceText,
     source_food_id: SourceFoodId,
-    food_type: FoodTypeText,
+    dataset: DatasetText,
     description: FoodDescription,
     category: Option<FoodCategory>,
     parsed_data: ParsedFoodDataText,
 }
 
 const SEARCH_SQL: &str = "
-SELECT f.id, f.source, f.source_food_id, f.food_type,
+SELECT f.id, f.source, f.source_food_id, f.dataset,
        f.description, f.category, f.parsed_data
 FROM crumbs_foods_fts
 JOIN crumbs_foods AS f ON f.id = crumbs_foods_fts.rowid
@@ -242,7 +242,7 @@ impl FoodSearchRow {
             food: Food {
                 source: Source::Owned(self.source),
                 source_food_id: self.source_food_id,
-                food_type: FoodType::Owned(self.food_type),
+                dataset: Dataset::Owned(self.dataset),
                 description: self.description,
                 category: self.category,
                 parsed_data,
@@ -281,7 +281,7 @@ struct FoodRow {
     id: RowId,
     source: SourceText,
     source_food_id: SourceFoodId,
-    food_type: FoodTypeText,
+    dataset: DatasetText,
     description: FoodDescription,
     category: Option<FoodCategory>,
 }
@@ -292,7 +292,7 @@ impl From<FoodRow> for FoodSummary {
             id: FoodId(row.id),
             source: row.source.into(),
             source_food_id: row.source_food_id,
-            food_type: row.food_type.into(),
+            dataset: row.dataset.into(),
             description: row.description,
             category: row.category,
         }
