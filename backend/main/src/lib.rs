@@ -8,18 +8,15 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ::config::ConfigError;
 use clap::{Parser, Subcommand};
-use crumbs_database::Database;
+use crumbs_database::{Database, DatabaseConfig};
 use crumbs_import::{FoodCount, ImportDiagnostic, ImportError, ImportReport};
-use crumbs_server::{ServerArgs, ServerCommand};
+use crumbs_server::HttpConfig;
 
 mod cli;
-mod config;
 mod users;
 
-pub use cli::{DbArgs, DbCommand};
-use config::AppConfig;
+pub use cli::{DatabaseArgs, DbArgs, DbCommand, HttpArgs, ServerArgs, ServerCommand};
 
 /// Top-level command-line interface for the `crumbs` executable.
 #[derive(Debug, Parser)]
@@ -42,9 +39,6 @@ pub enum Command {
 /// Errors produced while running the executable.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The application configuration could not be loaded.
-    #[error("failed to load configuration: {0}")]
-    Config(#[from] ConfigError),
     /// The async runtime could not be created.
     #[error("failed to create the async runtime: {0}")]
     Runtime(#[source] io::Error),
@@ -72,9 +66,9 @@ pub enum Error {
 ///
 /// # Errors
 ///
-/// Returns an error if the configuration cannot be loaded, the runtime cannot
-/// be created, the database cannot be opened or migrated, an import fails, or
-/// server startup fails.
+/// Returns an error if the runtime cannot be created, the database cannot be
+/// opened or migrated, an import fails, user creation fails, or server startup
+/// fails.
 pub fn run() -> Result<(), Error> {
     let cli = Cli::parse();
     run_cli(cli)
@@ -83,27 +77,22 @@ pub fn run() -> Result<(), Error> {
 fn run_cli(cli: Cli) -> Result<(), Error> {
     match cli.command {
         Command::Server(ServerArgs { command }) => match command {
-            ServerCommand::Start { config } => {
-                let app_config = AppConfig::from_file(config)?;
-                runtime()?.block_on(run_server(app_config))
+            ServerCommand::Start { database, http } => {
+                runtime()?.block_on(run_server(database.into(), http.into()))
             }
         },
         Command::Db(DbArgs { command }) => match command {
             DbCommand::ImportUsda {
                 file,
-                config,
+                database,
                 verbose,
-            } => {
-                let app_config = AppConfig::from_file(config)?;
-                runtime()?.block_on(run_import_usda(app_config, file, verbose))
-            }
-            DbCommand::CreateUser { username, config } => {
-                let app_config = AppConfig::from_file(config)?;
+            } => runtime()?.block_on(run_import_usda(database.into(), file, verbose)),
+            DbCommand::CreateUser { username, database } => {
                 let (username, password_hash) = users::prompt_credentials(username, |prompt| {
                     rpassword::prompt_password(prompt)
                 })?;
                 let user = runtime()?.block_on(users::create_user(
-                    app_config.database,
+                    database.into(),
                     username,
                     password_hash,
                 ))?;
@@ -130,16 +119,20 @@ fn runtime() -> Result<tokio::runtime::Runtime, Error> {
         .map_err(Error::Runtime)
 }
 
-async fn run_server(config: AppConfig) -> Result<(), Error> {
-    let database = Arc::new(Database::open(config.database).await?);
-    let result = crumbs_server::start(Arc::clone(&database), config.http).await;
+async fn run_server(database: DatabaseConfig, http: HttpConfig) -> Result<(), Error> {
+    let database = Arc::new(Database::open(database).await?);
+    let result = crumbs_server::start(Arc::clone(&database), http).await;
     database.close().await;
     result?;
     Ok(())
 }
 
-async fn run_import_usda(config: AppConfig, file: PathBuf, verbose: bool) -> Result<(), Error> {
-    let database = Database::open(config.database).await?;
+async fn run_import_usda(
+    config: DatabaseConfig,
+    file: PathBuf,
+    verbose: bool,
+) -> Result<(), Error> {
+    let database = Database::open(config).await?;
     let import_result = crumbs_import::import_usda_with_diagnostics(
         &database,
         &file,

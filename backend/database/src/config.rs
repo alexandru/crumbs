@@ -13,8 +13,7 @@ pub type DatabasePath = PathBuf;
 pub struct DatabaseConfig {
     /// Path to the SQLite database file.
     ///
-    /// Relative paths are resolved by the executable that loads the application
-    /// configuration; the database crate uses the path it is given.
+    /// Relative paths use the process working directory.
     pub path: DatabasePath,
 }
 

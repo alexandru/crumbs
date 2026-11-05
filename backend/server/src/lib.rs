@@ -4,7 +4,6 @@
 compile_error!("crumbs-server currently supports Unix targets only");
 
 use std::io;
-use std::path::PathBuf;
 
 mod config;
 mod handlers;
@@ -18,25 +17,6 @@ mod search;
 pub use config::{HttpBindAddress, HttpConfig, HttpPort, InvalidIssuerUrl, IssuerUrl, OAuthConfig};
 pub use oauth::InitError as OAuthInitError;
 pub use runtime::start;
-
-/// Arguments accepted by the `server` subcommand.
-#[derive(Debug, clap::Args)]
-pub struct ServerArgs {
-    /// Operation to perform.
-    #[command(subcommand)]
-    pub command: ServerCommand,
-}
-
-/// Operations exposed by the `server` subcommand.
-#[derive(Debug, clap::Subcommand)]
-pub enum ServerCommand {
-    /// Start the server and wait for a shutdown signal.
-    Start {
-        /// Path to the TOML configuration file.
-        #[arg(long, value_name = "PATH")]
-        config: PathBuf,
-    },
-}
 
 /// Errors produced while starting or running the server.
 #[derive(Debug, thiserror::Error)]
@@ -67,7 +47,3 @@ pub enum Error {
     #[error("failed to serve HTTP requests: {0}")]
     Serve(#[source] io::Error),
 }
-
-#[cfg(test)]
-#[path = "../unit-tests/lib.rs"]
-mod tests;

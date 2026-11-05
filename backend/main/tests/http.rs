@@ -3,19 +3,18 @@
 mod common;
 
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+use std::path::Path;
 
 use serde_json::{Value, json};
 
-use common::{
-    CommandOutput, EPHEMERAL_PORT_CONFIG, HttpStatusCode, ServerProcess, get, run_server_to_exit,
-    temporary_config,
-};
+use common::{CommandOutput, HttpStatusCode, ServerProcess, get, run_server_to_exit, server_args};
 
 #[test]
 fn root_is_public_and_food_apis_require_bearer_tokens() -> Result<(), Box<dyn Error>> {
-    let server = ServerProcess::spawn(EPHEMERAL_PORT_CONFIG)?;
+    let server = ServerProcess::spawn()?;
     assert_eq!(server.address().ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
 
     let response = get(&server, "/")?;
@@ -50,9 +49,52 @@ fn root_is_public_and_food_apis_require_bearer_tokens() -> Result<(), Box<dyn Er
 }
 
 #[test]
+fn server_configuration_can_come_from_environment() -> Result<(), Box<dyn Error>> {
+    let server = ServerProcess::spawn_env_only()?;
+
+    assert!(server.directory().join("crumbs.db").is_file());
+    let response = get(&server, "/.well-known/oauth-authorization-server")?;
+    assert_eq!(response.status(), HttpStatusCode::OK);
+    let body: Value = serde_json::from_str(response.body())?;
+    assert_eq!(body["issuer"], "http://127.0.0.1:9191");
+    Ok(())
+}
+
+#[test]
+fn command_line_values_override_invalid_configuration_environment() -> Result<(), Box<dyn Error>> {
+    let arguments = server_args(
+        Path::new("crumbs-cli.db"),
+        "127.0.0.1",
+        "0",
+        "http://127.0.0.1:8181",
+    );
+    let server = ServerProcess::spawn_with(
+        &arguments,
+        &[
+            ("CRUMBS_DATABASE_PATH", "/a/nonexistent/parent/crumbs.db"),
+            ("CRUMBS_HTTP_BIND", "not-an-ip-address"),
+            ("CRUMBS_HTTP_PORT", "not-a-port"),
+            ("CRUMBS_OAUTH_ISSUER", "not-a-url"),
+        ],
+    )?;
+
+    assert!(server.directory().join("crumbs-cli.db").is_file());
+    let response = get(&server, "/.well-known/oauth-authorization-server")?;
+    assert_eq!(response.status(), HttpStatusCode::OK);
+    let body: Value = serde_json::from_str(response.body())?;
+    assert_eq!(body["issuer"], "http://127.0.0.1:8181");
+    Ok(())
+}
+
+#[test]
 fn https_issuer_allows_public_listener_for_a_tls_proxy() -> Result<(), Box<dyn Error>> {
-    let config = "[http]\nbind = \"0.0.0.0\"\nport = 0\n\n[http.oauth]\nissuer = \"https://crumbs.example.com\"\n\n[database]\npath = \"crumbs.db\"\n";
-    let server = ServerProcess::spawn(config)?;
+    let arguments = server_args(
+        Path::new("crumbs.db"),
+        "0.0.0.0",
+        "0",
+        "https://crumbs.example.com",
+    );
+    let server = ServerProcess::spawn_with(&arguments, &[])?;
 
     assert_eq!(server.address().ip(), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
     Ok(())
@@ -60,7 +102,7 @@ fn https_issuer_allows_public_listener_for_a_tls_proxy() -> Result<(), Box<dyn E
 
 #[test]
 fn oauth_discovery_is_available_without_authentication() -> Result<(), Box<dyn Error>> {
-    let server = ServerProcess::spawn(EPHEMERAL_PORT_CONFIG)?;
+    let server = ServerProcess::spawn()?;
 
     let response = get(&server, "/.well-known/oauth-authorization-server")?;
 
@@ -73,7 +115,7 @@ fn oauth_discovery_is_available_without_authentication() -> Result<(), Box<dyn E
 
 #[test]
 fn unknown_route_returns_not_found() -> Result<(), Box<dyn Error>> {
-    let server = ServerProcess::spawn(EPHEMERAL_PORT_CONFIG)?;
+    let server = ServerProcess::spawn()?;
 
     let response = get(&server, "/missing")?;
 
@@ -85,12 +127,8 @@ fn unknown_route_returns_not_found() -> Result<(), Box<dyn Error>> {
 fn startup_creates_the_configured_database_file() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     let database_path = directory.path().join("nested").join("crumbs.db");
-    let config = format!(
-        "[http]\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"{}\"\n",
-        database_path.display()
-    );
-
-    let server = ServerProcess::spawn(&config)?;
+    let arguments = server_args(&database_path, "127.0.0.1", "0", "http://127.0.0.1");
+    let server = ServerProcess::spawn_with(&arguments, &[])?;
 
     assert!(
         database_path.is_file(),
@@ -103,41 +141,55 @@ fn startup_creates_the_configured_database_file() -> Result<(), Box<dyn Error>> 
 }
 
 #[test]
-fn missing_configuration_file_fails_before_serving() -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
-    let path = directory.path().join("missing.toml");
-
-    assert_failed_start(&run_server_to_exit(&path)?);
-    Ok(())
-}
-
-#[test]
-fn malformed_configuration_fails_before_serving() -> Result<(), Box<dyn Error>> {
-    let config = temporary_config("[http\nport = 0\n")?;
-
-    assert_failed_start(&run_server_to_exit(config.path())?);
-    Ok(())
-}
-
-#[test]
 fn occupied_port_fails_before_serving() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))?;
     let port = listener.local_addr()?.port();
-    let config = temporary_config(&format!(
-        "[http]\nport = {port}\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"crumbs.db\"\n"
-    ))?;
+    let arguments = server_args(
+        Path::new("crumbs.db"),
+        "0.0.0.0",
+        &port.to_string(),
+        "https://crumbs.example.com",
+    );
 
-    assert_failed_start(&run_server_to_exit(config.path())?);
+    assert_failed_start(&run_server_to_exit(&arguments, &[])?);
+    Ok(())
+}
+
+#[test]
+fn invalid_server_environment_value_fails_before_serving() -> Result<(), Box<dyn Error>> {
+    let arguments = [
+        OsString::from("--database-path"),
+        OsString::from("crumbs.db"),
+        OsString::from("--http-bind"),
+        OsString::from("127.0.0.1"),
+    ];
+    let output = run_server_to_exit(
+        &arguments,
+        &[
+            ("CRUMBS_HTTP_PORT", "not-a-port"),
+            ("CRUMBS_OAUTH_ISSUER", "http://127.0.0.1"),
+        ],
+    )?;
+
+    assert_failed_start(&output);
+    assert!(
+        output.stderr.contains("--http-port"),
+        "invalid environment value was not attributed to the port option: {}",
+        output.stderr
+    );
     Ok(())
 }
 
 #[test]
 fn loopback_http_issuer_cannot_bind_a_public_interface() -> Result<(), Box<dyn Error>> {
-    let config = temporary_config(
-        "[http]\nbind = \"0.0.0.0\"\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1:8080\"\n\n[database]\npath = \"crumbs.db\"\n",
-    )?;
+    let arguments = server_args(
+        Path::new("crumbs.db"),
+        "0.0.0.0",
+        "0",
+        "http://127.0.0.1:8080",
+    );
 
-    let output = run_server_to_exit(config.path())?;
+    let output = run_server_to_exit(&arguments, &[])?;
 
     assert_failed_start(&output);
     assert!(
@@ -156,12 +208,9 @@ fn database_initialization_failure_fails_before_serving() -> Result<(), Box<dyn 
     let blocker = directory.path().join("blocker");
     fs::write(&blocker, b"not a directory")?;
     let database_path = blocker.join("nested").join("crumbs.db");
-    let config = temporary_config(&format!(
-        "[http]\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"{}\"\n",
-        database_path.display()
-    ))?;
+    let arguments = server_args(&database_path, "127.0.0.1", "0", "http://127.0.0.1");
 
-    let output = run_server_to_exit(config.path())?;
+    let output = run_server_to_exit(&arguments, &[])?;
     assert_failed_start(&output);
     assert!(
         output.stderr.contains(&blocker.display().to_string()),

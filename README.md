@@ -4,12 +4,14 @@ Crumbs is a self-hosted calorie tracker in early development. The first mileston
 
 ## Run with Docker Compose
 
-Requires Docker with Compose. Save this as `compose.yaml`:
+Requires Docker with Compose. Set `CRUMBS_OAUTH_ISSUER` to the public HTTPS origin; see [Authentication](docs/authentication.md). Save this as `compose.yaml`:
 
 ```yaml
 services:
   crumbs:
     image: ghcr.io/alexandru/crumbs:latest
+    environment:
+      CRUMBS_OAUTH_ISSUER: https://crumbs.example.com
     ports:
       - "8080:8080"
     volumes:
@@ -30,7 +32,7 @@ Download the [USDA Foundation Foods JSON dataset](https://fdc.nal.usda.gov/downl
 ```sh
 docker compose run --rm --no-deps \
   --volume "$HOME/Downloads/usda.json:/imports/usda.json:ro" \
-  crumbs db import-usda /imports/usda.json --config /app/application.toml
+  crumbs db import-usda /imports/usda.json
 ```
 
 Stop the service with `docker compose down`; the `crumbs-data` volume keeps the database.

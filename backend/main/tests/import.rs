@@ -3,43 +3,103 @@
 mod common;
 
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
-use common::temporary_config;
+use common::command;
 
 type DatabaseFilename<'a> = &'a str;
 
-const BIN: &str = env!("CARGO_BIN_EXE_crumbs");
 const FOUNDATION_JSON: &str = include_str!("../../import/test-fixtures/foundation.json");
-const CONFIG: &str = "[http]\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"crumbs.db\"\n";
 
 #[test]
-fn imports_foundation_fixture_and_reports_count() -> Result<(), Box<dyn Error>> {
+fn imports_foundation_fixture_without_http_configuration() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     let fixture = directory.path().join("foundation.json");
+    let database_path = directory.path().join("crumbs.db");
     fs::write(&fixture, FOUNDATION_JSON)?;
-    let config = temporary_config(CONFIG)?;
 
-    let output = import(&fixture, config.path())?;
+    let output = import_with(
+        &fixture,
+        &database_path,
+        &[],
+        &[
+            ("CRUMBS_IMPORT_FILE", "/a/nonexistent/foundation.json"),
+            ("CRUMBS_HTTP_BIND", "not-an-ip-address"),
+            ("CRUMBS_HTTP_PORT", "not-a-port"),
+            ("CRUMBS_OAUTH_ISSUER", "not-a-url"),
+            ("CRUMBS_DATABASE_PATH", "/a/nonexistent/parent/crumbs.db"),
+        ],
+    )?;
 
     assert_success(&output);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "Imported 2 foods (0 sanitized); rejected 0 foods\n"
     );
-    let database_path = config
-        .path()
-        .parent()
-        .ok_or_else(|| io::Error::other("temporary config has no parent"))?
-        .join("crumbs.db");
     assert!(
         database_path.is_file(),
         "import did not create {}",
         database_path.display()
     );
+    Ok(())
+}
+
+#[test]
+fn import_file_can_come_from_environment() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let fixture = directory.path().join("foundation.json");
+    let database_path = directory.path().join("crumbs.db");
+    fs::write(&fixture, FOUNDATION_JSON)?;
+
+    let output = run_import(
+        &[],
+        &[
+            (
+                "CRUMBS_IMPORT_FILE",
+                fixture
+                    .to_str()
+                    .ok_or_else(|| io::Error::other("fixture path is not valid UTF-8"))?,
+            ),
+            (
+                "CRUMBS_DATABASE_PATH",
+                database_path
+                    .to_str()
+                    .ok_or_else(|| io::Error::other("database path is not valid UTF-8"))?,
+            ),
+        ],
+        None,
+    )?;
+
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Imported 2 foods (0 sanitized); rejected 0 foods\n"
+    );
+    assert!(database_path.is_file());
+    Ok(())
+}
+
+#[test]
+fn relative_database_path_uses_the_working_directory() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    fs::write(directory.path().join("foundation.json"), FOUNDATION_JSON)?;
+
+    let output = run_import(
+        &[
+            OsString::from("foundation.json"),
+            OsString::from("--database-path"),
+            OsString::from("crumbs.db"),
+        ],
+        &[],
+        Some(directory.path()),
+    )?;
+
+    assert_success(&output);
+    assert!(directory.path().join("crumbs.db").is_file());
     Ok(())
 }
 
@@ -55,13 +115,13 @@ fn sqlite_special_names_become_literal_files() -> Result<(), Box<dyn Error>> {
 fn malformed_input_fails_with_committed_progress() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     let fixture = directory.path().join("malformed.json");
+    let database_path = directory.path().join("crumbs.db");
     fs::write(
         &fixture,
         r#"{"FoundationFoods":[{"fdcId":1,"dataType":"Foundation","description":"committed before syntax error"},{"fdcId":2,}]}"#,
     )?;
-    let config = temporary_config(CONFIG)?;
 
-    let output = import(&fixture, config.path())?;
+    let output = import(&fixture, &database_path)?;
 
     assert!(
         !output.status.success(),
@@ -86,14 +146,13 @@ fn malformed_input_fails_with_committed_progress() -> Result<(), Box<dyn Error>>
 fn assert_literal_database_path(database_name: DatabaseFilename<'_>) -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     fs::write(directory.path().join("foundation.json"), FOUNDATION_JSON)?;
-    fs::write(
-        directory.path().join("application.toml"),
-        format!(
-            "[http]\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"{database_name}\"\n"
-        ),
-    )?;
 
-    let first = run_import_in(directory.path())?;
+    let arguments = [
+        OsString::from("foundation.json"),
+        OsString::from("--database-path"),
+        OsString::from(database_name),
+    ];
+    let first = run_import(&arguments, &[], Some(directory.path()))?;
     assert_success(&first);
     assert_eq!(
         String::from_utf8_lossy(&first.stdout),
@@ -113,7 +172,7 @@ fn assert_literal_database_path(database_name: DatabaseFilename<'_>) -> Result<(
         database_path.display()
     );
 
-    let second = run_import_in(directory.path())?;
+    let second = run_import(&arguments, &[], Some(directory.path()))?;
     assert_success(&second);
     assert_eq!(
         String::from_utf8_lossy(&second.stdout),
@@ -127,6 +186,7 @@ fn assert_literal_database_path(database_name: DatabaseFilename<'_>) -> Result<(
 fn reports_food_level_sanitization_and_identity_rejection_details() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     let fixture = directory.path().join("mixed.json");
+    let database_path = directory.path().join("crumbs.db");
     fs::write(
         &fixture,
         r#"{"FoundationFoods":[
@@ -138,8 +198,7 @@ fn reports_food_level_sanitization_and_identity_rejection_details() -> Result<()
         ]}"#,
     )?;
 
-    let default_config = temporary_config(CONFIG)?;
-    let default_output = import(&fixture, default_config.path())?;
+    let default_output = import(&fixture, &database_path)?;
     assert!(!default_output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&default_output.stdout),
@@ -151,8 +210,24 @@ fn reports_food_level_sanitization_and_identity_rejection_details() -> Result<()
         "default output included food-level diagnostics"
     );
 
-    let verbose_config = temporary_config(CONFIG)?;
-    let verbose_output = import_verbose(&fixture, verbose_config.path())?;
+    let quiet_override = import_with(
+        &fixture,
+        &directory.path().join("quiet.db"),
+        &["--verbose=false"],
+        &[("CRUMBS_VERBOSE", "true")],
+    )?;
+    assert!(!quiet_override.status.success());
+    assert!(
+        !String::from_utf8_lossy(&quiet_override.stderr).contains("food source="),
+        "CLI false did not override CRUMBS_VERBOSE=true"
+    );
+
+    let verbose_output = import_with(
+        &fixture,
+        &directory.path().join("verbose.db"),
+        &[],
+        &[("CRUMBS_VERBOSE", "true")],
+    )?;
     assert!(!verbose_output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&verbose_output.stdout),
@@ -191,13 +266,13 @@ fn reports_food_level_sanitization_and_identity_rejection_details() -> Result<()
 fn sanitized_foods_are_successful_without_verbose_output() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     let fixture = directory.path().join("sanitized.json");
+    let database_path = directory.path().join("crumbs.db");
     fs::write(
         &fixture,
         r#"{"FoundationFoods":[{"fdcId":21,"dataType":"Foundation","description":"negative nutrient","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":-2}]}]}"#,
     )?;
-    let config = temporary_config(CONFIG)?;
 
-    let output = import(&fixture, config.path())?;
+    let output = import(&fixture, &database_path)?;
 
     assert_success(&output);
     assert_eq!(
@@ -208,36 +283,40 @@ fn sanitized_foods_are_successful_without_verbose_output() -> Result<(), Box<dyn
     Ok(())
 }
 
-fn run_import_in(directory: &Path) -> io::Result<Output> {
-    Command::new(BIN)
-        .current_dir(directory)
-        .args([
-            "db",
-            "import-usda",
-            "foundation.json",
-            "--config",
-            "application.toml",
-        ])
-        .output()
+fn import(fixture: &Path, database_path: &Path) -> io::Result<Output> {
+    import_with(fixture, database_path, &[], &[])
 }
 
-fn import(fixture: &std::path::Path, config: &std::path::Path) -> io::Result<Output> {
-    Command::new(BIN)
-        .args(["db", "import-usda"])
-        .arg(fixture)
-        .arg("--config")
-        .arg(config)
-        .output()
+fn import_with(
+    fixture: &Path,
+    database_path: &Path,
+    options: &[&str],
+    environment: &[(&str, &str)],
+) -> io::Result<Output> {
+    let arguments = [
+        fixture.as_os_str().to_owned(),
+        OsString::from("--database-path"),
+        database_path.as_os_str().to_owned(),
+    ];
+    let all_arguments = arguments
+        .into_iter()
+        .chain(options.iter().map(|option| OsString::from(*option)))
+        .collect::<Vec<_>>();
+    run_import(&all_arguments, environment, None)
 }
 
-fn import_verbose(fixture: &std::path::Path, config: &std::path::Path) -> io::Result<Output> {
-    Command::new(BIN)
-        .args(["db", "import-usda"])
-        .arg(fixture)
-        .arg("--config")
-        .arg(config)
-        .arg("--verbose")
-        .output()
+fn run_import(
+    arguments: &[OsString],
+    environment: &[(&str, &str)],
+    directory: Option<&Path>,
+) -> io::Result<Output> {
+    let mut command = command();
+    command.args(["db", "import-usda"]).args(arguments);
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    command.envs(environment.iter().copied());
+    command.output()
 }
 
 fn assert_success(output: &Output) {
