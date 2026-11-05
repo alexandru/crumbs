@@ -7,7 +7,7 @@ mod common;
 
 use std::error::Error;
 
-use common::{EPHEMERAL_PORT_CONFIG, HttpStatusCode, SHUTDOWN_TIMEOUT, ServerProcess};
+use common::{HttpStatusCode, SHUTDOWN_TIMEOUT, ServerProcess};
 use nix::sys::signal::Signal;
 
 #[test]
@@ -26,7 +26,7 @@ fn terminates_cleanly_on_interrupt() -> Result<(), Box<dyn Error>> {
 }
 
 fn assert_clean_shutdown(signal: Signal) -> Result<(), Box<dyn Error>> {
-    let mut server = ServerProcess::spawn(EPHEMERAL_PORT_CONFIG)?;
+    let mut server = ServerProcess::spawn()?;
 
     let response = common::get(&server, "/.well-known/oauth-authorization-server")?;
     assert_eq!(

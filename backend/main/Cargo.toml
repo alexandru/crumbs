@@ -12,11 +12,9 @@ path = "src/main.rs"
 rpassword.workspace = true
 zeroize.workspace = true
 clap.workspace = true
-config.workspace = true
 crumbs-database.workspace = true
 crumbs-import.workspace = true
 crumbs-server.workspace = true
-serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 

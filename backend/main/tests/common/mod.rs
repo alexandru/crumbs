@@ -6,10 +6,10 @@
 )]
 
 use std::error::Error;
-use std::fs;
+use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -22,24 +22,44 @@ use tempfile::TempDir;
 
 /// Maximum time to wait for a clean shutdown.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-/// TOML configuration that asks the operating system for an available port.
-pub const EPHEMERAL_PORT_CONFIG: &str = "[http]\nport = 0\n\n[http.oauth]\nissuer = \"http://127.0.0.1\"\n\n[database]\npath = \"crumbs.db\"\n";
 
 /// A running `crumbs server start` process listening on an ephemeral port.
 pub struct ServerProcess {
     child: Child,
     address: SocketAddr,
     exited: bool,
-    _config: TemporaryConfig,
+    _directory: TempDir,
 }
 
 impl ServerProcess {
-    /// Starts the server with the given TOML configuration contents.
-    pub fn spawn(contents: &str) -> Result<Self, Box<dyn Error>> {
-        // The temporary directory holds both the configuration file and any
-        // relative database path, so it must live as long as the process.
-        let config = temporary_config(contents)?;
-        let mut child = server_command(config.path()).spawn()?;
+    /// Starts the server with command-line settings in a temporary directory.
+    pub fn spawn() -> Result<Self, Box<dyn Error>> {
+        Self::spawn_with(
+            &server_args(Path::new("crumbs.db"), "127.0.0.1", "0", "http://127.0.0.1"),
+            &[],
+        )
+    }
+
+    /// Starts the server with settings supplied only through environment variables.
+    pub fn spawn_env_only() -> Result<Self, Box<dyn Error>> {
+        Self::spawn_with(
+            &[],
+            &[
+                ("CRUMBS_DATABASE_PATH", "crumbs.db"),
+                ("CRUMBS_HTTP_BIND", "127.0.0.1"),
+                ("CRUMBS_HTTP_PORT", "0"),
+                ("CRUMBS_OAUTH_ISSUER", "http://127.0.0.1:9191"),
+            ],
+        )
+    }
+
+    /// Starts the server with the given arguments and environment in a temporary directory.
+    pub fn spawn_with(
+        arguments: &[OsString],
+        environment: &[(&str, &str)],
+    ) -> Result<Self, Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut child = server_command(directory.path(), arguments, environment).spawn()?;
 
         let stdout = match child.stdout.take() {
             Some(stdout) => stdout,
@@ -60,13 +80,18 @@ impl ServerProcess {
             child,
             address,
             exited: false,
-            _config: config,
+            _directory: directory,
         })
     }
 
     /// Returns the address advertised in the readiness message.
     pub fn address(&self) -> SocketAddr {
         self.address
+    }
+
+    /// Returns the working directory used by the server process.
+    pub fn directory(&self) -> &Path {
+        self._directory.path()
     }
 
     pub fn signal(&self, signal: Signal) -> Result<(), Box<dyn Error>> {
@@ -101,33 +126,39 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
-/// Writes `contents` to a configuration file in a new temporary directory.
-pub fn temporary_config(contents: &str) -> Result<TemporaryConfig, Box<dyn Error>> {
+/// Builds server options for a process invocation.
+pub fn server_args(database_path: &Path, bind: &str, port: &str, issuer: &str) -> Vec<OsString> {
+    [
+        OsString::from("--database-path"),
+        database_path.as_os_str().to_owned(),
+        OsString::from("--http-bind"),
+        OsString::from(bind),
+        OsString::from("--http-port"),
+        OsString::from(port),
+        OsString::from("--oauth-issuer"),
+        OsString::from(issuer),
+    ]
+    .into()
+}
+
+/// Runs `crumbs server start` and waits for it to exit.
+pub fn run_server_to_exit(
+    arguments: &[OsString],
+    environment: &[(&str, &str)],
+) -> Result<CommandOutput, Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
-    let path = directory.path().join("application.toml");
-    fs::write(&path, contents)?;
-    Ok(TemporaryConfig {
-        _directory: directory,
-        path,
-    })
+    run_server_to_exit_in(directory.path(), arguments, environment)
 }
 
-/// A temporary directory containing a process configuration file.
-pub struct TemporaryConfig {
-    _directory: TempDir,
-    path: PathBuf,
-}
-
-impl TemporaryConfig {
-    /// Returns the path to the configuration file.
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-/// Runs `crumbs server start --config <config>` and waits for it to exit.
-pub fn run_server_to_exit(config: &Path) -> Result<CommandOutput, Box<dyn Error>> {
-    let mut child = server_command(config).stderr(Stdio::piped()).spawn()?;
+/// Runs `crumbs server start` from `directory` and waits for it to exit.
+pub fn run_server_to_exit_in(
+    directory: &Path,
+    arguments: &[OsString],
+    environment: &[(&str, &str)],
+) -> Result<CommandOutput, Box<dyn Error>> {
+    let mut child = server_command(directory, arguments, environment)
+        .stderr(Stdio::piped())
+        .spawn()?;
 
     let status = match wait_for_status(&mut child, STARTUP_TIMEOUT) {
         Ok(status) => status,
@@ -161,19 +192,43 @@ pub fn get(server: &ServerProcess, path: &str) -> Result<HttpResponse, Box<dyn E
     parse_response(response)
 }
 
+/// Creates the executable command with inherited application settings removed.
+pub fn command() -> Command {
+    let mut command = Command::new(BIN);
+    for variable in CONFIGURATION_ENVIRONMENT {
+        command.env_remove(variable);
+    }
+    command
+}
+
 const BIN: &str = env!("CARGO_BIN_EXE_crumbs");
 const READINESS_PREFIX: &str = "Listening on http://";
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const CONFIGURATION_ENVIRONMENT: [&str; 7] = [
+    "CRUMBS_DATABASE_PATH",
+    "CRUMBS_HTTP_BIND",
+    "CRUMBS_HTTP_PORT",
+    "CRUMBS_OAUTH_ISSUER",
+    "CRUMBS_IMPORT_FILE",
+    "CRUMBS_USERNAME",
+    "CRUMBS_VERBOSE",
+];
 
-fn server_command(config: &Path) -> Command {
-    let mut command = Command::new(BIN);
+fn server_command(
+    directory: &Path,
+    arguments: &[OsString],
+    environment: &[(&str, &str)],
+) -> Command {
+    let mut command = command();
     command
-        .args(["server", "start", "--config"])
-        .arg(config)
+        .args(["server", "start"])
+        .args(arguments)
+        .current_dir(directory)
         .stdin(Stdio::null())
         .stdout(Stdio::piped());
+    command.envs(environment.iter().copied());
     command
 }
 

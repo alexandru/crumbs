@@ -19,14 +19,17 @@ ARG APP_GID=65532
 LABEL org.opencontainers.image.source="https://github.com/alexandru/crumbs"
 
 WORKDIR /app
-COPY resources/application-docker.toml /app/application.toml
 COPY --from=builder /build/crumbs /usr/local/bin/crumbs
 RUN mkdir -p /app/data && chown ${APP_UID}:${APP_GID} /app/data
+
+ENV CRUMBS_DATABASE_PATH=/app/data/crumbs.db \
+    CRUMBS_HTTP_BIND=0.0.0.0 \
+    CRUMBS_HTTP_PORT=8080
 
 EXPOSE 8080
 
 USER ${APP_UID}:${APP_GID}
 
 ENTRYPOINT ["/usr/local/bin/crumbs"]
-CMD ["server", "start", "--config", "/app/application.toml"]
+CMD ["server", "start"]
 STOPSIGNAL SIGTERM
