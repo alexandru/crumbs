@@ -522,42 +522,127 @@ fn rejects_root_and_data_type_mismatch() -> Result<(), Box<dyn StdError>> {
 }
 
 #[test]
-fn rejects_malformed_category_types() -> Result<(), Box<dyn StdError>> {
-    let cases = [
+fn sanitizes_malformed_optional_category_types() -> Result<(), Box<dyn StdError>> {
+    let records = [
         (
             "FoundationFoods",
-            r#"{"fdcId":1,"description":"Food","dataType":"Foundation","foodCategory":"Legumes"}"#,
+            r#"{"fdcId":1,"description":"Food","dataType":"Foundation","foodCategory":"Legumes","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
+            "foodCategory",
         ),
         (
             "FoundationFoods",
-            r#"{"fdcId":1,"description":"Food","dataType":"Foundation","foodCategory":[]}"#,
+            r#"{"fdcId":2,"description":"Food","dataType":"Foundation","foodCategory":[],"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
+            "foodCategory",
         ),
         (
             "FoundationFoods",
-            r#"{"fdcId":1,"description":"Food","dataType":"Foundation","foodCategory":{"description":42}}"#,
+            r#"{"fdcId":3,"description":"Food","dataType":"Foundation","foodCategory":{"description":42},"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
+            "foodCategory",
         ),
         (
             "BrandedFoods",
-            r#"{"fdcId":1,"description":"Food","dataType":"Branded","brandedFoodCategory":42}"#,
+            r#"{"fdcId":4,"description":"Food","dataType":"Branded","brandedFoodCategory":42,"servingSizeUnit":"g","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
+            "brandedFoodCategory",
+        ),
+        (
+            "SurveyFoods",
+            r#"{"fdcId":5,"description":"Food","dataType":"Survey (FNDDS)","wweiaFoodCategory":"invalid","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
+            "wweiaFoodCategory",
+        ),
+        (
+            "SurveyFoods",
+            r#"{"fdcId":6,"description":"Food","dataType":"Survey (FNDDS)","wweiaFoodCategory":{"wweiaFoodCategoryDescription":42},"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
+            "wweiaFoodCategory",
         ),
     ];
 
-    for (root, record) in cases {
+    for (root, record, field) in records {
         let input = document(root, &[record]);
         let (result, foods) = collect(input.as_bytes(), 1);
-        assert!(foods.is_empty(), "record was accepted: {record}");
         result?;
-        assert!(
-            first_rejection(&foods)?
-                .reason
-                .contains("malformed food header")
+        assert_eq!(foods.len(), 1, "record was rejected: {record}");
+        assert!(foods.rejected.is_empty());
+        let food = first_food(&foods)?;
+        assert_eq!(food.category, None);
+        assert_eq!(
+            food.parsed_data
+                .nutrition
+                .as_ref()
+                .and_then(|profile| profile.protein.as_ref())
+                .map(ToString::to_string),
+            Some("1 g".to_owned())
         );
+        assert_eq!(food.sanitizations.len(), 1);
+        assert_eq!(food.sanitizations[0].field, field);
     }
     Ok(())
 }
 
 #[test]
-fn continues_after_rejected_food_and_reports_the_bad_nutrient() -> Result<(), Box<dyn StdError>> {
+fn duplicate_root_categories_are_omitted_once() -> Result<(), Box<dyn StdError>> {
+    let records = [
+        ("", false),
+        (r#","foodCategory":null"#, false),
+        (
+            r#","foodCategory":null,"foodCategory":{"description":"Legumes"}"#,
+            true,
+        ),
+        (
+            r#","foodCategory":{"description":"Legumes"},"foodCategory":null"#,
+            true,
+        ),
+        (
+            r#","foodCategory":{"description":"First"},"foodCategory":null,"foodCategory":{"description":"Last"}"#,
+            true,
+        ),
+    ];
+
+    for (category_fields, duplicated) in records {
+        let record = format!(
+            r#"{{"fdcId":1,"description":"Food","dataType":"Foundation"{category_fields}}}"#
+        );
+        let (result, foods) = collect(document("FoundationFoods", &[&record]).as_bytes(), 1);
+        result?;
+        let food = first_food(&foods)?;
+        assert_eq!(food.category, None);
+        let diagnostics: Vec<_> = food
+            .sanitizations
+            .iter()
+            .map(|sanitization| {
+                (
+                    sanitization.field.as_str(),
+                    sanitization.reason.contains("duplicate"),
+                )
+            })
+            .collect();
+        let expected = if duplicated {
+            vec![("foodCategory", true)]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(diagnostics, expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn nutrition_diagnostics_precede_category_diagnostics() -> Result<(), Box<dyn StdError>> {
+    let record = r#"{"fdcId":6,"description":"Food","dataType":"Foundation","foodCategory":42,"foodNutrients":[{"nutrient":{"id":1003,"unitName":"oz"},"amount":1}]}"#;
+    let (result, foods) = collect(document("FoundationFoods", &[record]).as_bytes(), 1);
+    result?;
+
+    let food = first_food(&foods)?;
+    let fields: Vec<_> = food
+        .sanitizations
+        .iter()
+        .map(|sanitization| sanitization.field.as_str())
+        .collect();
+    assert_eq!(fields, ["nutrient[1003]", "foodCategory"]);
+    Ok(())
+}
+
+#[test]
+fn omits_invalid_nutrient_and_continues_with_later_foods() -> Result<(), Box<dyn StdError>> {
     let records = [
         IO_FAILURE_FIRST_RECORD,
         r#"{"fdcId":2,"description":"Bad nutrient","dataType":"Foundation","foodNutrients":[{"nutrient":{"id":1003,"unitName":"stone"},"amount":1}]}"#,
@@ -565,14 +650,20 @@ fn continues_after_rejected_food_and_reports_the_bad_nutrient() -> Result<(), Bo
     ];
     let (result, foods) = collect(document("FoundationFoods", &records).as_bytes(), 1);
     result?;
-    assert_eq!(foods.len(), 2);
-    assert_eq!(foods.rejected.len(), 1);
-    let rejected = first_rejection(&foods)?;
-    assert_eq!(rejected.position, 2);
-    assert_eq!(rejected.source_food_id.as_deref(), Some("2"));
-    assert_eq!(rejected.field.as_deref(), Some("nutrient[1003]"));
-    assert!(rejected.reason.contains("incompatible unit"));
+    assert_eq!(foods.len(), 3);
+    assert!(foods.rejected.is_empty());
     assert_eq!(foods.get(1).map(|food| food.fdc_id.as_str()), Some("2"));
+    let sanitized = foods
+        .get(1)
+        .ok_or_else(|| io::Error::other("food with invalid nutrient is missing"))?;
+    assert_eq!(sanitized.parsed_data.nutrition, None);
+    assert_eq!(sanitized.sanitizations.len(), 1);
+    assert_eq!(sanitized.sanitizations[0].field, "nutrient[1003]");
+    assert!(
+        sanitized.sanitizations[0]
+            .reason
+            .contains("incompatible unit")
+    );
     Ok(())
 }
 
@@ -689,7 +780,6 @@ fn collect_reader(input: impl Read, capacity: usize) -> (Result<(), ParseError>,
                     collected.rejected.push(RejectedRecord {
                         position: rejected.position.get(),
                         source_food_id: rejected.source_food_id,
-                        field: rejected.field,
                         reason: rejected.reason,
                     });
                 }
@@ -731,7 +821,6 @@ impl CollectedFoods {
 struct RejectedRecord {
     position: usize,
     source_food_id: Option<String>,
-    field: Option<String>,
     reason: String,
 }
 

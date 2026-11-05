@@ -525,20 +525,38 @@ fn prepare_food(
 
     let fdc_id = FdcId::from_json(header.fdc_id)?;
     let description = FoodDescription::from_json(header.description)?;
+    let raw_categories: RawCategories =
+        serde_json::from_str(raw.get()).map_err(RecordError::Header)?;
+    let mut category_sanitizations = Vec::new();
     let category = match header.data_type {
-        FoodKind::Branded => header.branded_food_category.map(FoodCategory),
-        FoodKind::Foundation | FoodKind::SrLegacy => header
-            .food_category
-            .and_then(|category| category.description)
-            .map(FoodCategory),
-        FoodKind::Survey => header
-            .food_category
-            .and_then(|category| category.description)
-            .or_else(|| survey_category(raw.get()))
-            .map(FoodCategory),
-    };
+        FoodKind::Branded => raw_categories.branded_food_category.parse(
+            "brandedFoodCategory",
+            None,
+            &mut category_sanitizations,
+        ),
+        FoodKind::Foundation | FoodKind::SrLegacy | FoodKind::Survey => {
+            let category = raw_categories.food_category.parse(
+                "foodCategory",
+                Some("description"),
+                &mut category_sanitizations,
+            );
+            if header.data_type == FoodKind::Survey {
+                let survey = raw_categories.wweia_food_category.parse(
+                    "wweiaFoodCategory",
+                    Some("wweiaFoodCategoryDescription"),
+                    &mut category_sanitizations,
+                );
+                category.or(survey)
+            } else {
+                category
+            }
+        }
+    }
+    .map(FoodCategory);
     let parsed_data = usda_nutrition::parse_food_data(raw.get(), header.data_type)
         .map_err(RecordError::Nutrition)?;
+    let mut sanitizations = parsed_data.sanitizations;
+    sanitizations.extend(category_sanitizations);
 
     Ok(PreparedFood {
         fdc_id,
@@ -546,7 +564,7 @@ fn prepare_food(
         description,
         category,
         parsed_data: parsed_data.food_data,
-        sanitizations: parsed_data.sanitizations,
+        sanitizations,
         position,
     })
 }
@@ -571,7 +589,98 @@ fn raw_fdc_id(raw: &str) -> Option<SourceFoodId> {
 
 type RawFdcId = u64;
 type RawFoodDescription = String;
-type RawFoodCategory = String;
+
+#[derive(Default)]
+struct RawCategories {
+    food_category: RawCategoryField,
+    branded_food_category: RawCategoryField,
+    wweia_food_category: RawCategoryField,
+}
+
+#[derive(Default)]
+enum RawCategoryField {
+    #[default]
+    Absent,
+    Value(Option<Box<RawValue>>),
+    Duplicate,
+}
+
+impl RawCategoryField {
+    fn parse(
+        self,
+        field: &'static str,
+        description: Option<&'static str>,
+        sanitizations: &mut Vec<usda_nutrition::Sanitization>,
+    ) -> Option<String> {
+        let parsed = match self {
+            Self::Absent | Self::Value(None) => return None,
+            Self::Value(Some(raw)) => match description {
+                Some(key) => serde::Deserializer::deserialize_map(
+                    &mut Deserializer::from_str(raw.get()),
+                    FoodCategoryVisitor(key),
+                ),
+                None => serde_json::from_str(raw.get()),
+            }
+            .map_err(|error| format!("invalid optional category was omitted: {error}")),
+            Self::Duplicate => Err("duplicate optional category was omitted".to_owned()),
+        };
+        match parsed {
+            Ok(value) => value,
+            Err(reason) => {
+                sanitizations.push(usda_nutrition::Sanitization {
+                    field: field.to_owned(),
+                    reason,
+                });
+                None
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RawCategories {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct RawCategoriesVisitor;
+
+        impl<'de> Visitor<'de> for RawCategoriesVisitor {
+            type Value = RawCategories;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a USDA food record object")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut categories = RawCategories::default();
+                while let Some(key) = map.next_key::<String>()? {
+                    let field = match key.as_str() {
+                        "foodCategory" => &mut categories.food_category,
+                        "brandedFoodCategory" => &mut categories.branded_food_category,
+                        "wweiaFoodCategory" => &mut categories.wweia_food_category,
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                            continue;
+                        }
+                    };
+                    *field = match field {
+                        RawCategoryField::Absent => RawCategoryField::Value(map.next_value()?),
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                            RawCategoryField::Duplicate
+                        }
+                    };
+                }
+                Ok(categories)
+            }
+        }
+
+        deserializer.deserialize_map(RawCategoriesVisitor)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct Header {
@@ -580,57 +689,12 @@ struct Header {
     description: RawFoodDescription,
     #[serde(rename = "dataType")]
     data_type: FoodKind,
-    #[serde(default, rename = "foodCategory")]
-    food_category: Option<FoodCategoryObject>,
-    #[serde(default, rename = "brandedFoodCategory")]
-    branded_food_category: Option<RawFoodCategory>,
-}
-
-fn survey_category(raw: &str) -> Option<RawFoodCategory> {
-    serde_json::from_str::<SurveyCategoryHeader>(raw)
-        .ok()?
-        .category?
-        .0
-        .description
-}
-
-#[derive(Deserialize)]
-struct SurveyCategoryHeader {
-    #[serde(default, rename = "wweiaFoodCategory")]
-    category: Option<SurveyCategoryObject>,
-}
-
-struct SurveyCategoryObject(FoodCategoryObject);
-
-impl<'de> Deserialize<'de> for SurveyCategoryObject {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer
-            .deserialize_map(FoodCategoryVisitor("wweiaFoodCategoryDescription"))
-            .map(Self)
-    }
-}
-
-#[derive(Debug)]
-struct FoodCategoryObject {
-    description: Option<RawFoodCategory>,
-}
-
-impl<'de> Deserialize<'de> for FoodCategoryObject {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_map(FoodCategoryVisitor("description"))
-    }
 }
 
 struct FoodCategoryVisitor(&'static str);
 
 impl<'de> Visitor<'de> for FoodCategoryVisitor {
-    type Value = FoodCategoryObject;
+    type Value = Option<String>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("a food category object")
@@ -643,12 +707,12 @@ impl<'de> Visitor<'de> for FoodCategoryVisitor {
         let mut description = None;
         while let Some(key) = map.next_key::<String>()? {
             if key == self.0 {
-                description = map.next_value::<Option<RawFoodCategory>>()?;
+                description = map.next_value::<Option<String>>()?;
             } else {
                 map.next_value::<IgnoredAny>()?;
             }
         }
-        Ok(FoodCategoryObject { description })
+        Ok(description)
     }
 }
 

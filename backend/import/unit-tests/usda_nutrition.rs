@@ -2,7 +2,7 @@ use std::error::Error;
 use std::io;
 
 use super::*;
-use crumbs_database::nutrition::{NutritionBasis, Qualifier, QuantityError, Reported};
+use crumbs_database::nutrition::{NutritionBasis, Qualifier, Reported};
 
 fn parse_data(input: &str, kind: FoodKind) -> Result<FoodData, NutritionError> {
     super::parse_food_data(input, kind).map(|parsed| parsed.food_data)
@@ -113,20 +113,40 @@ fn supports_each_usda_food_kind_and_branded_mass_or_volume_basis() -> Result<(),
         .first()
         .ok_or_else(|| io::Error::other("branded measured serving is missing"))?;
     assert_eq!(serving.quantity().to_string(), "250 ml");
+    let unsupported_basis = super::parse_food_data(
+        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
+        FoodKind::Branded,
+    )?;
+    assert_eq!(unsupported_basis.food_data.nutrition, None);
+    assert!(!unsupported_basis.sanitizations.is_empty());
+
+    let missing_serving_unit = super::parse_food_data(
+        r#"{"servingSize":30,"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
+        FoodKind::Branded,
+    )?;
+    assert_eq!(missing_serving_unit.food_data.nutrition, None);
+    assert!(missing_serving_unit.food_data.serving_sizes.is_empty());
     assert!(
-        parse_data(
-            r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
-            FoodKind::Branded,
-        )
-        .is_err()
+        missing_serving_unit
+            .sanitizations
+            .iter()
+            .any(|entry| entry.field == "serving_sizes")
     );
-    assert!(
-        parse_data(
-            r#"{"servingSize":0,"servingSizeUnit":"g"}"#,
-            FoodKind::Branded,
-        )
-        .is_err()
+
+    let invalid_serving = super::parse_food_data(
+        r#"{"servingSize":0,"servingSizeUnit":"g","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]}"#,
+        FoodKind::Branded,
+    )?;
+    assert_eq!(
+        invalid_serving
+            .food_data
+            .nutrition
+            .as_ref()
+            .map(|profile| profile.per),
+        Some(NutritionBasis::Per100Grams)
     );
+    assert!(invalid_serving.food_data.serving_sizes.is_empty());
+    assert!(!invalid_serving.sanitizations.is_empty());
     Ok(())
 }
 
@@ -194,12 +214,21 @@ fn selects_energy_in_project_priority_and_falls_through_missing_candidates()
 }
 
 #[test]
-fn invalid_preferred_energy_is_not_hidden_by_lower_priority_value() -> Result<(), Box<dyn Error>> {
+fn invalid_preferred_energy_is_omitted_and_lower_priority_value_is_used()
+-> Result<(), Box<dyn Error>> {
     let input = r#"{"foodNutrients":[
       {"nutrient":{"id":2048,"unitName":"g"},"amount":10},
       {"nutrient":{"id":2047,"unitName":"kcal"},"amount":20}
     ]}"#;
-    assert!(parse_data(input, FoodKind::Foundation).is_err());
+    let parsed = super::parse_food_data(input, FoodKind::Foundation)?;
+    let energy = parsed
+        .food_data
+        .nutrition
+        .as_ref()
+        .and_then(|profile| profile.energy.as_ref())
+        .map(ToString::to_string);
+    assert_eq!(energy, Some("20 kcal".to_owned()));
+    assert!(!parsed.sanitizations.is_empty());
     Ok(())
 }
 
@@ -370,131 +399,171 @@ fn stores_multiple_measured_portions_without_inventing_volume() -> Result<(), Bo
 }
 
 #[test]
-fn rejects_invalid_units_and_duplicate_same_id_values() -> Result<(), Box<dyn Error>> {
-    for input in [
-        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"kcal"},"amount":1}]}"#,
-        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1},{"nutrient":{"id":1003,"unitName":"g"},"amount":2}]}"#,
-    ] {
-        assert!(parse_data(input, FoodKind::Foundation).is_err());
+fn invalid_nutrients_are_omitted_without_losing_valid_siblings() -> Result<(), Box<dyn Error>> {
+    let parsed = super::parse_food_data(
+        r#"{"foodNutrients":[
+          {"nutrient":{"id":1003,"unitName":"kcal"},"amount":1},
+          {"nutrient":{"id":1004,"unitName":"g"},"amount":{"invalid":true}},
+          {"nutrient":{"id":1005,"unitName":"g"},"amount":3,"loq":"~ 0.5"},
+          {"nutrient":{"id":1079,"unitName":"g"},"amount":4}
+        ]}"#,
+        FoodKind::Foundation,
+    )?;
+    let profile = parsed
+        .food_data
+        .nutrition
+        .as_ref()
+        .ok_or_else(|| io::Error::other("valid sibling nutrients were lost"))?;
+    assert_eq!(profile.protein, None);
+    assert_eq!(profile.fat.total, None);
+    assert_eq!(profile.carbohydrates.including_fibre, None);
+    assert_eq!(amount_text(&profile.fibre), Some("4 g".to_owned()));
+    assert_eq!(parsed.sanitizations.len(), 3);
+    Ok(())
+}
+
+#[test]
+fn malformed_top_level_record_json_still_fails() -> Result<(), Box<dyn Error>> {
+    let error = parse_error("{")?;
+    assert!(matches!(error, NutritionError::Record(_)));
+    Ok(())
+}
+
+#[test]
+fn ambiguous_duplicates_are_omitted_and_energy_and_sugar_fall_back() -> Result<(), Box<dyn Error>> {
+    let parsed = super::parse_food_data(
+        r#"{"foodNutrients":[
+          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":1},
+          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":2},
+          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":3},
+          {"nutrient":{"id":2047,"unitName":"kcal"},"amount":20},
+          {"nutrient":{"id":1063,"unitName":"g"},"amount":1},
+          {"nutrient":{"id":1063,"unitName":"g"},"amount":2},
+          {"nutrient":{"id":1063,"unitName":"g"},"amount":3},
+          {"nutrient":{"id":2000,"unitName":"g"},"amount":5},
+          {"nutrient":{"id":1003,"unitName":"g"},"amount":6},
+          {"nutrient":{"id":1003,"unitName":"g"},"amount":7},
+          {"nutrient":{"id":1003,"unitName":"g"},"amount":8}
+        ]}"#,
+        FoodKind::Foundation,
+    )?;
+    let profile = parsed
+        .food_data
+        .nutrition
+        .as_ref()
+        .ok_or_else(|| io::Error::other("fallback nutrient values are missing"))?;
+    assert_eq!(profile.protein, None);
+    assert_eq!(
+        profile.energy.as_ref().map(ToString::to_string),
+        Some("20 kcal".to_owned())
+    );
+    assert_eq!(
+        amount_text(&profile.carbohydrates.sugars.total),
+        Some("5 g".to_owned())
+    );
+    for field in ["nutrient[2048]", "nutrient[1063]", "nutrient[1003]"] {
+        assert!(
+            parsed
+                .sanitizations
+                .iter()
+                .any(|entry| entry.field == field)
+        );
     }
     Ok(())
 }
 
 #[test]
-fn preserves_measurement_error_order_and_text() -> Result<(), Box<dyn Error>> {
-    let invalid_amount_and_limit = parse_error(
-        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":"bad","loq":"also bad"}]}"#,
-    )?;
-    assert!(matches!(
-        &invalid_amount_and_limit,
-        NutritionError::Amount {
-            value,
-            source: QuantityError::Decimal(source),
-            ..
-        } if value == "bad g" && source == "bad"
-    ));
-    assert_eq!(
-        invalid_amount_and_limit.to_string(),
-        "nutrient amount \"bad g\" is invalid: invalid decimal or unsupported precision/range: bad"
-    );
-
-    let invalid_unit_and_amount = parse_error(
-        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"stone"},"amount":"bad"}]}"#,
-    )?;
-    assert!(matches!(
-        &invalid_unit_and_amount,
-        NutritionError::IncompatibleUnit { nutrient_id: 1003, unit } if unit == "stone"
-    ));
-    assert_eq!(
-        invalid_unit_and_amount.to_string(),
-        "nutrient 1003 has incompatible unit \"stone\""
-    );
-
-    let invalid_limit_with_positive_amount = parse_error(
-        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1.5,"loq":"bad"}]}"#,
-    )?;
-    assert!(matches!(
-        &invalid_limit_with_positive_amount,
-        NutritionError::Amount {
-            value,
-            source: QuantityError::Decimal(source),
-            ..
-        } if value == "bad g" && source == "bad"
-    ));
-    assert_eq!(
-        invalid_limit_with_positive_amount.to_string(),
-        "nutrient amount \"bad g\" is invalid: invalid decimal or unsupported precision/range: bad"
-    );
-
-    let qualified_limit_with_positive_amount = parse_error(
-        r#"{"foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1.5,"loq":"~ 0.5"}]}"#,
-    )?;
-    assert!(matches!(
-        qualified_limit_with_positive_amount,
-        NutritionError::QualifiedLimitOfQuantification
-    ));
-    assert_eq!(
-        "limit of quantification must be an exact measured amount",
-        NutritionError::QualifiedLimitOfQuantification.to_string()
-    );
+fn invalid_duplicate_nutrients_do_not_make_valid_values_ambiguous() -> Result<(), Box<dyn Error>> {
+    let valid = r#"{"nutrient":{"id":1003,"unitName":"g"},"amount":6}"#;
+    for (unit, amount, diagnostic_field) in [
+        ("oz", "7", "nutrient[1003]"),
+        ("g", "\"bad\"", "nutrient[1003]"),
+        ("g", "-7", "protein"),
+    ] {
+        let invalid =
+            format!(r#"{{"nutrient":{{"id":1003,"unitName":"{unit}"}},"amount":{amount}}}"#);
+        for valid_first in [true, false] {
+            for extra_valid in [false, true] {
+                let nutrients = if valid_first {
+                    format!("{valid},{invalid}")
+                } else {
+                    format!("{invalid},{valid}")
+                };
+                let nutrients = if extra_valid {
+                    format!("{nutrients},{valid}")
+                } else {
+                    nutrients
+                };
+                let parsed = super::parse_food_data(
+                    &format!(r#"{{"foodNutrients":[{nutrients}]}}"#),
+                    FoodKind::Foundation,
+                )?;
+                let expected = if extra_valid { None } else { Some("6 g") };
+                assert_eq!(
+                    parsed
+                        .food_data
+                        .nutrition
+                        .as_ref()
+                        .and_then(|profile| profile.protein.as_ref())
+                        .map(ToString::to_string)
+                        .as_deref(),
+                    expected
+                );
+                let mut expected_fields = vec![diagnostic_field];
+                if extra_valid {
+                    expected_fields.push("nutrient[1003]");
+                }
+                let fields: Vec<_> = parsed
+                    .sanitizations
+                    .iter()
+                    .map(|diagnostic| diagnostic.field.as_str())
+                    .collect();
+                assert_eq!(fields, expected_fields);
+            }
+        }
+    }
     Ok(())
 }
 
 #[test]
-fn defers_energy_duplicates_but_rejects_sugar_duplicates_during_parsing()
--> Result<(), Box<dyn Error>> {
-    let duplicate_energy_then_invalid_mass = parse_error(
+fn malformed_optional_arrays_and_entries_do_not_lose_valid_siblings() -> Result<(), Box<dyn Error>>
+{
+    let parsed = super::parse_food_data(
         r#"{"foodNutrients":[
-          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":1},
-          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":2},
-          {"nutrient":{"id":1003,"unitName":"g"},"amount":"bad"}
+          {"nutrient":{"id":1003,"unitName":"g"},"amount":0.1000000000000000000000000001},
+          {"nutrient":{"id":"bad","unitName":"g"},"amount":2},
+          {"nutrient":{"id":1079,"unitName":"g"},"amount":0.5}
+        ],"foodPortions":[
+          {"portionDescription":"valid serving","gramWeight":30},
+          {"portionDescription":"bad serving","gramWeight":-1},
+          {"portionDescription":40,"gramWeight":50}
         ]}"#,
+        FoodKind::Survey,
     )?;
-    assert!(matches!(
-        duplicate_energy_then_invalid_mass,
-        NutritionError::Amount { .. }
-    ));
-
-    let duplicate_energy = parse_error(
-        r#"{"foodNutrients":[
-          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":1},
-          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":2},
-          {"nutrient":{"id":1003,"unitName":"g"},"amount":3}
-        ]}"#,
-    )?;
-    assert!(matches!(
-        duplicate_energy,
-        NutritionError::DuplicateNutrient { nutrient_id: 2048 }
-    ));
+    let profile = parsed
+        .food_data
+        .nutrition
+        .as_ref()
+        .ok_or_else(|| io::Error::other("valid nutrient entries were lost"))?;
     assert_eq!(
-        "multiple source values map to nutrient 2048",
-        NutritionError::DuplicateNutrient { nutrient_id: 2048 }.to_string()
+        amount_text(&profile.protein),
+        Some("0.1000000000000000000000000001 g".to_owned())
     );
+    assert_eq!(amount_text(&profile.fibre), Some("0.5 g".to_owned()));
+    assert_eq!(parsed.food_data.serving_sizes.len(), 1);
+    assert_eq!(
+        parsed.food_data.serving_sizes[0].quantity().to_string(),
+        "30 g"
+    );
+    assert_eq!(parsed.sanitizations.len(), 3);
 
-    let duplicate_sugar_before_invalid_mass = parse_error(
-        r#"{"foodNutrients":[
-          {"nutrient":{"id":1063,"unitName":"g"},"amount":1},
-          {"nutrient":{"id":1063,"unitName":"g"},"amount":2},
-          {"nutrient":{"id":1003,"unitName":"g"},"amount":"bad"}
-        ]}"#,
+    let malformed_arrays = super::parse_food_data(
+        r#"{"foodNutrients":{"invalid":true},"foodPortions":{"invalid":true}}"#,
+        FoodKind::Survey,
     )?;
-    assert!(matches!(
-        duplicate_sugar_before_invalid_mass,
-        NutritionError::DuplicateNutrient { nutrient_id: 1063 }
-    ));
-
-    let mixed_duplicates = parse_error(
-        r#"{"foodNutrients":[
-          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":1},
-          {"nutrient":{"id":2048,"unitName":"kcal"},"amount":2},
-          {"nutrient":{"id":1063,"unitName":"g"},"amount":1},
-          {"nutrient":{"id":1063,"unitName":"g"},"amount":2}
-        ]}"#,
-    )?;
-    assert!(matches!(
-        mixed_duplicates,
-        NutritionError::DuplicateNutrient { nutrient_id: 1063 }
-    ));
+    assert_eq!(malformed_arrays.food_data.nutrition, None);
+    assert!(malformed_arrays.food_data.serving_sizes.is_empty());
+    assert_eq!(malformed_arrays.sanitizations.len(), 2);
     Ok(())
 }
 

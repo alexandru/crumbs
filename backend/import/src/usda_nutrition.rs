@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::{BTreeMap, btree_map::Entry};
 
 use crate::{DiagnosticField, DiagnosticReason};
 use serde::Deserialize;
@@ -72,132 +73,214 @@ pub(crate) struct ParsedFoodData {
     pub(crate) sanitizations: Vec<Sanitization>,
 }
 
-pub(super) fn parse_food_data(raw: &str, kind: FoodKind) -> Result<ParsedFoodData, NutritionError> {
-    let record: NutritionRecord = serde_json::from_str(raw).map_err(NutritionError::Record)?;
-    let serving_sizes = parse_servings(&record, kind)?;
-    let food_nutrients = record.food_nutrients.as_deref().unwrap_or(&[]);
-    let recognized = food_nutrients.iter().any(|nutrient| {
-        nutrient.nutrient.as_ref().is_some_and(|metadata| {
-            ClassifiedNutrient::from_id(metadata.id).is_some()
-                && (nutrient.amount.is_some() || nutrient.loq.is_some())
-        })
-    });
+pub(crate) type NutrientId = u64;
 
-    let Some(basis) = nutrition_basis(&record, kind, recognized)? else {
+pub(super) fn parse_food_data(raw: &str, kind: FoodKind) -> Result<ParsedFoodData, NutritionError> {
+    let raw_record: RawNutritionRecord =
+        serde_json::from_str(raw).map_err(NutritionError::Record)?;
+    let mut sanitizations = Vec::new();
+    let record = NutritionRecord {
+        food_nutrients: parse_array(
+            raw_record.food_nutrients.as_deref(),
+            "foodNutrients",
+            &mut sanitizations,
+        ),
+        food_portions: parse_array(
+            raw_record.food_portions.as_deref(),
+            "foodPortions",
+            &mut sanitizations,
+        ),
+        serving_size: raw_record.serving_size,
+        serving_size_unit: parse_optional(
+            raw_record.serving_size_unit.as_deref(),
+            "servingSizeUnit",
+            &mut sanitizations,
+        ),
+        household_serving_full_text: parse_optional(
+            raw_record.household_serving_full_text.as_deref(),
+            "householdServingFullText",
+            &mut sanitizations,
+        ),
+    };
+    let serving_sizes = parse_servings(&record, kind, &mut sanitizations);
+    let mut nutrients = record
+        .food_nutrients
+        .iter()
+        .filter_map(|nutrient| {
+            let metadata = nutrient.nutrient.as_ref()?;
+            let classified = ClassifiedNutrient::from_id(metadata.id)?;
+            (nutrient.amount.is_some() || nutrient.loq.is_some())
+                .then_some((nutrient, metadata, classified))
+        })
+        .peekable();
+    let basis = match nutrition_basis(&record, kind, nutrients.peek().is_some()) {
+        Ok(basis) => basis,
+        Err(error) => {
+            omit(&mut sanitizations, "nutrition", error);
+            None
+        }
+    };
+    let Some(basis) = basis else {
         return Ok(ParsedFoodData {
             food_data: FoodData {
                 nutrition: None,
                 serving_sizes,
             },
-            sanitizations: Vec::new(),
+            sanitizations,
         });
     };
 
-    let mut profile = NutritionProfile::empty(basis);
-    let mut has_amount = false;
-    let mut sanitizations = Vec::new();
-    let mut energy_candidates: Vec<(EnergyMethod, Reported<Energy>)> = Vec::new();
-    let mut total_sugar_candidates: Vec<(SugarMethod, Reported<Mass>)> = Vec::new();
-    for nutrient in food_nutrients {
-        let Some(metadata) = nutrient.nutrient.as_ref() else {
-            continue;
-        };
-        let Some(classified) = ClassifiedNutrient::from_id(metadata.id) else {
-            continue;
-        };
-        if nutrient.amount.is_none() && nutrient.loq.is_none() {
-            continue;
-        }
-        let unit = metadata.unit_name.as_deref().map(raw_scalar).transpose()?;
-        let unit = unit.as_deref().ok_or(NutritionError::MissingUnit {
-            nutrient_id: metadata.id,
-        })?;
-        match classified {
-            ClassifiedNutrient::Energy(method) => {
-                if normalize_energy_unit(unit) != Some(method.expected_unit()) {
-                    return Err(NutritionError::IncompatibleUnit {
-                        nutrient_id: metadata.id,
-                        unit: unit.to_owned(),
-                    });
-                }
-                let energy = parse_amount_and_limit::<Energy>(
-                    nutrient.amount.as_deref(),
-                    nutrient.loq.as_deref(),
-                    method.expected_unit(),
-                    metadata.id,
-                    "energy",
+    // A repeated source nutrient stays ambiguous even if a third value follows it.
+    let mut amounts = BTreeMap::new();
+    for (nutrient, metadata, classified) in nutrients {
+        let amount = match parse_nutrient(nutrient, metadata, classified, &mut sanitizations) {
+            Ok(Some(amount)) => amount,
+            Ok(None) => continue,
+            Err(error) => {
+                omit(
                     &mut sanitizations,
-                )?;
-                let Some(energy) = energy else {
-                    continue;
-                };
-                energy_candidates.push((method, energy));
+                    &format!("nutrient[{}]", metadata.id),
+                    error,
+                );
+                continue;
             }
-            ClassifiedNutrient::TotalSugar(method) => {
-                let parsed = parse_mass_amount(
-                    nutrient.amount.as_deref(),
-                    nutrient.loq.as_deref(),
-                    unit,
-                    metadata.id,
-                    "carbohydrates.sugars.total",
-                    &mut sanitizations,
-                )?;
-                let Some(amount) = parsed else {
-                    continue;
-                };
-                has_amount = true;
-                if total_sugar_candidates
-                    .iter()
-                    .any(|(candidate, _)| *candidate == method)
-                {
-                    return Err(NutritionError::DuplicateNutrient {
-                        nutrient_id: metadata.id,
-                    });
-                }
-                total_sugar_candidates.push((method, amount));
+        };
+        match amounts.entry(classified) {
+            Entry::Vacant(entry) => {
+                entry.insert(Some(amount));
             }
-            ClassifiedNutrient::Mass(nutrient_type) => {
-                let field = nutrient_type.field();
-                let parsed = parse_mass_amount(
-                    nutrient.amount.as_deref(),
-                    nutrient.loq.as_deref(),
-                    unit,
-                    metadata.id,
-                    field,
+            Entry::Occupied(mut entry) => {
+                entry.insert(None);
+                omit(
                     &mut sanitizations,
-                )?;
-                let Some(amount) = parsed else {
-                    continue;
-                };
-                has_amount = true;
-                assign_nutrient(&mut profile, nutrient_type, amount)?;
+                    &format!("nutrient[{}]", metadata.id),
+                    NutritionError::DuplicateNutrient {
+                        nutrient_id: metadata.id,
+                    },
+                );
             }
         }
     }
-
-    // Prefer source ID 1063 over 2000 and never sum the two source values.
-    profile.carbohydrates.sugars.total = total_sugar_candidates
-        .iter()
-        .find(|(method, _)| *method == SugarMethod::TotalNlea)
-        .or_else(|| {
-            total_sugar_candidates
-                .iter()
-                .find(|(method, _)| *method == SugarMethod::Total)
-        })
-        .map(|(_, amount)| *amount);
-    profile.energy = select_energy(energy_candidates)?;
-    let nutrition = (has_amount || profile.energy.is_some()).then_some(profile);
+    let mut profile = NutritionProfile::empty(basis);
+    let mut has_amount = false;
+    for amount in amounts.into_values().flatten() {
+        has_amount = true;
+        match amount {
+            ParsedNutrient::Energy(amount) => {
+                profile.energy.get_or_insert(amount);
+            }
+            ParsedNutrient::Sugar(amount) => {
+                profile.carbohydrates.sugars.total.get_or_insert(amount);
+            }
+            ParsedNutrient::Mass(nutrient, amount) => {
+                assign_nutrient(&mut profile, nutrient, amount)
+            }
+        }
+    }
     Ok(ParsedFoodData {
         food_data: FoodData {
-            nutrition,
+            nutrition: has_amount.then_some(profile),
             serving_sizes,
         },
         sanitizations,
     })
 }
 
-pub(crate) type NutrientId = u64;
-type EnergyPriority = u8;
+enum ParsedNutrient {
+    Energy(Reported<Energy>),
+    Sugar(Reported<Mass>),
+    Mass(MassNutrient, Reported<Mass>),
+}
+
+fn parse_nutrient(
+    nutrient: &FoodNutrient,
+    metadata: &NutrientMetadata,
+    classified: ClassifiedNutrient,
+    sanitizations: &mut Vec<Sanitization>,
+) -> Result<Option<ParsedNutrient>, NutritionError> {
+    let unit = metadata.unit_name.as_deref().map(raw_scalar).transpose()?;
+    let unit = unit.as_deref().ok_or(NutritionError::MissingUnit {
+        nutrient_id: metadata.id,
+    })?;
+    match classified {
+        ClassifiedNutrient::Energy(method) => {
+            if normalize_energy_unit(unit) != Some(method.expected_unit()) {
+                return Err(NutritionError::IncompatibleUnit {
+                    nutrient_id: metadata.id,
+                    unit: unit.to_owned(),
+                });
+            }
+            Ok(parse_amount_and_limit::<Energy>(
+                nutrient.amount.as_deref(),
+                nutrient.loq.as_deref(),
+                method.expected_unit(),
+                metadata.id,
+                "energy",
+                sanitizations,
+            )?
+            .map(ParsedNutrient::Energy))
+        }
+        ClassifiedNutrient::TotalSugar(_) => Ok(parse_mass_amount(
+            nutrient.amount.as_deref(),
+            nutrient.loq.as_deref(),
+            unit,
+            metadata.id,
+            "carbohydrates.sugars.total",
+            sanitizations,
+        )?
+        .map(ParsedNutrient::Sugar)),
+        ClassifiedNutrient::Mass(nutrient_type) => Ok(parse_mass_amount(
+            nutrient.amount.as_deref(),
+            nutrient.loq.as_deref(),
+            unit,
+            metadata.id,
+            nutrient_type.field(),
+            sanitizations,
+        )?
+        .map(|amount| ParsedNutrient::Mass(nutrient_type, amount))),
+    }
+}
+
+fn omit(sanitizations: &mut Vec<Sanitization>, field: &str, error: impl std::fmt::Display) {
+    sanitizations.push(Sanitization {
+        field: field.to_owned(),
+        reason: format!("{error}; omitted"),
+    });
+}
+
+fn parse_optional<'a, T: Deserialize<'a>>(
+    raw: Option<&'a RawValue>,
+    field: &str,
+    sanitizations: &mut Vec<Sanitization>,
+) -> Option<T> {
+    let raw = raw?;
+    match serde_json::from_str(raw.get()) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            omit(sanitizations, field, error);
+            None
+        }
+    }
+}
+
+fn parse_array<T: serde::de::DeserializeOwned>(
+    raw: Option<&RawValue>,
+    field: &str,
+    sanitizations: &mut Vec<Sanitization>,
+) -> Vec<T> {
+    let entries: Vec<&RawValue> = parse_optional(raw, field, sanitizations).unwrap_or_default();
+    entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| match serde_json::from_str(entry.get()) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                omit(sanitizations, &format!("{field}[{index}]"), error);
+                None
+            }
+        })
+        .collect()
+}
 
 const PROTEIN: NutrientId = 1003;
 const TOTAL_FAT: NutrientId = 1004;
@@ -219,7 +302,7 @@ const SUGARS_TOTAL: NutrientId = 2000;
 const ATWATER_GENERAL: NutrientId = 2047;
 const ATWATER_SPECIFIC: NutrientId = 2048;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ClassifiedNutrient {
     Energy(EnergyMethod),
     TotalSugar(SugarMethod),
@@ -253,7 +336,8 @@ impl ClassifiedNutrient {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+// Declaration order is the USDA energy preference order.
 enum EnergyMethod {
     AtwaterSpecific,
     AtwaterGeneral,
@@ -262,39 +346,22 @@ enum EnergyMethod {
 }
 
 impl EnergyMethod {
-    fn id(self) -> NutrientId {
-        match self {
-            Self::AtwaterSpecific => ATWATER_SPECIFIC,
-            Self::AtwaterGeneral => ATWATER_GENERAL,
-            Self::FoodEnergyKcal => ENERGY_KILOCALORIES,
-            Self::FoodEnergyKj => ENERGY_KILOJOULES,
-        }
-    }
-
     fn expected_unit(self) -> &'static str {
         match self {
             Self::AtwaterSpecific | Self::AtwaterGeneral | Self::FoodEnergyKcal => "kcal",
             Self::FoodEnergyKj => "kJ",
         }
     }
-
-    fn priority(self) -> EnergyPriority {
-        match self {
-            Self::AtwaterSpecific => 0,
-            Self::AtwaterGeneral => 1,
-            Self::FoodEnergyKcal => 2,
-            Self::FoodEnergyKj => 3,
-        }
-    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+// Declaration order prefers NLEA total sugars over other total sugars.
 enum SugarMethod {
     TotalNlea,
     Total,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum MassNutrient {
     Protein,
     TotalFat,
@@ -312,24 +379,6 @@ enum MassNutrient {
 }
 
 impl MassNutrient {
-    fn id(self) -> NutrientId {
-        match self {
-            Self::Protein => PROTEIN,
-            Self::TotalFat => TOTAL_FAT,
-            Self::CarbohydrateByDifference => CARBOHYDRATE_BY_DIFFERENCE,
-            Self::Starch => STARCH,
-            Self::Lactose => LACTOSE,
-            Self::Fibre => FIBRE,
-            Self::Sodium => SODIUM,
-            Self::AddedSugars => ADDED_SUGARS,
-            Self::Cholesterol => CHOLESTEROL,
-            Self::TransFat => TRANS_FAT,
-            Self::SaturatedFat => SATURATED_FAT,
-            Self::MonounsaturatedFat => MONOUNSATURATED_FAT,
-            Self::PolyunsaturatedFat => POLYUNSATURATED_FAT,
-        }
-    }
-
     fn field(self) -> &'static str {
         match self {
             Self::Protein => "protein",
@@ -376,34 +425,51 @@ fn nutrition_basis(
 fn parse_servings(
     record: &NutritionRecord,
     kind: FoodKind,
-) -> Result<Vec<ServingSize>, NutritionError> {
+    sanitizations: &mut Vec<Sanitization>,
+) -> Vec<ServingSize> {
     match kind {
-        FoodKind::Branded => branded_serving(record),
+        FoodKind::Branded => match branded_serving(record) {
+            Ok(servings) => servings,
+            Err(error) => {
+                omit(sanitizations, "serving_sizes", error);
+                Vec::new()
+            }
+        },
         FoodKind::Foundation | FoodKind::SrLegacy | FoodKind::Survey => {
             let mut servings = Vec::new();
-            for portion in record.food_portions.iter().flatten() {
+            for (index, portion) in record.food_portions.iter().enumerate() {
                 if let Some(weight) = portion.gram_weight.as_deref() {
-                    servings.push(parse_food_portion(portion, weight)?);
+                    match parse_food_portion(portion, weight) {
+                        Ok(serving) => servings.push(serving),
+                        Err(error) => {
+                            omit(sanitizations, &format!("serving_sizes[{index}]"), error)
+                        }
+                    }
                 }
             }
-            Ok(servings)
+            servings
         }
     }
 }
 
 fn branded_serving(record: &NutritionRecord) -> Result<Vec<ServingSize>, NutritionError> {
-    let (Some(quantity), Some(unit)) = (
-        record.serving_size.as_deref(),
-        record.serving_size_unit.as_deref(),
-    ) else {
+    let Some(quantity) = record.serving_size.as_deref() else {
         return Ok(Vec::new());
     };
+    let unit = record
+        .serving_size_unit
+        .as_deref()
+        .ok_or_else(|| NutritionError::Serving {
+            source: QuantityError::Unit("missing servingSizeUnit".to_owned()),
+        })?;
     let canonical_unit = if unit.eq_ignore_ascii_case("g") {
         "g"
     } else if unit.eq_ignore_ascii_case("ml") {
         "ml"
     } else {
-        return Ok(Vec::new());
+        return Err(NutritionError::Serving {
+            source: QuantityError::Unit(unit.to_owned()),
+        });
     };
     let quantity_text = format!("{} {canonical_unit}", raw_scalar(quantity)?);
     let quantity = quantity_text
@@ -605,34 +671,7 @@ fn normalize_mass_unit(unit: &str) -> Option<&'static str> {
     }
 }
 
-fn select_energy(
-    candidates: Vec<(EnergyMethod, Reported<Energy>)>,
-) -> Result<Option<Reported<Energy>>, NutritionError> {
-    let mut selected: Option<(EnergyPriority, Reported<Energy>)> = None;
-    let mut seen = Vec::new();
-    for (method, value) in candidates {
-        if seen.contains(&method) {
-            return Err(NutritionError::DuplicateNutrient {
-                nutrient_id: method.id(),
-            });
-        }
-        seen.push(method);
-        let priority = method.priority();
-        if selected
-            .as_ref()
-            .is_none_or(|(selected_priority, _)| priority < *selected_priority)
-        {
-            selected = Some((priority, value));
-        }
-    }
-    Ok(selected.map(|(_, value)| value))
-}
-
-fn assign_nutrient(
-    profile: &mut NutritionProfile,
-    nutrient: MassNutrient,
-    amount: Reported<Mass>,
-) -> Result<(), NutritionError> {
+fn assign_nutrient(profile: &mut NutritionProfile, nutrient: MassNutrient, amount: Reported<Mass>) {
     let slot = match nutrient {
         MassNutrient::Protein => &mut profile.protein,
         MassNutrient::TotalFat => &mut profile.fat.total,
@@ -648,27 +687,29 @@ fn assign_nutrient(
         MassNutrient::MonounsaturatedFat => &mut profile.fat.monounsaturated,
         MassNutrient::PolyunsaturatedFat => &mut profile.fat.polyunsaturated,
     };
-    if slot.is_some() {
-        return Err(NutritionError::DuplicateNutrient {
-            nutrient_id: nutrient.id(),
-        });
-    }
     *slot = Some(amount);
-    Ok(())
+}
+
+struct NutritionRecord {
+    food_nutrients: Vec<FoodNutrient>,
+    food_portions: Vec<FoodPortion>,
+    serving_size: Option<Box<RawValue>>,
+    serving_size_unit: Option<String>,
+    household_serving_full_text: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct NutritionRecord {
+struct RawNutritionRecord {
     #[serde(default, rename = "foodNutrients")]
-    food_nutrients: Option<Vec<FoodNutrient>>,
+    food_nutrients: Option<Box<RawValue>>,
     #[serde(default, rename = "foodPortions")]
-    food_portions: Option<Vec<FoodPortion>>,
+    food_portions: Option<Box<RawValue>>,
     #[serde(default, rename = "servingSize")]
     serving_size: Option<Box<RawValue>>,
     #[serde(default, rename = "servingSizeUnit")]
-    serving_size_unit: Option<String>,
+    serving_size_unit: Option<Box<RawValue>>,
     #[serde(default, rename = "householdServingFullText")]
-    household_serving_full_text: Option<String>,
+    household_serving_full_text: Option<Box<RawValue>>,
 }
 
 #[derive(Debug, Deserialize)]

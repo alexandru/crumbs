@@ -122,8 +122,7 @@ fn assert_literal_database_path(database_name: DatabaseFilename<'_>) -> Result<(
 }
 
 #[test]
-fn reports_rejected_and_sanitized_food_counts_with_optional_details() -> Result<(), Box<dyn Error>>
-{
+fn reports_food_level_sanitization_and_identity_rejection_details() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     let fixture = directory.path().join("mixed.json");
     fs::write(
@@ -132,7 +131,8 @@ fn reports_rejected_and_sanitized_food_counts_with_optional_details() -> Result<
           {"fdcId":11,"dataType":"Foundation","description":"valid one","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":1}]},
           {"fdcId":12,"dataType":"Foundation","description":"negative nutrient","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":-2}]},
           {"fdcId":13,"dataType":"Foundation","description":"invalid nutrient","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":"bad"}]},
-          {"fdcId":14,"dataType":"Foundation","description":"valid after rejected","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":3}]}
+          {"fdcId":14,"dataType":"Foundation","description":"valid after sanitized","foodNutrients":[{"nutrient":{"id":1003,"unitName":"g"},"amount":3}]},
+          {"fdcId":15,"dataType":"Foundation","foodNutrients":[]}
         ]}"#,
     )?;
 
@@ -141,7 +141,7 @@ fn reports_rejected_and_sanitized_food_counts_with_optional_details() -> Result<
     assert!(!default_output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&default_output.stdout),
-        "Imported 3 foods (1 sanitized); rejected 1 foods\n"
+        "Imported 4 foods (2 sanitized); rejected 1 foods\n"
     );
     assert!(String::from_utf8_lossy(&default_output.stderr).contains("rejected 1 USDA foods"));
     assert!(
@@ -154,7 +154,7 @@ fn reports_rejected_and_sanitized_food_counts_with_optional_details() -> Result<
     assert!(!verbose_output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&verbose_output.stdout),
-        "Imported 3 foods (1 sanitized); rejected 1 foods\n"
+        "Imported 4 foods (2 sanitized); rejected 1 foods\n"
     );
     let stderr = String::from_utf8_lossy(&verbose_output.stderr);
     assert!(
@@ -170,12 +170,16 @@ fn reports_rejected_and_sanitized_food_counts_with_optional_details() -> Result<
         "missing sanitization reason: {stderr}"
     );
     assert!(
-        stderr.contains("rejected food source=usda source_id=13"),
+        stderr.contains("sanitized food source=usda source_id=13"),
+        "missing sanitized optional nutrient diagnostic: {stderr}"
+    );
+    assert!(
+        stderr.contains("rejected food source=usda source_id=15"),
         "missing rejected food diagnostic: {stderr}"
     );
     assert!(
-        stderr.contains("invalid"),
-        "missing rejection reason: {stderr}"
+        stderr.contains("nutrient amount"),
+        "missing sanitization reason: {stderr}"
     );
     assert!(stderr.contains("rejected 1 USDA foods"));
     Ok(())
