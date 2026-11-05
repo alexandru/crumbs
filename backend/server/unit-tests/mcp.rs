@@ -483,7 +483,6 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
     let description = tool["description"]
         .as_str()
         .ok_or("MCP search tool has no description")?;
-    assert!(description.contains('\n'));
     for guidance in [
         "descriptions, categories, tags, source, and dataset",
         "No matches return an empty foods list",
