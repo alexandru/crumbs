@@ -42,7 +42,7 @@ pub(super) fn tool() -> Tool {
                     "minLength": 1,
                     "description": r#"Nonblank Crumbs full-text expression.
 
-### Syntax
+Syntax:
 
 - Terms separated by spaces use AND.
 - Quoted phrases match exact phrases.
@@ -50,7 +50,7 @@ pub(super) fn tool() -> Tool {
 - Use `AND`, `OR`, `NOT`, and parentheses to combine expressions.
 - Terms are case-insensitive.
 
-### Search fields
+Search fields:
 
 - `description`: food descriptions.
 - `category`: food categories.
@@ -58,7 +58,7 @@ pub(super) fn tool() -> Tool {
 - `source`: data provider. USDA source values are stored as `usda`.
 - `dataset`: named collection supplied by a provider, such as `usda_foundation` or `usda_branded`.
 
-### Examples
+Examples:
 
 - `chicken breast`
 - `"chicken breast"`

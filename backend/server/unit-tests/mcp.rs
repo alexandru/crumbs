@@ -496,9 +496,9 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         .ok_or("MCP search query has no description")?;
     assert!(query_description.contains('\n'));
     for guidance in [
-        "### Syntax",
-        "### Search fields",
-        "### Examples",
+        "Syntax:",
+        "Search fields:",
+        "Examples:",
         "`AND`, `OR`, `NOT`",
         "case-insensitive",
         "description:chicken",
