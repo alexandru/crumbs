@@ -5,9 +5,8 @@ use std::sync::Arc;
 use axum::body::to_bytes;
 use axum::extract::{Query, State};
 use axum::http::{StatusCode, Uri};
-use crumbs_database::{
-    Database, DatabaseConfig, Dataset, Food, FoodWriter, SearchLimit, SearchQuery,
-};
+use crumbs_database::foods::{Dataset, Food, FoodLimit, FoodWriter, SearchQuery};
+use crumbs_database::{Database, DatabaseConfig};
 use serde_json::{Value, json};
 
 use super::*;
@@ -46,7 +45,7 @@ async fn search_handler_returns_food_nutrition_and_reports_invalid_fts_syntax()
         State(Arc::clone(&database)),
         Ok(Query(SearchRequest {
             query: SearchQuery::new("hummus")?,
-            limit: SearchLimit::default(),
+            limit: FoodLimit::default(),
         })),
     )
     .await;
@@ -75,7 +74,7 @@ async fn search_handler_returns_food_nutrition_and_reports_invalid_fts_syntax()
         State(Arc::clone(&database)),
         Ok(Query(SearchRequest {
             query: SearchQuery::new("tahini")?,
-            limit: SearchLimit::default(),
+            limit: FoodLimit::default(),
         })),
     )
     .await;
@@ -88,7 +87,7 @@ async fn search_handler_returns_food_nutrition_and_reports_invalid_fts_syntax()
         State(Arc::clone(&database)),
         Ok(Query(SearchRequest {
             query: SearchQuery::new("(milk OR cheese")?,
-            limit: SearchLimit::default(),
+            limit: FoodLimit::default(),
         })),
     )
     .await;

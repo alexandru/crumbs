@@ -1,11 +1,42 @@
-//! Public contract for searching indexed foods.
+//! Contract for searching indexed foods.
 
 use std::error::Error as StdError;
 use std::fmt;
+use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Food, FoodId};
+use super::model::{FoodLimit, StoredFood};
+
+/// Searches source-independent food data.
+pub trait FoodSearch: Sync {
+    /// Failure reported by this storage implementation.
+    type Error: StdError + Send + Sync + 'static;
+
+    /// Searches indexed sources, datasets, descriptions, categories, and tags with a Crumbs
+    /// full-text expression.
+    ///
+    /// Results include full parsed nutrition data and are grouped by dataset. The limit applies
+    /// independently to each dataset. Implementations use best-effort relevance ranking and food
+    /// ID to break ties within each dataset.
+    /// An expression may contain plain terms (combined as AND), quoted phrases,
+    /// prefix matching with a trailing `*` (for example, `chick*`),
+    /// `AND`/`OR`/`NOT`, parentheses, and field selectors such as
+    /// `source:usda`, `dataset:common`, `description:chicken`, `category:dairy`, or
+    /// `tags:organic`. The default limit is 20 per dataset, and supplied
+    /// limits are clamped to 20–1,000.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SearchError::InvalidQuery`] if the search adapter rejects the
+    /// expression. Returns [`SearchError::Storage`] if the data store cannot
+    /// search or decode matching data.
+    fn search_foods(
+        &self,
+        query: &SearchQuery,
+        limit: FoodLimit,
+    ) -> impl Future<Output = Result<SearchResults, SearchError<Self::Error>>> + Send;
+}
 
 /// A nonblank Crumbs full-text expression.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,7 +50,7 @@ impl SearchQuery {
     ///
     /// Returns [`SearchQueryError`] when the expression is blank or contains a
     /// NUL character. Expressions rejected by the current search adapter are reported by
-    /// [`FoodReader::search_foods`](super::FoodReader::search_foods).
+    /// [`FoodSearch::search_foods`](super::FoodSearch::search_foods).
     pub fn new(value: impl Into<String>) -> Result<Self, SearchQueryError> {
         let value = value.into();
         if value.trim().is_empty() {
@@ -62,60 +93,18 @@ pub enum SearchQueryError {
     Nul,
 }
 
-/// A food result count bounded to 20–1,000.
-///
-/// The default is 20. Converting any signed integer clamps it to this range.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "i64", into = "i64")]
-pub struct SearchLimit(i64);
-
-impl SearchLimit {
-    /// Returns the bounded result count.
-    pub const fn get(self) -> i64 {
-        self.0
-    }
-}
-
-impl Default for SearchLimit {
-    fn default() -> Self {
-        Self(20)
-    }
-}
-
-impl From<i64> for SearchLimit {
-    fn from(value: i64) -> Self {
-        Self(value.clamp(20, 1_000))
-    }
-}
-
-impl From<SearchLimit> for i64 {
-    fn from(value: SearchLimit) -> Self {
-        value.0
-    }
-}
-
 impl fmt::Display for SearchQuery {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
 
-/// A matching food and its source-independent nutritional data.
-#[derive(Debug, Serialize)]
-pub struct FoodSearchResult {
-    /// Local food identity.
-    pub id: FoodId,
-    /// Matching food metadata and parsed nutrition.
-    #[serde(flatten)]
-    pub food: Food,
-}
-
 /// Search results grouped by the dataset assigned to each food.
 #[derive(Debug, Default, Serialize)]
-pub struct FoodSearchResults {
-    pub common: Vec<FoodSearchResult>,
-    pub branded: Vec<FoodSearchResult>,
-    pub custom: Vec<FoodSearchResult>,
+pub struct SearchResults {
+    pub common: Vec<StoredFood>,
+    pub branded: Vec<StoredFood>,
+    pub custom: Vec<StoredFood>,
 }
 
 /// Failure while searching indexed food data.

@@ -3,11 +3,10 @@
 use std::sync::Arc;
 
 use axum::Router;
-use crumbs_database::{CustomFoodStore, FoodReader};
+use crumbs_database::foods::{CustomFoodStore, FoodSearch};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 
-use crumbs_database::oauth::OAuthStore;
-use crumbs_database::users::Users;
+use crumbs_database::identity::{OAuthStore, Users};
 
 use crate::{assets, custom_foods, home, mcp, oauth, search};
 
@@ -17,7 +16,7 @@ pub(crate) fn application<S, A>(
     authorization: Arc<oauth::AuthorizationServer<A>>,
 ) -> Router
 where
-    S: FoodReader + CustomFoodStore + Send + 'static,
+    S: FoodSearch + CustomFoodStore + Send + 'static,
     A: Users + OAuthStore + Send + 'static,
 {
     let tools = search::mcp_tools::<S>().chain(custom_foods::mcp_tools::<S>());

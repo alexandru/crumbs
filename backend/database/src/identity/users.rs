@@ -7,8 +7,6 @@ use std::future::Future;
 use serde::Serialize;
 use std::str::FromStr;
 
-mod sqlite;
-
 /// A positive local user identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
@@ -285,5 +283,5 @@ fn validate_password_length(password: &str, minimum_characters: usize) -> Result
 }
 
 #[cfg(test)]
-#[path = "../unit-tests/users.rs"]
+#[path = "../../unit-tests/identity/users.rs"]
 mod tests;

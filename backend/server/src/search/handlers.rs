@@ -7,12 +7,12 @@ use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use crumbs_database::{FoodReader, SearchError};
+use crumbs_database::foods::{FoodSearch, SearchError};
 use serde::Serialize;
 
 use super::SearchRequest;
 
-pub(super) async fn search_foods<S: FoodReader + Send + 'static>(
+pub(super) async fn search_foods<S: FoodSearch + Send + 'static>(
     State(reader): State<Arc<S>>,
     request: Result<Query<SearchRequest>, QueryRejection>,
 ) -> Response {

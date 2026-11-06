@@ -1,8 +1,8 @@
 use std::error::Error;
 
 use axum::http::{StatusCode, header};
-use crumbs_database::nutrition::FoodData;
-use crumbs_database::{Dataset, Food, FoodId, FoodWriter, Source, TagName};
+use crumbs_database::foods::{Dataset, Food, FoodId, FoodWriter, Source, TagName, TagStore};
+use crumbs_database::nutrition_model::FoodData;
 use serde_json::{Value, json};
 
 use crate::oauth::tests::{TEST_REST_ACCESS_TOKEN, TEST_REST_WRITE_ACCESS_TOKEN};

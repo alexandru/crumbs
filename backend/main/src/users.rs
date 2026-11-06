@@ -4,7 +4,7 @@ use std::io;
 
 use crumbs_database::Database;
 use crumbs_database::DatabaseConfig;
-use crumbs_database::users::{PasswordHash, User, UserError, Username, Users};
+use crumbs_database::identity::{PasswordHash, User, UserError, Username, Users};
 use zeroize::Zeroizing;
 
 pub(super) fn prompt_credentials<P>(

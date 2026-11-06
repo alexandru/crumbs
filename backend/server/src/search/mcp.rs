@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crumbs_database::oauth::OAuthScope;
-use crumbs_database::{FoodReader, SearchError};
+use crumbs_database::foods::{FoodSearch, SearchError};
+use crumbs_database::identity::OAuthScope;
 use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::ToolRoute;
 use rmcp::handler::server::tool::ToolCallContext;
@@ -15,7 +15,7 @@ use crate::mcp::ToolRegistration;
 
 pub(crate) fn mcp_tools<S>() -> impl Iterator<Item = ToolRegistration<S>>
 where
-    S: FoodReader + Send + Sync + 'static,
+    S: FoodSearch + Send + Sync + 'static,
 {
     let route: ToolRoute<Arc<S>> =
         ToolRoute::new_dyn(tool(), |context: ToolCallContext<'_, Arc<S>>| {
@@ -26,7 +26,7 @@ where
 
 const NAME: &str = "search_foods";
 
-async fn call<S: FoodReader + ?Sized>(
+async fn call<S: FoodSearch + ?Sized>(
     reader: &S,
     arguments: Option<Map<String, Value>>,
 ) -> Result<CallToolResponse, ErrorData> {

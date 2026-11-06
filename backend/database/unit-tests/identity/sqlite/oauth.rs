@@ -2,8 +2,9 @@ use std::error::Error as StdError;
 use std::io;
 
 use super::*;
-use crate::users::{PasswordHash, Username, Users};
-use crate::{Database, DatabaseConfig};
+use crate::DatabaseConfig;
+use crate::identity::{PasswordHash, Username, Users};
+use crate::runtime::Database;
 
 const PASSWORD_HASH: &str = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
 const NOW: AuthTimestamp = 1_000;

@@ -4,9 +4,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::future::Future;
 
-use crate::users::{PasswordHash, UserId};
-
-mod sqlite;
+use super::users::{PasswordHash, UserId};
 
 /// SHA-256 digest of an opaque OAuth credential.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -335,5 +333,5 @@ pub trait OAuthStore: Sync {
 }
 
 #[cfg(test)]
-#[path = "../unit-tests/oauth.rs"]
+#[path = "../../unit-tests/identity/oauth.rs"]
 mod tests;

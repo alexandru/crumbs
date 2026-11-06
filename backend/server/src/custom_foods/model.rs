@@ -1,16 +1,16 @@
-use crumbs_database::{FoodId, FoodSearchResult, SearchLimit};
+use crumbs_database::foods::{FoodId, FoodLimit, StoredFood};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ListRequest {
     #[serde(default)]
-    pub(super) limit: SearchLimit,
+    pub(super) limit: FoodLimit,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct ListResponse {
-    pub(super) foods: Vec<FoodSearchResult>,
+    pub(super) foods: Vec<StoredFood>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

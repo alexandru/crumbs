@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use axum::Router;
-use crumbs_database::FoodReader;
+use crumbs_database::foods::FoodSearch;
 
 use super::handlers;
 
 pub(crate) fn routes<S>(reader: Arc<S>) -> Router
 where
-    S: FoodReader + Send + 'static,
+    S: FoodSearch + Send + 'static,
 {
     Router::new()
         .route(

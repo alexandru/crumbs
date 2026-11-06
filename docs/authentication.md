@@ -46,7 +46,7 @@ For USDA imports, `CRUMBS_IMPORT_FILE` can supply the JSON file path. `CRUMBS_VE
 
 Usernames are ASCII and normalize to lowercase. They contain 1–64 characters: the first is an ASCII letter or digit, and later characters may also be `.`, `_`, or `-`. Passwords at creation must contain at least 6 Unicode scalar values and no more than 72 UTF-8 bytes. Crumbs hashes passwords with bcrypt cost 12 and does not truncate them.
 
-The storage-independent `crumbs_database::users::Users` API creates, looks up, lists, changes, deactivates, and deletes users through `create_user`, `user_by_username`, `user_by_id`, `list_users`, `set_user_password`, `set_user_active`, and `delete_user`. `PasswordHash::hash` creates the stored hash. Password changes and deactivation revoke the user's sessions atomically; deletion cascades to the user's sessions and authorizations. `OAuthStore::revoke_user_sessions` provides explicit session revocation.
+The storage-independent `crumbs_database::identity::Users` API creates, looks up, lists, changes, deactivates, and deletes users through `create_user`, `user_by_username`, `user_by_id`, `list_users`, `set_user_password`, `set_user_active`, and `delete_user`. `PasswordHash::hash` creates the stored hash. Password changes and deactivation revoke the user's sessions atomically; deletion cascades to the user's sessions and authorizations. `crumbs_database::identity::OAuthStore::revoke_user_sessions` provides explicit session revocation.
 
 ## OAuth client flow
 

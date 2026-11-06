@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::http::{HeaderMap, header::AUTHORIZATION};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use crumbs_database::oauth::{AuthTimestamp, CredentialHash, PkceChallenge};
+use crumbs_database::identity::{AuthTimestamp, CredentialHash, PkceChallenge};
 use sha2::{Digest, Sha256};
 use url::{Host, Url};
 

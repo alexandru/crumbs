@@ -450,3 +450,7 @@ fn expand_decimal(base: &str, exponent: &str) -> Option<String> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../unit-tests/nutrition_model/quantity.rs"]
+mod tests;

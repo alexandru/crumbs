@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinError;
 
 use self::usda::{ParseError, RecordPosition, StreamItem};
-use crumbs_database::{FoodWriter, Source, SourceFoodId};
+use crumbs_database::foods::{FoodWriter, Source, SourceFoodId};
 
 pub use self::usda::RecordPosition as ImportRecordPosition;
 

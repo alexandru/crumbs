@@ -2,7 +2,8 @@ use std::error::Error as StdError;
 use std::io;
 
 use super::*;
-use crate::{Database, DatabaseConfig};
+use crate::DatabaseConfig;
+use crate::runtime::Database;
 
 #[tokio::test]
 async fn user_management_persists_normalized_names_and_credentials() -> Result<(), Box<dyn StdError>>

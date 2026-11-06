@@ -6,9 +6,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use common::DatabaseFixture;
-use crumbs_database::{
-    Database, Dataset, Food, FoodCategory, FoodDescription, FoodId, FoodSummary, FoodWriter,
-    Source, TagName,
+use crumbs_database::Database;
+use crumbs_database::foods::{
+    Dataset, Food, FoodCategory, FoodDescription, FoodId, FoodLookup, FoodSummary, FoodWriter,
+    Source, TagName, TagStore,
 };
 use crumbs_import::import_usda;
 use sqlx::{SqlitePool, query, query_scalar};
@@ -231,8 +232,10 @@ async fn find_food(
     source: &Source,
     source_food_id: &str,
 ) -> Result<FoodSummary, Box<dyn StdError>> {
-    let source_food_id = source_food_id.to_owned();
-    match database.food_by_source(source, &source_food_id).await? {
+    match database
+        .food_by_source(source.as_ref(), source_food_id)
+        .await?
+    {
         Some(food) => Ok(food),
         None => Err(io::Error::other(format!(
             "missing food {}/{}",

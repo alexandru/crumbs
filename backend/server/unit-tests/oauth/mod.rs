@@ -4,11 +4,11 @@ use std::sync::{Arc, OnceLock};
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Request, StatusCode, header};
-use crumbs_database::oauth::{
+use crumbs_database::identity::{
     Approval, AuthorizationGrant, ClientAuthentication, CodeRedemption, OAuthClient, OAuthStore,
     PendingAuthorization, TokenPair,
 };
-use crumbs_database::users::{PasswordHash, UserError, UserId, Username, Users};
+use crumbs_database::identity::{PasswordHash, UserError, UserId, Username, Users};
 use crumbs_database::{Database, DatabaseConfig};
 use serde_json::{Value, json};
 use tempfile::TempDir;

@@ -2,11 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-mod quantity;
-pub use quantity::{
-    Energy, Grams, Kilocalories, Kilojoules, Mass, MeasuredQuantity, Measurement, Micrograms,
-    Milligrams, Millilitres, Qualifier, QuantityError, Reported,
-};
+use super::quantity::{Energy, Mass, MeasuredQuantity, QuantityError, Reported};
 
 /// Imported food details. Missing nutrition does not imply zero nutrients.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,5 +126,5 @@ impl<'de> Deserialize<'de> for ServingSize {
 pub type ServingName = String;
 
 #[cfg(test)]
-#[path = "../unit-tests/nutrition.rs"]
+#[path = "../../unit-tests/nutrition_model/model.rs"]
 mod tests;
