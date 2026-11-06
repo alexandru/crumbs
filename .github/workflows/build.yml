@@ -178,3 +178,19 @@ jobs:
           fi
 
           echo "image smoke test passed"
+
+  complete:
+    name: build complete
+    needs: [quality, docker]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require all build jobs to pass
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          DOCKER_RESULT: ${{ needs.docker.result }}
+        run: |
+          set -euo pipefail
+          printf 'quality: %s\ndocker: %s\n' "$QUALITY_RESULT" "$DOCKER_RESULT"
+          test "$QUALITY_RESULT" = success
+          test "$DOCKER_RESULT" = success
