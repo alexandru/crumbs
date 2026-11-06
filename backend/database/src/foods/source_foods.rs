@@ -3,7 +3,7 @@
 use std::error::Error as StdError;
 use std::future::Future;
 
-use super::model::{Food, FoodId, FoodSummary, Source, SourceFoodId};
+use super::model::{Food, FoodId, FoodSummary, SourceFoodIdRef, SourceRef};
 
 /// Persists source-scoped foods independently of their import format.
 pub trait FoodWriter: Sync {
@@ -25,6 +25,7 @@ pub trait FoodLookup: Sync {
     type Error: StdError + Send + Sync + 'static;
 
     /// Looks up food metadata by its exact source-scoped identity.
+    /// The input values are compared as provided, without normalization.
     /// Returns `None` if the identity is absent.
     ///
     /// # Errors
@@ -32,7 +33,7 @@ pub trait FoodLookup: Sync {
     /// Returns an implementation error if storage access fails.
     fn food_by_source(
         &self,
-        source: &Source,
-        source_food_id: &SourceFoodId,
+        source: SourceRef<'_>,
+        source_food_id: SourceFoodIdRef<'_>,
     ) -> impl Future<Output = Result<Option<FoodSummary>, Self::Error>> + Send;
 }

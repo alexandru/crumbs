@@ -37,8 +37,10 @@ pub(super) async fn find_food(
     source: &Source,
     source_food_id: &str,
 ) -> Result<FoodSummary, Box<dyn StdError>> {
-    let source_food_id = source_food_id.to_owned();
-    match database.food_by_source(source, &source_food_id).await? {
+    match database
+        .food_by_source(source.as_ref(), source_food_id)
+        .await?
+    {
         Some(food) => Ok(food),
         None => Err(io::Error::other(format!(
             "missing food {}/{}",

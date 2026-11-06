@@ -1,7 +1,7 @@
 use super::rows::FoodRow;
 use crate::clock::UnixMillis;
 use crate::foods::{
-    Food, FoodId, FoodLookup, FoodStoreError, FoodSummary, FoodWriter, Source, SourceFoodId,
+    Food, FoodId, FoodLookup, FoodStoreError, FoodSummary, FoodWriter, SourceFoodIdRef, SourceRef,
 };
 use crate::runtime::Database;
 
@@ -59,15 +59,15 @@ impl FoodLookup for Database {
 
     async fn food_by_source(
         &self,
-        source: &Source,
-        source_food_id: &SourceFoodId,
+        source: SourceRef<'_>,
+        source_food_id: SourceFoodIdRef<'_>,
     ) -> Result<Option<FoodSummary>, Self::Error> {
         let operation: Result<Option<FoodSummary>, sqlx::Error> = async {
             let row = sqlx::query_as::<_, FoodRow>(
                 "SELECT id, source, source_food_id, dataset, description, category, notes
              FROM crumbs_foods WHERE source = ? AND source_food_id = ?",
             )
-            .bind(source.as_ref())
+            .bind(source)
             .bind(source_food_id)
             .fetch_optional(&self.pool)
             .await?;

@@ -11,8 +11,12 @@ use crate::nutrition_model::FoodData;
 
 /// Provider identifier; providers may use static or dynamically supplied names.
 pub type Source = Cow<'static, str>;
+/// Borrowed provider identifier used for exact source-scoped lookups.
+pub type SourceRef<'a> = &'a str;
 /// Opaque identifier assigned to a food by its source.
 pub type SourceFoodId = String;
+/// Borrowed opaque identifier used for exact source-scoped lookups.
+pub type SourceFoodIdRef<'a> = &'a str;
 /// A search group assigned to each food.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

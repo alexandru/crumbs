@@ -131,7 +131,7 @@ mod timestamps {
             }
         );
         let summary = database
-            .food_by_source(&Source::Borrowed("usda"), &"2".to_owned())
+            .food_by_source("usda", "2")
             .await?
             .ok_or_else(|| io::Error::other("updated food is missing"))?;
         assert_eq!(summary.description, "Updated food");
