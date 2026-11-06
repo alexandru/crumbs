@@ -9,7 +9,7 @@ use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use crumbs_database::oauth::OAuthStore;
 use crumbs_database::users::Users;
 
-use crate::{custom_foods, handlers, mcp, oauth};
+use crate::{assets, custom_foods, home, mcp, oauth, search};
 
 pub(crate) fn application<S, A>(
     reader: Arc<S>,
@@ -20,28 +20,21 @@ where
     S: FoodReader + CustomFoodStore + Send + 'static,
     A: Users + OAuthStore + Send + 'static,
 {
-    Router::new()
-        .route(
-            "/foods/search",
-            axum::routing::get(handlers::search_foods::<S>),
+    let tools = search::mcp_tools::<S>().chain(custom_foods::mcp_tools::<S>());
+    search::routes(Arc::clone(&reader))
+        .merge(custom_foods::routes(Arc::clone(&reader)))
+        .nest_service(
+            "/mcp",
+            mcp::service(reader, mcp_config, tools, MCP_INSTRUCTIONS),
         )
-        .route(
-            "/foods/custom",
-            axum::routing::get(custom_foods::list::<S>).post(custom_foods::create::<S>),
-        )
-        .route(
-            "/foods/custom/{id}",
-            axum::routing::get(custom_foods::get::<S>)
-                .put(custom_foods::update::<S>)
-                .delete(custom_foods::delete::<S>),
-        )
-        .with_state(Arc::clone(&reader))
-        .nest_service("/mcp", mcp::service(reader, mcp_config))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&authorization),
             oauth::require_access::<A>,
         ))
-        .route("/", axum::routing::get(handlers::hello))
+        .merge(home::routes())
         .merge(oauth::routes(authorization))
+        .merge(assets::routes())
         .layer(axum::middleware::from_fn(oauth::security_headers))
 }
+
+const MCP_INSTRUCTIONS: &str = "Search foods using Crumbs full-text expressions. Results provide the best matches independently in common, branded, and custom datasets, including nutrition data and optional notes. Choose which foods to use. Manage custom foods with the custom-food tools; changes require crumbs:write.";

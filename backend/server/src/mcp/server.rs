@@ -1,8 +1,9 @@
-//! Hosted MCP tools for food search and custom-food management.
+//! MCP server protocol and tool dispatch.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use crumbs_database::{CustomFoodStore, FoodReader};
+use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, ErrorCode, Implementation, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -14,28 +15,22 @@ use rmcp::transport::streamable_http_server::{
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::json;
 
-use crate::oauth::FoodScopes;
+use super::{McpAuthorization, ToolRegistration};
 
-mod authorization;
-mod custom_foods;
-mod search;
-
-pub(crate) use authorization::McpAuthorization;
-
-pub(crate) struct FoodSearchServer<S> {
+pub(crate) struct McpServer<S> {
     reader: Arc<S>,
+    tools: Arc<HashMap<String, RegisteredTool<S>>>,
+    instructions: &'static str,
 }
 
-impl<S> ServerHandler for FoodSearchServer<S>
+impl<S> ServerHandler for McpServer<S>
 where
-    S: FoodReader + CustomFoodStore + Send + 'static,
+    S: Send + Sync + 'static,
 {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("crumbs", env!("CARGO_PKG_VERSION")))
-            .with_instructions(
-                "Search foods using Crumbs full-text expressions. Results provide the best matches independently in common, branded, and custom datasets, including nutrition data and optional notes. Choose which foods to use. Manage custom foods with the custom-food tools; changes require crumbs:write.",
-            )
+            .with_instructions(self.instructions)
     }
 
     async fn list_tools(
@@ -43,18 +38,19 @@ where
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let tools = std::iter::once(search::tool())
-            .chain(custom_foods::CustomFoodTool::tools())
+        let mut tools: Vec<_> = self.tools.values().collect();
+        tools.sort_by_key(|tool| tool.ordinal);
+        let tools = tools
+            .into_iter()
+            .map(|tool| tool.registration.route.attr.clone())
             .collect();
         Ok(ListToolsResult::with_all_items(tools))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        if name == search::NAME {
-            Some(search::tool())
-        } else {
-            custom_foods::CustomFoodTool::from_name(name).map(|tool| tool.tool())
-        }
+        self.tools
+            .get(name)
+            .map(|tool| tool.registration.route.attr.clone())
     }
 
     async fn call_tool(
@@ -62,51 +58,69 @@ where
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let custom_tool = custom_foods::CustomFoodTool::from_name(&request.name);
-        if request.name != search::NAME && custom_tool.is_none() {
+        let Some(registered_tool) = self.tools.get(request.name.as_ref()) else {
             return Err(ErrorData::new(
                 ErrorCode::METHOD_NOT_FOUND,
                 "unknown tool",
                 None,
             ));
-        }
-
-        let required = if custom_tool.is_some_and(|tool| tool.requires_write()) {
-            FoodScopes::Write
-        } else {
-            FoodScopes::Read
         };
+
+        let required_scope = registered_tool.registration.required_scope;
         let authorization = context
             .extensions
             .get::<axum::http::request::Parts>()
             .and_then(|parts| parts.extensions.get::<McpAuthorization>());
-        let permitted = authorization.is_some_and(|authorization| authorization.permits(required));
+        let permitted =
+            authorization.is_some_and(|authorization| authorization.permits(required_scope));
         if !permitted {
             return Ok(rmcp::model::CallToolResult::structured_error(json!({
                 "error": "insufficient_scope",
-                "required_scope": required.as_str(),
+                "required_scope": required_scope.as_str(),
             }))
             .into());
         }
 
-        match custom_tool {
-            Some(tool) => tool.call(self.reader.as_ref(), request.arguments).await,
-            None => search::call(self.reader.as_ref(), request.arguments).await,
-        }
+        (registered_tool.registration.route.call)(ToolCallContext::new(
+            &self.reader,
+            request,
+            context,
+        ))
+        .await
     }
 }
 
 pub(crate) fn service<S>(
     reader: Arc<S>,
     config: StreamableHttpServerConfig,
-) -> StreamableHttpService<FoodSearchServer<S>, LocalSessionManager>
+    tools: impl IntoIterator<Item = ToolRegistration<S>>,
+    instructions: &'static str,
+) -> StreamableHttpService<McpServer<S>, LocalSessionManager>
 where
-    S: FoodReader + CustomFoodStore + Send + 'static,
+    S: Send + Sync + 'static,
 {
+    let tools = Arc::new(
+        tools
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, registration)| {
+                let name = registration.route.attr.name.to_string();
+                (
+                    name,
+                    RegisteredTool {
+                        registration,
+                        ordinal,
+                    },
+                )
+            })
+            .collect(),
+    );
     StreamableHttpService::new(
         move || {
-            Ok(FoodSearchServer {
+            Ok(McpServer {
                 reader: Arc::clone(&reader),
+                tools: Arc::clone(&tools),
+                instructions,
             })
         },
         Arc::new(LocalSessionManager::default()),
@@ -124,6 +138,11 @@ pub(crate) fn config() -> StreamableHttpServerConfig {
         .enforce_origin_validation()
 }
 
+struct RegisteredTool<S> {
+    registration: ToolRegistration<S>,
+    ordinal: usize,
+}
+
 #[cfg(test)]
-#[path = "../unit-tests/mcp.rs"]
+#[path = "../../unit-tests/mcp/server.rs"]
 mod tests;

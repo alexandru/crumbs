@@ -4,24 +4,29 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::Json;
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router};
 use crumbs_database::oauth::OAuthStore;
 use crumbs_database::users::{PasswordHash, UserError, Users};
 use serde_json::json;
 use tokio::sync::Semaphore;
 
 use crate::mcp::McpAuthorization;
-use crate::{IssuerUrl, OAuthConfig, oauth_views};
 
 mod authorization;
+mod config;
 mod limits;
-pub(crate) mod protocol;
+mod protocol;
+mod routes;
 mod tokens;
+mod views;
+
+pub use config::{InvalidIssuerUrl, IssuerUrl, OAuthConfig};
+pub(crate) use routes::routes;
 
 pub(crate) struct AuthorizationServer<S> {
     store: Arc<S>,
@@ -49,6 +54,18 @@ where
             password_slots: Arc::new(Semaphore::new(4)),
             limits: limits::Limits::default(),
         }))
+    }
+
+    pub(crate) async fn cleanup(&self) {
+        let mut ticks = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            ticks.tick().await;
+            if let Ok(now) = protocol::now()
+                && let Err(error) = self.store.prune_oauth(now).await
+            {
+                eprintln!("OAuth cleanup failed: {error}");
+            }
+        }
     }
 
     fn resource(&self, mcp: bool) -> String {
@@ -83,49 +100,6 @@ pub enum InitError {
     Password(#[from] UserError),
     #[error("password verification task failed")]
     Task(#[from] tokio::task::JoinError),
-}
-
-pub(crate) fn routes<S>(server: Arc<AuthorizationServer<S>>) -> Router
-where
-    S: Users + OAuthStore + Send + 'static,
-{
-    Router::new()
-        .route(
-            "/.well-known/oauth-authorization-server",
-            axum::routing::get(metadata::<S>),
-        )
-        .route(
-            "/.well-known/oauth-protected-resource/mcp",
-            axum::routing::get(mcp_metadata::<S>),
-        )
-        .route(
-            "/.well-known/oauth-protected-resource",
-            axum::routing::get(rest_metadata::<S>),
-        )
-        .route(
-            "/oauth/register",
-            axum::routing::post(tokens::register::<S>),
-        )
-        .route(
-            "/oauth/authorize",
-            axum::routing::get(authorization::authorize::<S>),
-        )
-        .route(
-            "/oauth/login",
-            axum::routing::post(authorization::login::<S>),
-        )
-        .route("/oauth/token", axum::routing::post(tokens::token::<S>))
-        .route("/oauth/revoke", axum::routing::post(tokens::revoke::<S>))
-        .route(
-            "/assets/login.css",
-            axum::routing::get(async || oauth_views::stylesheet()),
-        )
-        .layer(axum::extract::DefaultBodyLimit::max(8 * 1024))
-        .route_layer(axum::middleware::from_fn_with_state(
-            Arc::clone(&server),
-            throttle::<S>,
-        ))
-        .with_state(server)
 }
 
 pub(crate) async fn require_access<S>(
@@ -384,5 +358,5 @@ const ACCESS_TTL: Duration = Duration::from_secs(10 * 60);
 const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 #[cfg(test)]
-#[path = "../unit-tests/oauth.rs"]
+#[path = "../../unit-tests/oauth/mod.rs"]
 pub(crate) mod tests;

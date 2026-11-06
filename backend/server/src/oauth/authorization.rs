@@ -12,7 +12,7 @@ use serde::Deserialize;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
-use crate::oauth_views::{self, LoginPage};
+use super::views::{self, LoginPage};
 
 use super::{
     AuthorizationServer, CODE_TTL, FoodScopes, LOGIN_TTL, internal_error, oauth_error, protocol,
@@ -282,7 +282,7 @@ fn render(
     let Ok(content_security_policy) = HeaderValue::from_str(&content_security_policy) else {
         return internal_error();
     };
-    let mut response = oauth_views::login(LoginPage {
+    let mut response = views::login(LoginPage {
         request_id,
         csrf_token,
         client_name,
