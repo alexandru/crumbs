@@ -1,10 +1,6 @@
-use axum::body::Body;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
-use axum::http::{Response, StatusCode, header::HeaderValue};
 use maud::{DOCTYPE, Markup, html};
-use rust_embed::Embed;
 
-use crate::oauth::FoodScopes;
+use super::FoodScopes;
 
 pub(crate) struct LoginPage<'a> {
     pub request_id: &'a str,
@@ -23,7 +19,7 @@ pub(crate) fn login(page: LoginPage<'_>) -> Markup {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { "Sign in to Crumbs" }
-                link rel="stylesheet" href="/assets/login.css";
+                link rel="stylesheet" href="/assets/main.css";
             }
             body {
                 main class="page-shell" {
@@ -109,28 +105,6 @@ pub(crate) fn login(page: LoginPage<'_>) -> Markup {
     }
 }
 
-pub(crate) fn stylesheet() -> Response<Body> {
-    let Some(stylesheet) = LoginAssets::get("login.css") else {
-        let mut response = Response::new(Body::empty());
-        *response.status_mut() = StatusCode::NOT_FOUND;
-        return response;
-    };
-
-    let mut response = Response::new(Body::from(stylesheet.data.into_owned()));
-    response.headers_mut().insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("text/css; charset=utf-8"),
-    );
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    response
-}
-
-#[derive(Embed)]
-#[folder = "assets/"]
-struct LoginAssets;
-
 #[cfg(test)]
-#[path = "../unit-tests/oauth_views.rs"]
+#[path = "../../unit-tests/oauth/views.rs"]
 mod tests;

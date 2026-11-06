@@ -1,16 +1,51 @@
 //! MCP schemas and invocation for custom-food management.
 
+use std::sync::Arc;
+
+use crumbs_database::oauth::OAuthScope;
 use crumbs_database::{CustomFoodInput, CustomFoodStore};
 use rmcp::ErrorData;
+use rmcp::handler::server::router::tool::ToolRoute;
+use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::model::{CallToolResponse, CallToolResult, Tool, ToolAnnotations};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::custom_foods::{FoodIdParameter, ListRequest, ListResponse};
+use crate::mcp::ToolRegistration;
+
+use super::model::{FoodIdParameter, ListRequest, ListResponse};
+
+pub(crate) fn mcp_tools<S>() -> impl Iterator<Item = ToolRegistration<S>>
+where
+    S: CustomFoodStore + Send + Sync + 'static,
+{
+    [
+        CustomFoodTool::List,
+        CustomFoodTool::Get,
+        CustomFoodTool::Create,
+        CustomFoodTool::Update,
+        CustomFoodTool::Delete,
+    ]
+    .into_iter()
+    .map(|tool| {
+        let required_scope = if tool.requires_write() {
+            OAuthScope::Write
+        } else {
+            OAuthScope::Read
+        };
+        let route: ToolRoute<Arc<S>> =
+            ToolRoute::new_dyn(tool.tool(), move |context: ToolCallContext<'_, Arc<S>>| {
+                Box::pin(
+                    async move { tool.call(context.service.as_ref(), context.arguments).await },
+                )
+            });
+        ToolRegistration::new(route, required_scope)
+    })
+}
 
 #[derive(Clone, Copy)]
-pub(super) enum CustomFoodTool {
+enum CustomFoodTool {
     List,
     Get,
     Create,
@@ -19,34 +54,11 @@ pub(super) enum CustomFoodTool {
 }
 
 impl CustomFoodTool {
-    pub(super) fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "list_custom_foods" => Some(Self::List),
-            "get_custom_food" => Some(Self::Get),
-            "create_custom_food" => Some(Self::Create),
-            "update_custom_food" => Some(Self::Update),
-            "delete_custom_food" => Some(Self::Delete),
-            _ => None,
-        }
-    }
-
-    pub(super) fn tools() -> impl Iterator<Item = Tool> {
-        [
-            Self::List,
-            Self::Get,
-            Self::Create,
-            Self::Update,
-            Self::Delete,
-        ]
-        .into_iter()
-        .map(Self::tool)
-    }
-
-    pub(super) const fn requires_write(self) -> bool {
+    const fn requires_write(self) -> bool {
         matches!(self, Self::Create | Self::Update | Self::Delete)
     }
 
-    pub(super) fn tool(self) -> Tool {
+    fn tool(self) -> Tool {
         let description = match self {
             Self::List => {
                 "List custom foods by food ID, including nutrition and optional notes. Requires crumbs:read. The limit defaults to 20 and is clamped to 20 through 1000. There is no pagination."
@@ -72,7 +84,7 @@ impl CustomFoodTool {
         )
     }
 
-    pub(super) async fn call<S: CustomFoodStore + ?Sized>(
+    async fn call<S: CustomFoodStore + ?Sized>(
         self,
         store: &S,
         arguments: Option<Map<String, Value>>,
@@ -308,3 +320,7 @@ fn mass_properties(names: &[&str]) -> Value {
         .collect();
     json!({"type": "object", "properties": properties})
 }
+
+#[cfg(test)]
+#[path = "../../unit-tests/custom_foods/mcp.rs"]
+mod tests;

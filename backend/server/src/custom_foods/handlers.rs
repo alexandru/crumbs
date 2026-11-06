@@ -7,44 +7,12 @@ use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use crumbs_database::{CustomFoodInput, CustomFoodStore, FoodId, FoodSearchResult, SearchLimit};
-use serde::{Deserialize, Serialize};
+use crumbs_database::{CustomFoodInput, CustomFoodStore};
 use serde_json::json;
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ListRequest {
-    #[serde(default)]
-    pub(crate) limit: SearchLimit,
-}
+use super::model::{FoodIdParameter, ListRequest, ListResponse};
 
-#[derive(Debug, Serialize)]
-pub(crate) struct ListResponse {
-    pub(crate) foods: Vec<FoodSearchResult>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(try_from = "i64")]
-pub(crate) struct FoodIdParameter(FoodId);
-
-impl FoodIdParameter {
-    pub(crate) const fn food_id(self) -> FoodId {
-        self.0
-    }
-}
-
-impl TryFrom<i64> for FoodIdParameter {
-    type Error = &'static str;
-
-    fn try_from(value: i64) -> Result<Self, Self::Error> {
-        if value <= 0 {
-            return Err("food ID must be positive");
-        }
-        Ok(Self(FoodId(value)))
-    }
-}
-
-pub(crate) async fn list<S: CustomFoodStore + Send + 'static>(
+pub(super) async fn list<S: CustomFoodStore + Send + 'static>(
     State(store): State<Arc<S>>,
     request: Result<Query<ListRequest>, QueryRejection>,
 ) -> Response {
@@ -58,7 +26,7 @@ pub(crate) async fn list<S: CustomFoodStore + Send + 'static>(
     }
 }
 
-pub(crate) async fn create<S: CustomFoodStore + Send + 'static>(
+pub(super) async fn create<S: CustomFoodStore + Send + 'static>(
     State(store): State<Arc<S>>,
     input: Result<Json<CustomFoodInput>, JsonRejection>,
 ) -> Response {
@@ -77,7 +45,7 @@ pub(crate) async fn create<S: CustomFoodStore + Send + 'static>(
     }
 }
 
-pub(crate) async fn get<S: CustomFoodStore + Send + 'static>(
+pub(super) async fn get<S: CustomFoodStore + Send + 'static>(
     State(store): State<Arc<S>>,
     id: Result<Path<FoodIdParameter>, PathRejection>,
 ) -> Response {
@@ -92,7 +60,7 @@ pub(crate) async fn get<S: CustomFoodStore + Send + 'static>(
     }
 }
 
-pub(crate) async fn update<S: CustomFoodStore + Send + 'static>(
+pub(super) async fn update<S: CustomFoodStore + Send + 'static>(
     State(store): State<Arc<S>>,
     id: Result<Path<FoodIdParameter>, PathRejection>,
     input: Result<Json<CustomFoodInput>, JsonRejection>,
@@ -112,7 +80,7 @@ pub(crate) async fn update<S: CustomFoodStore + Send + 'static>(
     }
 }
 
-pub(crate) async fn delete<S: CustomFoodStore + Send + 'static>(
+pub(super) async fn delete<S: CustomFoodStore + Send + 'static>(
     State(store): State<Arc<S>>,
     id: Result<Path<FoodIdParameter>, PathRejection>,
 ) -> Response {

@@ -1,15 +1,32 @@
 //! MCP search tool schema and invocation.
 
+use std::sync::Arc;
+
+use crumbs_database::oauth::OAuthScope;
 use crumbs_database::{FoodReader, SearchError};
 use rmcp::ErrorData;
+use rmcp::handler::server::router::tool::ToolRoute;
+use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::model::{CallToolResponse, CallToolResult, Tool, ToolAnnotations};
 use serde_json::{Map, Value, json};
 
-use crate::search::{self, SearchRequest};
+use super::SearchRequest;
+use crate::mcp::ToolRegistration;
 
-pub(super) const NAME: &str = "search_foods";
+pub(crate) fn mcp_tools<S>() -> impl Iterator<Item = ToolRegistration<S>>
+where
+    S: FoodReader + Send + Sync + 'static,
+{
+    let route: ToolRoute<Arc<S>> =
+        ToolRoute::new_dyn(tool(), |context: ToolCallContext<'_, Arc<S>>| {
+            Box::pin(async move { call(context.service.as_ref(), context.arguments).await })
+        });
+    std::iter::once(ToolRegistration::new(route, OAuthScope::Read))
+}
 
-pub(super) async fn call<S: FoodReader + ?Sized>(
+const NAME: &str = "search_foods";
+
+async fn call<S: FoodReader + ?Sized>(
     reader: &S,
     arguments: Option<Map<String, Value>>,
 ) -> Result<CallToolResponse, ErrorData> {
@@ -19,7 +36,7 @@ pub(super) async fn call<S: FoodReader + ?Sized>(
             Ok(request) => request,
             Err(error) => return Ok(tool_error(error.to_string()).into()),
         };
-    match search::execute(reader, request).await {
+    match super::execute(reader, request).await {
         Ok(response) => {
             let value = serde_json::to_value(response)
                 .map_err(|_| ErrorData::internal_error("food search serialization failed", None))?;
@@ -30,7 +47,7 @@ pub(super) async fn call<S: FoodReader + ?Sized>(
     }
 }
 
-pub(super) fn tool() -> Tool {
+fn tool() -> Tool {
     let schema = Map::from_iter([
         ("type".to_owned(), json!("object")),
         ("required".to_owned(), json!(["query"])),

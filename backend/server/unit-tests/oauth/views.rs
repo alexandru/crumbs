@@ -1,6 +1,3 @@
-use axum::body::to_bytes;
-use axum::http::{StatusCode, header::CONTENT_TYPE};
-
 use super::*;
 
 #[test]
@@ -29,6 +26,7 @@ fn login_escapes_untrusted_client_and_error_text() {
     assert!(markup.contains("Read the food library"));
     assert!(markup.contains("view nutrition data"));
     assert!(markup.contains("Only continue if you started this connection."));
+    assert!(markup.contains("href=\"/assets/main.css\""));
 }
 
 #[test]
@@ -46,22 +44,4 @@ fn login_shows_only_the_requested_permissions() {
     assert!(markup.contains("Create, edit, and delete custom foods"));
     assert!(!markup.contains("Read the food library"));
     assert!(!markup.contains("view nutrition data"));
-}
-
-#[tokio::test]
-async fn stylesheet_is_served_as_css() -> Result<(), axum::Error> {
-    let response = stylesheet();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
-        Some("text/css; charset=utf-8")
-    );
-
-    let body = to_bytes(response.into_body(), usize::MAX).await?;
-    assert!(String::from_utf8_lossy(&body).contains(".login-card"));
-    Ok(())
 }
