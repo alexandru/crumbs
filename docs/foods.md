@@ -81,7 +81,7 @@ for `create_custom_food`, and:
 
 for `update_custom_food`. `get_custom_food` and `delete_custom_food` take `{"id":42}`. `list_custom_foods` takes an optional `limit`. Create, get, and update return the full food record; list returns `{"foods":[...]}`; delete returns `{"id":42,"deleted":true}`.
 
-Management reads and writes only address foods whose source and dataset are both `custom`. Missing IDs and imported-food IDs produce HTTP 404 or an MCP tool error. Invalid input produces HTTP 400 or an MCP tool error. Storage failures produce a generic HTTP 500 or MCP tool error without storage details. REST writes without `crumbs:write` receive HTTP 403. MCP calls without the required permission return an `insufficient_scope` tool error identifying the required scope.
+Management reads and writes only address foods whose source and dataset are both `custom`. Missing IDs and imported-food IDs produce HTTP 404 or an MCP tool error. Invalid input produces HTTP 400 or an MCP tool error. Storage failures produce a generic HTTP 500 or MCP tool error without storage details. REST and MCP operations without the required permission receive HTTP 403 with a Bearer `WWW-Authenticate` challenge identifying `insufficient_scope`, the required scope, and the protected resource metadata URI. MCP clients can request the additional permission through OAuth and retry the operation.
 
 ## Rust API
 

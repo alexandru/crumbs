@@ -7,6 +7,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use crumbs_database::nutrition::FoodData;
+use crumbs_database::oauth::OAuthScope;
 use crumbs_database::{
     CustomFoodInput, CustomFoodStore, Database, DatabaseConfig, Dataset, Food, FoodId, FoodReader,
     FoodSearchResult, FoodSearchResults, FoodWriter, SearchError, SearchLimit, SearchQuery, Source,
@@ -18,9 +19,13 @@ use tower::ServiceExt;
 
 use super::{config, search::NAME};
 use crate::oauth::tests::{
-    TEST_MCP_ACCESS_TOKEN, TEST_MCP_WRITE_ACCESS_TOKEN, TEST_REST_ACCESS_TOKEN,
-    TEST_REST_WRITE_ACCESS_TOKEN, test_authorization_server,
+    TEST_ISSUER, TEST_MCP_ACCESS_TOKEN, TEST_MCP_RESOURCE, TEST_MCP_WRITE_ACCESS_TOKEN,
+    TEST_REST_ACCESS_TOKEN, TEST_REST_WRITE_ACCESS_TOKEN, seed_session_with_scope,
+    test_authorization_server,
 };
+
+const TEST_MCP_WRITE_ONLY_ACCESS_TOKEN: &str = "test-mcp-write-only-access-token";
+const TEST_MCP_WRITE_ONLY_REFRESH_TOKEN: &str = "test-mcp-write-only-refresh-token";
 
 type SourceFoodIdRef<'a> = &'a str;
 type FoodDescriptionRef<'a> = &'a str;
@@ -113,6 +118,33 @@ struct ResponseBody {
     status: StatusCode,
     headers: HeaderMap,
     json: Value,
+}
+
+fn assert_mcp_insufficient_scope_challenge(
+    response: &ResponseBody,
+    scope: &str,
+) -> Result<(), Box<dyn Error>> {
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    let challenge = response
+        .headers
+        .get(header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or("MCP scope denial has no WWW-Authenticate challenge")?;
+    let metadata = format!("{TEST_ISSUER}/.well-known/oauth-protected-resource/mcp");
+    assert!(challenge.starts_with("Bearer "), "{challenge}");
+    assert!(
+        challenge.contains("error=\"insufficient_scope\""),
+        "{challenge}"
+    );
+    assert!(
+        challenge.contains(&format!("scope=\"{scope}\"")),
+        "{challenge}"
+    );
+    assert!(
+        challenge.contains(&format!("resource_metadata=\"{metadata}\"")),
+        "{challenge}"
+    );
+    Ok(())
 }
 
 fn http_request(uri: &str) -> Result<Request<Body>, Box<dyn Error>> {
@@ -674,6 +706,15 @@ async fn rest_custom_food_writes_require_write_scope() -> Result<(), Box<dyn Err
 async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Result<(), Box<dyn Error>>
 {
     let app = TestApplication::new().await?;
+    seed_session_with_scope(
+        app._authorization_database.as_ref(),
+        "test-mcp-write-only-client",
+        TEST_MCP_RESOURCE,
+        TEST_MCP_WRITE_ONLY_ACCESS_TOKEN,
+        TEST_MCP_WRITE_ONLY_REFRESH_TOKEN,
+        OAuthScope::Write,
+    )
+    .await?;
     mcp_initialize(&app).await?;
 
     let tools = app
@@ -714,35 +755,52 @@ async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Resul
         .ok_or("MCP delete tool is missing")?;
     assert_eq!(delete_tool["annotations"]["destructiveHint"], true);
 
+    let create_arguments = json!({
+        "food": {
+            "description": "MCP sesame noodles",
+            "notes": "Noodles, sesame paste, lime",
+            "parsed_data": {
+                "nutrition": { "per": "100 g", "energy": "315 kcal", "protein": "9 g" },
+                "serving_sizes": []
+            }
+        }
+    });
     let read_denied_create = mcp_call_router_with_token(
         &app.router,
         3,
         "create_custom_food",
-        json!({ "food": { "description": "Denied creation" } }),
+        create_arguments.clone(),
         TEST_MCP_ACCESS_TOKEN,
     )
     .await?;
-    assert_eq!(read_denied_create.status, StatusCode::OK);
+    assert_mcp_insufficient_scope_challenge(&read_denied_create, "crumbs:write")?;
     assert_eq!(read_denied_create.json["result"]["isError"], true);
     assert_eq!(
         read_denied_create.json["result"]["structuredContent"],
         json!({"error":"insufficient_scope", "required_scope":"crumbs:write"})
     );
 
+    let empty_after_denial = mcp_call_router_with_token(
+        &app.router,
+        16,
+        "list_custom_foods",
+        json!({}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(empty_after_denial.status, StatusCode::OK);
+    assert_eq!(
+        empty_after_denial.json["result"]["structuredContent"]["foods"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
+
     let created = mcp_call_router_with_token(
         &app.router,
-        4,
+        3,
         "create_custom_food",
-        json!({
-            "food": {
-                "description": "MCP sesame noodles",
-                "notes": "Noodles, sesame paste, lime",
-                "parsed_data": {
-                    "nutrition": { "per": "100 g", "energy": "315 kcal", "protein": "9 g" },
-                    "serving_sizes": []
-                }
-            }
-        }),
+        create_arguments,
         TEST_MCP_WRITE_ACCESS_TOKEN,
     )
     .await?;
@@ -788,6 +846,21 @@ async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Resul
         *created_food
     );
 
+    let write_only_read = mcp_call_router_with_token(
+        &app.router,
+        17,
+        "list_custom_foods",
+        json!({}),
+        TEST_MCP_WRITE_ONLY_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_mcp_insufficient_scope_challenge(&write_only_read, "crumbs:read")?;
+    assert_eq!(write_only_read.json["result"]["isError"], true);
+    assert_eq!(
+        write_only_read.json["result"]["structuredContent"],
+        json!({"error":"insufficient_scope", "required_scope":"crumbs:read"})
+    );
+
     let read_denied_update = mcp_call_router_with_token(
         &app.router,
         7,
@@ -796,6 +869,7 @@ async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Resul
         TEST_MCP_ACCESS_TOKEN,
     )
     .await?;
+    assert_mcp_insufficient_scope_challenge(&read_denied_update, "crumbs:write")?;
     assert_eq!(read_denied_update.json["result"]["isError"], true);
     assert_eq!(
         read_denied_update.json["result"]["structuredContent"]["required_scope"],
@@ -909,6 +983,7 @@ async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Resul
         TEST_MCP_ACCESS_TOKEN,
     )
     .await?;
+    assert_mcp_insufficient_scope_challenge(&read_denied_delete, "crumbs:write")?;
     assert_eq!(read_denied_delete.json["result"]["isError"], true);
     assert_eq!(
         read_denied_delete.json["result"]["structuredContent"]["required_scope"],

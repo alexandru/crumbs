@@ -165,7 +165,7 @@ pub(crate) async fn test_authorization_server(
         TEST_MCP_RESOURCE,
         TEST_MCP_WRITE_ACCESS_TOKEN,
         TEST_MCP_WRITE_REFRESH_TOKEN,
-        "crumbs:read crumbs:write",
+        FoodScopes::ReadWrite,
     )
     .await?;
     seed_session_with_scope(
@@ -174,7 +174,7 @@ pub(crate) async fn test_authorization_server(
         TEST_REST_RESOURCE,
         TEST_REST_WRITE_ACCESS_TOKEN,
         TEST_REST_WRITE_REFRESH_TOKEN,
-        "crumbs:read crumbs:write",
+        FoodScopes::ReadWrite,
     )
     .await?;
     Ok(AuthorizationServer::new(store, oauth_config()?).await?)
@@ -193,7 +193,7 @@ pub(crate) async fn seed_session(
         resource,
         access_token,
         refresh_token,
-        "crumbs:read",
+        FoodScopes::Read,
     )
     .await
 }
@@ -204,7 +204,7 @@ pub(crate) async fn seed_session_with_scope(
     resource: &str,
     access_token: &str,
     refresh_token: &str,
-    scope: &str,
+    scope: FoodScopes,
 ) -> TestResult<()> {
     let (user_id, password_hash) = test_user(store).await?;
     let now = protocol::now()?;
@@ -232,7 +232,7 @@ pub(crate) async fn seed_session_with_scope(
                     client_id: client.id.clone(),
                     redirect_uri: TEST_REDIRECT_URI.to_owned(),
                     resource: resource.to_owned(),
-                    scope: scope.to_owned(),
+                    scope,
                     state: None,
                     code_challenge: challenge.clone(),
                 },
@@ -1303,7 +1303,7 @@ async fn seed_authorization_code(
                     client_id: client_id.to_owned(),
                     redirect_uri: redirect_uri.to_owned(),
                     resource: resource.to_owned(),
-                    scope: "crumbs:read".to_owned(),
+                    scope: FoodScopes::Read,
                     state: None,
                     code_challenge: challenge.clone(),
                 },

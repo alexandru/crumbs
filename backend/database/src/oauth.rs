@@ -39,7 +39,70 @@ pub type RedirectUri = String;
 /// Resource server URI associated with a grant or session.
 pub type ResourceUri = String;
 /// Granted OAuth scopes.
-pub type OAuthScope = String;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OAuthScope {
+    /// Read access to the food library and nutrition data.
+    Read,
+    /// Write access to custom foods.
+    Write,
+    /// Read access and write access to custom foods.
+    ReadWrite,
+}
+
+impl OAuthScope {
+    /// Parses supported OAuth scopes and normalizes order and duplicates.
+    ///
+    /// Returns `None` when the input is empty or contains an unsupported scope.
+    pub fn parse(value: &str) -> Option<Self> {
+        let mut read = false;
+        let mut write = false;
+
+        for scope in value.split_whitespace() {
+            match scope {
+                "crumbs:read" => read = true,
+                "crumbs:write" => write = true,
+                _ => return None,
+            }
+        }
+
+        match (read, write) {
+            (true, false) => Some(Self::Read),
+            (false, true) => Some(Self::Write),
+            (true, true) => Some(Self::ReadWrite),
+            (false, false) => None,
+        }
+    }
+
+    /// Returns whether this scope grants read access.
+    pub const fn can_read(self) -> bool {
+        matches!(self, Self::Read | Self::ReadWrite)
+    }
+
+    /// Returns whether this scope grants custom-food write access.
+    pub const fn can_write(self) -> bool {
+        matches!(self, Self::Write | Self::ReadWrite)
+    }
+
+    /// Returns whether this scope includes all permissions in `required`.
+    pub fn includes(self, required: Self) -> bool {
+        matches!(self, Self::ReadWrite) || self == required
+    }
+
+    /// Returns the canonical space-separated representation of this scope.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "crumbs:read",
+            Self::Write => "crumbs:write",
+            Self::ReadWrite => "crumbs:read crumbs:write",
+        }
+    }
+}
+
+impl fmt::Display for OAuthScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 /// Client-provided OAuth state value.
 pub type ClientState = String;
 /// PKCE challenge value.
@@ -214,30 +277,31 @@ pub trait OAuthStore: Sync {
 
     /// Redeems a matching, unexpired authorization code and creates a user
     /// session and token pair. When `requested_scope` is present, it must match
-    /// the approved scope. Invalid, expired, mismatched, or wrong-scope codes
-    /// return without consuming an unused code. Reusing a matching redeemed
-    /// code revokes its session family and commits before returning `None`,
-    /// even when the code has since expired.
+    /// the approved scope. An explicit scope mismatch returns
+    /// [`AuthStoreError::InvalidScope`] without consuming an unused code.
+    /// Invalid, expired, or mismatched codes also return without consuming an
+    /// unused code. Reusing a matching redeemed code revokes its session family
+    /// and commits before returning `None`, even when the code has since expired.
     fn redeem_code(
         &self,
         redemption: &CodeRedemption,
-        requested_scope: Option<&str>,
+        requested_scope: Option<&OAuthScope>,
         tokens: &TokenPair,
         now: AuthTimestamp,
     ) -> impl Future<Output = Result<Option<UserSession>, AuthStoreError>> + Send;
 
     /// Rotates a live refresh token. When `requested_scope` is present, it must
-    /// match the session's approved scope. A mismatch does not consume the
-    /// refresh token. Reusing a matching used refresh token revokes its session
-    /// family and commits before returning `None`. Rotation keeps the session's
-    /// original expiry and clamps the new access-token expiry to that absolute
-    /// time.
+    /// match the session's approved scope. A mismatch returns
+    /// [`AuthStoreError::InvalidScope`] and does not consume the refresh token.
+    /// Reusing a matching used refresh token revokes its session family and
+    /// commits before returning `None`. Rotation keeps the session's original
+    /// expiry and clamps the new access-token expiry to that absolute time.
     fn rotate_refresh(
         &self,
         refresh_hash: &CredentialHash,
         client_id: &str,
         resource: &str,
-        requested_scope: Option<&str>,
+        requested_scope: Option<&OAuthScope>,
         tokens: &TokenPair,
         now: AuthTimestamp,
     ) -> impl Future<Output = Result<Option<UserSession>, AuthStoreError>> + Send;

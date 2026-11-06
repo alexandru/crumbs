@@ -14,7 +14,7 @@ fn authorization_grant_redacts_client_state_in_debug() {
         client_id: "client".to_owned(),
         redirect_uri: "https://client.example/callback".to_owned(),
         resource: "https://api.example".to_owned(),
-        scope: "read".to_owned(),
+        scope: OAuthScope::Read,
         state: Some("client-secret-state".to_owned()),
         code_challenge: "challenge".to_owned(),
     };

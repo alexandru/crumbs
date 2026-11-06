@@ -16,8 +16,11 @@ use serde_json::json;
 
 use crate::oauth::FoodScopes;
 
+mod authorization;
 mod custom_foods;
 mod search;
+
+pub(crate) use authorization::McpAuthorization;
 
 pub(crate) struct FoodSearchServer<S> {
     reader: Arc<S>,
@@ -68,23 +71,20 @@ where
             ));
         }
 
-        let write = custom_tool.is_some_and(|tool| tool.requires_write());
-        let scopes = context
+        let required = if custom_tool.is_some_and(|tool| tool.requires_write()) {
+            FoodScopes::Write
+        } else {
+            FoodScopes::Read
+        };
+        let authorization = context
             .extensions
             .get::<axum::http::request::Parts>()
-            .and_then(|parts| parts.extensions.get::<FoodScopes>());
-        let permitted = scopes.is_some_and(|scopes| {
-            if write {
-                scopes.can_write()
-            } else {
-                scopes.can_read()
-            }
-        });
+            .and_then(|parts| parts.extensions.get::<McpAuthorization>());
+        let permitted = authorization.is_some_and(|authorization| authorization.permits(required));
         if !permitted {
-            let required = if write { "crumbs:write" } else { "crumbs:read" };
             return Ok(rmcp::model::CallToolResult::structured_error(json!({
                 "error": "insufficient_scope",
-                "required_scope": required,
+                "required_scope": required.as_str(),
             }))
             .into());
         }

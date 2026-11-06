@@ -214,7 +214,7 @@ where
                         resource: resource.to_owned(),
                         code_challenge,
                     },
-                    requested_scopes.map(FoodScopes::as_str),
+                    requested_scopes.as_ref(),
                     &pair,
                     now,
                 )
@@ -230,7 +230,7 @@ where
                     &protocol::digest(&token),
                     &client.id,
                     resource,
-                    requested_scopes.map(FoodScopes::as_str),
+                    requested_scopes.as_ref(),
                     &pair,
                     now,
                 )
@@ -241,13 +241,10 @@ where
     };
     match session {
         Ok(Some(session)) => {
-            let Some(scopes) = FoodScopes::parse(&session.scope) else {
-                return internal_error();
-            };
             let mut response = json!({
                 "access_token": access.as_str(), "token_type": "Bearer",
                 "expires_in": (access_expires_at.min(session.expires_at) - now) / 1000,
-                "scope": scopes.as_str(),
+                "scope": session.scope.as_str(),
             });
             if client.allow_refresh {
                 response["refresh_token"] = json!(refresh.as_str());
