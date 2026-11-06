@@ -162,6 +162,9 @@ pub enum AuthStoreError {
     /// The OAuth client or pending authorization capacity has been reached.
     #[error("OAuth storage capacity reached")]
     Capacity,
+    /// The requested scope does not match the approved scope.
+    #[error("OAuth scope does not match the approved grant")]
+    InvalidScope,
 }
 
 /// Persists OAuth state without exposing storage-engine types.
@@ -210,26 +213,31 @@ pub trait OAuthStore: Sync {
     ) -> impl Future<Output = Result<Option<AuthorizationGrant>, AuthStoreError>> + Send;
 
     /// Redeems a matching, unexpired authorization code and creates a user
-    /// session and token pair. Invalid, expired, or mismatched codes return
-    /// `None` without consuming an unused code. Reusing a matching redeemed
+    /// session and token pair. When `requested_scope` is present, it must match
+    /// the approved scope. Invalid, expired, mismatched, or wrong-scope codes
+    /// return without consuming an unused code. Reusing a matching redeemed
     /// code revokes its session family and commits before returning `None`,
     /// even when the code has since expired.
     fn redeem_code(
         &self,
         redemption: &CodeRedemption,
+        requested_scope: Option<&str>,
         tokens: &TokenPair,
         now: AuthTimestamp,
     ) -> impl Future<Output = Result<Option<UserSession>, AuthStoreError>> + Send;
 
-    /// Rotates a live refresh token. Reusing a matching used refresh token
-    /// revokes its session family and commits before returning `None`. Rotation
-    /// keeps the session's original expiry and clamps the new access-token
-    /// expiry to that absolute time.
+    /// Rotates a live refresh token. When `requested_scope` is present, it must
+    /// match the session's approved scope. A mismatch does not consume the
+    /// refresh token. Reusing a matching used refresh token revokes its session
+    /// family and commits before returning `None`. Rotation keeps the session's
+    /// original expiry and clamps the new access-token expiry to that absolute
+    /// time.
     fn rotate_refresh(
         &self,
         refresh_hash: &CredentialHash,
         client_id: &str,
         resource: &str,
+        requested_scope: Option<&str>,
         tokens: &TokenPair,
         now: AuthTimestamp,
     ) -> impl Future<Output = Result<Option<UserSession>, AuthStoreError>> + Send;

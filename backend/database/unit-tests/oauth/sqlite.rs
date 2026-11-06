@@ -113,14 +113,21 @@ async fn authorization_bindings_are_checked_and_code_replay_revokes_the_family()
     ] {
         assert!(
             database
-                .redeem_code(&invalid, &tokens, NOW + 20)
+                .redeem_code(&invalid, None, &tokens, NOW + 20)
                 .await?
                 .is_none()
         );
     }
 
+    assert!(matches!(
+        database
+            .redeem_code(&redemption, Some("write"), &tokens, NOW + 20)
+            .await,
+        Err(AuthStoreError::InvalidScope)
+    ));
+
     let session = database
-        .redeem_code(&redemption, &tokens, NOW + 20)
+        .redeem_code(&redemption, None, &tokens, NOW + 20)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
     assert_eq!(session.user_id, user_id);
@@ -136,7 +143,7 @@ async fn authorization_bindings_are_checked_and_code_replay_revokes_the_family()
     let replay_tokens = token_pair(30, 31, 1_300, 1_600);
     assert!(
         database
-            .redeem_code(&redemption, &replay_tokens, 1_200)
+            .redeem_code(&redemption, None, &replay_tokens, 1_200)
             .await?
             .is_none()
     );
@@ -174,7 +181,7 @@ async fn refresh_rotation_clamps_expiry_and_replay_revokes_the_family()
     .await?;
     let initial = token_pair(43, 44, 1_150, 1_500);
     let session = database
-        .redeem_code(&redemption, &initial, NOW + 20)
+        .redeem_code(&redemption, None, &initial, NOW + 20)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
 
@@ -185,6 +192,7 @@ async fn refresh_rotation_clamps_expiry_and_replay_revokes_the_family()
                 &initial.refresh_hash,
                 "wrong-client",
                 &session.resource,
+                None,
                 &rotated,
                 1_050
             )
@@ -197,17 +205,32 @@ async fn refresh_rotation_clamps_expiry_and_replay_revokes_the_family()
                 &initial.refresh_hash,
                 &client.id,
                 "wrong-resource",
+                None,
                 &rotated,
                 1_050
             )
             .await?
             .is_none()
     );
+    assert!(matches!(
+        database
+            .rotate_refresh(
+                &initial.refresh_hash,
+                &client.id,
+                &session.resource,
+                Some("write"),
+                &rotated,
+                1_050,
+            )
+            .await,
+        Err(AuthStoreError::InvalidScope)
+    ));
     let rotated_session = database
         .rotate_refresh(
             &initial.refresh_hash,
             &client.id,
             &session.resource,
+            Some("read"),
             &rotated,
             1_050,
         )
@@ -240,6 +263,7 @@ async fn refresh_rotation_clamps_expiry_and_replay_revokes_the_family()
                 &initial.refresh_hash,
                 &client.id,
                 &session.resource,
+                None,
                 &replay_tokens,
                 1_100,
             )
@@ -284,6 +308,7 @@ async fn password_change_deactivation_and_delete_revoke_authorizations_and_sessi
         database
             .redeem_code(
                 &pending_redemption,
+                None,
                 &token_pair(63, 64, 1_400, 1_600),
                 1_100,
             )
@@ -308,7 +333,7 @@ async fn password_change_deactivation_and_delete_revoke_authorizations_and_sessi
     .await?;
     let first_tokens = token_pair(68, 69, 1_500, 1_800);
     let first_session = database
-        .redeem_code(&first_redemption, &first_tokens, 1_120)
+        .redeem_code(&first_redemption, None, &first_tokens, 1_120)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
     database.set_user_active(user_id, false).await?;
@@ -337,7 +362,7 @@ async fn password_change_deactivation_and_delete_revoke_authorizations_and_sessi
     .await?;
     let second_tokens = token_pair(73, 74, 1_600, 1_900);
     let second_session = database
-        .redeem_code(&second_redemption, &second_tokens, 1_220)
+        .redeem_code(&second_redemption, None, &second_tokens, 1_220)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
     database.delete_user(user_id).await?;
@@ -374,8 +399,8 @@ async fn concurrent_redemptions_have_one_successful_result() -> Result<(), Box<d
     .await?;
     let tokens = token_pair(83, 84, 1_300, 1_500);
     let (first, second) = tokio::join!(
-        database.redeem_code(&redemption, &tokens, 1_100),
-        database.redeem_code(&redemption, &tokens, 1_100),
+        database.redeem_code(&redemption, None, &tokens, 1_100),
+        database.redeem_code(&redemption, None, &tokens, 1_100),
     );
     let first = first?;
     let second = second?;
@@ -408,7 +433,7 @@ async fn used_authorization_codes_survive_pruning_until_their_session_expires()
     .await?;
     let tokens = token_pair(93, 94, 1_200, 1_500);
     let session = database
-        .redeem_code(&redemption, &tokens, 1_050)
+        .redeem_code(&redemption, None, &tokens, 1_050)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
     database.prune_oauth(1_300).await?;
@@ -422,7 +447,7 @@ async fn used_authorization_codes_survive_pruning_until_their_session_expires()
     let replay_tokens = token_pair(95, 96, 1_400, 1_600);
     assert!(
         database
-            .redeem_code(&redemption, &replay_tokens, 1_300)
+            .redeem_code(&redemption, None, &replay_tokens, 1_300)
             .await?
             .is_none()
     );
@@ -462,7 +487,7 @@ async fn database_reopen_preserves_oauth_clients_and_sessions() -> Result<(), Bo
     .await?;
     let tokens = token_pair(103, 104, 1_300, 1_500);
     let session = database
-        .redeem_code(&redemption, &tokens, 1_100)
+        .redeem_code(&redemption, None, &tokens, 1_100)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
     database.close().await;

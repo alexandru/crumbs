@@ -10,6 +10,7 @@ fn login_escapes_untrusted_client_and_error_text() {
         csrf_token: "token-\"quoted\"",
         client_name: "<img src=x onerror=alert(1)>",
         redirect_origin: "https://example.test/?a=<b>",
+        scopes: FoodScopes::Read,
         error: Some("<script>alert(1)</script>"),
     })
     .into_string();
@@ -28,6 +29,23 @@ fn login_escapes_untrusted_client_and_error_text() {
     assert!(markup.contains("Read the food library"));
     assert!(markup.contains("view nutrition data"));
     assert!(markup.contains("Only continue if you started this connection."));
+}
+
+#[test]
+fn login_shows_only_the_requested_permissions() {
+    let markup = login(LoginPage {
+        request_id: "request-id",
+        csrf_token: "csrf-token",
+        client_name: "Food manager",
+        redirect_origin: "https://example.test",
+        scopes: FoodScopes::Write,
+        error: None,
+    })
+    .into_string();
+
+    assert!(markup.contains("Create, edit, and delete custom foods"));
+    assert!(!markup.contains("Read the food library"));
+    assert!(!markup.contains("view nutrition data"));
 }
 
 #[tokio::test]

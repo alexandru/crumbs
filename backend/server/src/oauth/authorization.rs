@@ -15,8 +15,8 @@ use zeroize::Zeroizing;
 use crate::oauth_views::{self, LoginPage};
 
 use super::{
-    AuthorizationServer, CODE_TTL, LOGIN_TTL, READ_SCOPE, internal_error, oauth_error, protocol,
-    rate_limited, same_origin,
+    AuthorizationServer, CODE_TTL, FoodScopes, LOGIN_TTL, READ_SCOPE, internal_error, oauth_error,
+    protocol, rate_limited, same_origin,
 };
 
 #[derive(Deserialize)]
@@ -88,12 +88,6 @@ where
         Some("invalid_request")
     } else if !server.accepts_resource(&request.resource) {
         Some("invalid_target")
-    } else if request
-        .scope
-        .as_deref()
-        .is_some_and(|scope| scope != READ_SCOPE)
-    {
-        Some("invalid_scope")
     } else {
         None
     };
@@ -105,6 +99,14 @@ where
             Err(error),
         );
     }
+    let Some(scopes) = FoodScopes::parse(request.scope.as_deref().unwrap_or(READ_SCOPE)) else {
+        return redirect(
+            &server,
+            &request.redirect_uri,
+            request.state.as_deref(),
+            Err("invalid_scope"),
+        );
+    };
     let (Ok(now), Ok(request_id), Ok(csrf_token)) =
         (protocol::now(), protocol::secret(), protocol::secret())
     else {
@@ -120,7 +122,7 @@ where
             client_id: client.id,
             redirect_uri: request.redirect_uri,
             resource: request.resource,
-            scope: READ_SCOPE.to_owned(),
+            scope: scopes.as_str().to_owned(),
             state: request.state,
             code_challenge: request.code_challenge,
         },
@@ -264,6 +266,9 @@ fn render(
     client_name: &str,
     error: Option<&str>,
 ) -> Response {
+    let Some(scopes) = FoodScopes::parse(&pending.grant.scope) else {
+        return internal_error();
+    };
     let origin = match url::Url::parse(&pending.grant.redirect_uri) {
         Ok(url) => url.origin().ascii_serialization(),
         Err(_) => return internal_error(),
@@ -279,6 +284,7 @@ fn render(
         csrf_token,
         client_name,
         redirect_origin: &origin,
+        scopes,
         error,
     })
     .into_response();

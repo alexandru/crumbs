@@ -262,6 +262,7 @@ impl OAuthStore for Database {
     async fn redeem_code(
         &self,
         redemption: &CodeRedemption,
+        requested_scope: Option<&str>,
         tokens: &TokenPair,
         now: AuthTimestamp,
     ) -> Result<Option<UserSession>, AuthStoreError> {
@@ -296,6 +297,10 @@ impl OAuthStore for Database {
         if row.expires_at <= now {
             transaction.commit().await.map_err(storage_error)?;
             return Ok(None);
+        }
+        if requested_scope.is_some_and(|scope| scope != row.scope.as_str()) {
+            transaction.rollback().await.map_err(storage_error)?;
+            return Err(AuthStoreError::InvalidScope);
         }
         let Some(user_id) = row.user_id else {
             return Err(AuthStoreError::InvalidRecord);
@@ -371,6 +376,7 @@ impl OAuthStore for Database {
         refresh_hash: &CredentialHash,
         client_id: &str,
         resource: &str,
+        requested_scope: Option<&str>,
         tokens: &TokenPair,
         now: AuthTimestamp,
     ) -> Result<Option<UserSession>, AuthStoreError> {
@@ -415,6 +421,10 @@ impl OAuthStore for Database {
         }
         if row.used != 0 {
             return Err(AuthStoreError::InvalidRecord);
+        }
+        if requested_scope.is_some_and(|scope| scope != row.scope.as_str()) {
+            transaction.rollback().await.map_err(storage_error)?;
+            return Err(AuthStoreError::InvalidScope);
         }
         let access_expires_at = tokens.access_expires_at.min(row.session_expires_at);
         if access_expires_at <= now {

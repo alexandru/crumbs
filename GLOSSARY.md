@@ -11,7 +11,10 @@ A food entry supplied by a source, whether an ordinary ingredient or a branded p
 The provider of a food entry, such as USDA FoodData Central.
 
 **Dataset**:
-A named collection of food entries supplied by a source, such as USDA Foundation Foods or USDA Branded Foods.
+A source-independent search classification: common for generic reference foods, branded for imported products, and custom for foods managed directly in Crumbs. Each food belongs to one dataset.
+
+**Custom food**:
+A food created and managed directly in Crumbs. It may include nutrition information and notes such as ingredients.
 
 **Source food ID**:
 The identifier a source assigns to a food entry. It identifies the entry within that source, not across different sources.

@@ -30,6 +30,51 @@ pub(crate) struct AuthorizationServer<S> {
     limits: limits::Limits,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FoodScopes {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+impl FoodScopes {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        let mut read = false;
+        let mut write = false;
+
+        for scope in value.split_whitespace() {
+            match scope {
+                READ_SCOPE => read = true,
+                WRITE_SCOPE => write = true,
+                _ => return None,
+            }
+        }
+
+        match (read, write) {
+            (true, false) => Some(Self::Read),
+            (false, true) => Some(Self::Write),
+            (true, true) => Some(Self::ReadWrite),
+            (false, false) => None,
+        }
+    }
+
+    pub(crate) const fn can_read(self) -> bool {
+        matches!(self, Self::Read | Self::ReadWrite)
+    }
+
+    pub(crate) const fn can_write(self) -> bool {
+        matches!(self, Self::Write | Self::ReadWrite)
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => READ_SCOPE,
+            Self::Write => WRITE_SCOPE,
+            Self::ReadWrite => READ_WRITE_SCOPE,
+        }
+    }
+}
+
 impl<S> AuthorizationServer<S>
 where
     S: Users + OAuthStore + Send + 'static,
@@ -134,8 +179,17 @@ where
     S: Users + OAuthStore + Send + 'static,
 {
     let mcp = request.uri().path() == "/mcp" || request.uri().path().starts_with("/mcp/");
+    let required_scope = if mcp {
+        None
+    } else if request.method() == axum::http::Method::GET
+        || request.method() == axum::http::Method::HEAD
+    {
+        Some(FoodScopes::Read)
+    } else {
+        Some(FoodScopes::Write)
+    };
     let Some(token) = protocol::bearer(request.headers()) else {
-        return challenge(&server, mcp);
+        return challenge(&server, mcp, required_scope);
     };
     let Ok(now) = protocol::now() else {
         return internal_error();
@@ -145,12 +199,24 @@ where
         .authenticate_access(&protocol::digest(token), &server.resource(mcp), now)
         .await
     {
-        Ok(Some(session)) if session.scope == READ_SCOPE => {
+        Ok(Some(session)) => {
+            let Some(scopes) = FoodScopes::parse(&session.scope) else {
+                return insufficient_scope(required_scope);
+            };
+            let allowed = match required_scope {
+                Some(FoodScopes::Read) => scopes.can_read(),
+                Some(FoodScopes::Write) => scopes.can_write(),
+                Some(FoodScopes::ReadWrite) => scopes.can_read() && scopes.can_write(),
+                None => true,
+            };
+            if !allowed {
+                return insufficient_scope(required_scope);
+            }
             request.extensions_mut().insert(session);
+            request.extensions_mut().insert(scopes);
             next.run(request).await
         }
-        Ok(Some(_)) => oauth_error(StatusCode::FORBIDDEN, "insufficient_scope"),
-        Ok(None) => challenge(&server, mcp),
+        Ok(None) => challenge(&server, mcp, required_scope),
         Err(_) => internal_error(),
     }
 }
@@ -191,7 +257,7 @@ where
         "token_endpoint_auth_methods_supported": ["none", "client_secret_basic", "client_secret_post"],
         "revocation_endpoint_auth_methods_supported": ["none", "client_secret_basic", "client_secret_post"],
         "code_challenge_methods_supported": ["S256"],
-        "scopes_supported": [READ_SCOPE],
+        "scopes_supported": SUPPORTED_SCOPES,
         "authorization_response_iss_parameter_supported": true,
     }))
 }
@@ -221,7 +287,7 @@ where
     Json(json!({
         "resource": server.resource(mcp),
         "authorization_servers": [server.issuer.as_str()],
-        "scopes_supported": [READ_SCOPE],
+        "scopes_supported": SUPPORTED_SCOPES,
         "bearer_methods_supported": ["header"],
         "resource_name": "Crumbs food library",
     }))
@@ -261,7 +327,11 @@ where
     next.run(request).await
 }
 
-fn challenge<S>(server: &AuthorizationServer<S>, mcp: bool) -> Response
+fn challenge<S>(
+    server: &AuthorizationServer<S>,
+    mcp: bool,
+    required_scope: Option<FoodScopes>,
+) -> Response
 where
     S: Users + OAuthStore + Send + 'static,
 {
@@ -270,12 +340,35 @@ where
     } else {
         "/.well-known/oauth-protected-resource"
     });
-    let value = format!("Bearer resource_metadata=\"{metadata}\", scope=\"{READ_SCOPE}\"");
+    let value = match required_scope {
+        Some(scope) => format!(
+            "Bearer resource_metadata=\"{metadata}\", scope=\"{}\"",
+            scope.as_str()
+        ),
+        None => format!("Bearer resource_metadata=\"{metadata}\""),
+    };
     (
         StatusCode::UNAUTHORIZED,
         [(header::WWW_AUTHENTICATE, value)],
     )
         .into_response()
+}
+
+fn insufficient_scope(required_scope: Option<FoodScopes>) -> Response {
+    let mut response = oauth_error(StatusCode::FORBIDDEN, "insufficient_scope");
+    let challenge = match required_scope {
+        Some(FoodScopes::Read) => "Bearer error=\"insufficient_scope\", scope=\"crumbs:read\"",
+        Some(FoodScopes::Write) => "Bearer error=\"insufficient_scope\", scope=\"crumbs:write\"",
+        Some(FoodScopes::ReadWrite) => {
+            "Bearer error=\"insufficient_scope\", scope=\"crumbs:read crumbs:write\""
+        }
+        None => "Bearer error=\"insufficient_scope\"",
+    };
+    response.headers_mut().insert(
+        header::WWW_AUTHENTICATE,
+        HeaderValue::from_static(challenge),
+    );
+    response
 }
 
 fn oauth_error(status: StatusCode, error: &'static str) -> Response {
@@ -301,6 +394,9 @@ fn same_origin<S>(server: &AuthorizationServer<S>, headers: &HeaderMap) -> bool 
 }
 
 const READ_SCOPE: &str = "crumbs:read";
+const WRITE_SCOPE: &str = "crumbs:write";
+const READ_WRITE_SCOPE: &str = "crumbs:read crumbs:write";
+const SUPPORTED_SCOPES: [&str; 2] = [READ_SCOPE, WRITE_SCOPE];
 const LOGIN_TTL: Duration = Duration::from_secs(10 * 60);
 const CODE_TTL: Duration = Duration::from_secs(60);
 const ACCESS_TTL: Duration = Duration::from_secs(10 * 60);

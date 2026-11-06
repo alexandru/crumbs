@@ -12,7 +12,8 @@ use sqlx::{FromRow, SqlitePool, query, query_scalar};
 use common::DatabaseFixture;
 use crumbs_database::nutrition::{FoodData, NutritionBasis, ServingSize};
 use crumbs_database::{
-    Database, Food, FoodCategory, FoodDescription, FoodId, FoodWriter, SourceFoodId, TagName,
+    Database, Food, FoodCategory, FoodDescription, FoodId, FoodNotes, FoodWriter, SourceFoodId,
+    TagName,
 };
 use crumbs_import::{
     DiagnosticKind, ImportDiagnostic, ImportError, import_usda, import_usda_with_diagnostics,
@@ -53,8 +54,9 @@ async fn imports_foundation_foods_with_typed_data() -> Result<(), Box<dyn StdErr
     let food = food_row(&fixture.pool, "usda", "321358").await?;
     assert!(food.id > 0);
     assert_eq!(food.source, "usda");
-    assert_eq!(food.dataset, "usda_foundation");
+    assert_eq!(food.dataset, "common");
     assert_eq!(food.description, "Hummus, commercial");
+    assert_eq!(food.notes, None);
     assert_eq!(
         food.category.as_deref(),
         Some("Legumes and Legume Products")
@@ -87,8 +89,9 @@ async fn imports_branded_food_with_typed_data() -> Result<(), Box<dyn StdError>>
     assert_eq!(report.committed().get(), 1);
     let food = food_row(&fixture.pool, "usda", "1106281").await?;
     assert_eq!(food.source, "usda");
-    assert_eq!(food.dataset, "usda_branded");
+    assert_eq!(food.dataset, "branded");
     assert_eq!(food.description, "GRANOLA, CINNAMON, RAISIN");
+    assert_eq!(food.notes, None);
     assert_eq!(food.category.as_deref(), Some("Cereal"));
     assert!(fixture.database.list_tags().await?.is_empty());
     let parsed_data = food.parsed_data()?;
@@ -433,7 +436,7 @@ async fn importing_a_subset_retains_absent_rows_and_coexists() -> Result<(), Box
 }
 
 #[tokio::test]
-async fn imports_supported_roots_with_source_qualified_datasets() -> Result<(), Box<dyn StdError>> {
+async fn imports_supported_roots_into_shared_search_datasets() -> Result<(), Box<dyn StdError>> {
     let fixture = DatabaseFixture::open().await?;
     let sr = write_input(
         fixture.directory.path(),
@@ -451,8 +454,8 @@ async fn imports_supported_roots_with_source_qualified_datasets() -> Result<(), 
 
     let sr_food = food_row(&fixture.pool, "usda", "9301").await?;
     let survey_food = food_row(&fixture.pool, "usda", "9302").await?;
-    assert_eq!(sr_food.dataset, "usda_sr_legacy");
-    assert_eq!(survey_food.dataset, "usda_survey_fndds");
+    assert_eq!(sr_food.dataset, "common");
+    assert_eq!(survey_food.dataset, "common");
     Ok(())
 }
 
@@ -958,7 +961,8 @@ async fn imports_into_generic_food_writer_and_passes_typed_data() -> Result<(), 
         .find(|food| food.source_food_id == "7301")
         .ok_or_else(|| io::Error::other("recording store did not receive the food"))?;
     assert_eq!(first_food.source, "usda");
-    assert_eq!(first_food.dataset, "usda_foundation");
+    assert_eq!(first_food.dataset, "common");
+    assert_eq!(first_food.notes, None);
     assert_eq!(first_food.description, "Alternative food");
     assert_eq!(first_food.category.as_deref(), Some("Shelf Stable"));
     assert_eq!(first_food.parsed_data, FoodData::default());
@@ -1101,6 +1105,7 @@ struct FoodRow {
     dataset: DatasetText,
     description: FoodDescription,
     category: Option<FoodCategory>,
+    notes: Option<FoodNotes>,
     parsed_data: ParsedDataText,
 }
 
@@ -1116,7 +1121,7 @@ async fn food_row(
     source_food_id: &str,
 ) -> Result<FoodRow, sqlx::Error> {
     sqlx::query_as(
-        "SELECT id, source, dataset, description, category, parsed_data
+        "SELECT id, source, dataset, description, category, notes, parsed_data
          FROM crumbs_foods
          WHERE source = ? AND source_food_id = ?",
     )
@@ -1211,6 +1216,7 @@ struct RecordedFood {
     dataset: DatasetText,
     description: FoodDescription,
     category: Option<FoodCategory>,
+    notes: Option<String>,
     parsed_data: FoodData,
 }
 
@@ -1266,6 +1272,7 @@ impl FoodWriter for RecordingFoodWriter {
             dataset: food.dataset.to_string(),
             description: food.description.clone(),
             category: food.category.clone(),
+            notes: food.notes.clone(),
             parsed_data: food.parsed_data.clone(),
         };
 

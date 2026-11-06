@@ -7,6 +7,7 @@ use std::io;
 use std::path::PathBuf;
 
 mod config;
+mod custom_foods;
 mod handlers;
 mod mcp;
 mod oauth;

@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use axum::Router;
-use crumbs_database::FoodReader;
+use crumbs_database::{CustomFoodStore, FoodReader};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 
 use crumbs_database::oauth::OAuthStore;
 use crumbs_database::users::Users;
 
-use crate::{handlers, mcp, oauth};
+use crate::{custom_foods, handlers, mcp, oauth};
 
 pub(crate) fn application<S, A>(
     reader: Arc<S>,
@@ -17,13 +17,23 @@ pub(crate) fn application<S, A>(
     authorization: Arc<oauth::AuthorizationServer<A>>,
 ) -> Router
 where
-    S: FoodReader + Send + 'static,
+    S: FoodReader + CustomFoodStore + Send + 'static,
     A: Users + OAuthStore + Send + 'static,
 {
     Router::new()
         .route(
             "/foods/search",
             axum::routing::get(handlers::search_foods::<S>),
+        )
+        .route(
+            "/foods/custom",
+            axum::routing::get(custom_foods::list::<S>).post(custom_foods::create::<S>),
+        )
+        .route(
+            "/foods/custom/{id}",
+            axum::routing::get(custom_foods::get::<S>)
+                .put(custom_foods::update::<S>)
+                .delete(custom_foods::delete::<S>),
         )
         .with_state(Arc::clone(&reader))
         .nest_service("/mcp", mcp::service(reader, mcp_config))

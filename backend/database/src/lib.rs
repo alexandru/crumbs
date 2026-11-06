@@ -26,9 +26,11 @@ pub mod users;
 
 pub use config::{DatabaseConfig, DatabasePath};
 pub use foods::{
-    Dataset, Food, FoodCategory, FoodDescription, FoodId, FoodReader, FoodSearchResult,
-    FoodSummary, FoodWriter, InvalidTagName, SearchError, SearchLimit, SearchQuery,
-    SearchQueryError, Source, SourceFoodId, Tag, TagId, TagName,
+    CustomFoodDescription, CustomFoodInput, CustomFoodStore, Dataset, Food, FoodCategory,
+    FoodDescription, FoodId, FoodNotes, FoodReader, FoodSearchResult, FoodSearchResults,
+    FoodSummary, FoodWriter, InvalidCustomFoodDescription, InvalidDataset, InvalidTagName,
+    SearchError, SearchLimit, SearchQuery, SearchQueryError, Source, SourceFoodId, Tag, TagId,
+    TagName,
 };
 
 /// Handle to the application database.

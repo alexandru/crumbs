@@ -1,0 +1,310 @@
+//! MCP schemas and invocation for custom-food management.
+
+use crumbs_database::{CustomFoodInput, CustomFoodStore};
+use rmcp::ErrorData;
+use rmcp::model::{CallToolResponse, CallToolResult, Tool, ToolAnnotations};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+
+use crate::custom_foods::{FoodIdParameter, ListRequest, ListResponse};
+
+#[derive(Clone, Copy)]
+pub(super) enum CustomFoodTool {
+    List,
+    Get,
+    Create,
+    Update,
+    Delete,
+}
+
+impl CustomFoodTool {
+    pub(super) fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "list_custom_foods" => Some(Self::List),
+            "get_custom_food" => Some(Self::Get),
+            "create_custom_food" => Some(Self::Create),
+            "update_custom_food" => Some(Self::Update),
+            "delete_custom_food" => Some(Self::Delete),
+            _ => None,
+        }
+    }
+
+    pub(super) fn tools() -> impl Iterator<Item = Tool> {
+        [
+            Self::List,
+            Self::Get,
+            Self::Create,
+            Self::Update,
+            Self::Delete,
+        ]
+        .into_iter()
+        .map(Self::tool)
+    }
+
+    pub(super) const fn requires_write(self) -> bool {
+        matches!(self, Self::Create | Self::Update | Self::Delete)
+    }
+
+    pub(super) fn tool(self) -> Tool {
+        let description = match self {
+            Self::List => {
+                "List custom foods by food ID, including nutrition and optional notes. Requires crumbs:read. The limit defaults to 20 and is clamped to 20 through 1000. There is no pagination."
+            }
+            Self::Get => {
+                "Get a custom food by its local food ID, including nutrition and optional notes. Imported or missing IDs return an error. Requires crumbs:read."
+            }
+            Self::Create => {
+                "Create a custom food with a description, optional category and ingredient notes, and optional nutrition and measured servings. Source, dataset, and IDs are assigned by Crumbs. Requires crumbs:write."
+            }
+            Self::Update => {
+                "Replace a custom food's description, category, notes, nutrition, and servings. Omitted optional fields are cleared. Local and source identity and tag assignments are preserved. Imported or missing IDs return an error. Requires crumbs:write."
+            }
+            Self::Delete => {
+                "Permanently delete a custom food and its tag assignments. Imported or missing IDs return an error. Requires crumbs:write."
+            }
+        };
+        Tool::new_with_raw(self.name(), Some(description.into()), self.schema()).with_annotations(
+            ToolAnnotations::new()
+                .read_only(!self.requires_write())
+                .destructive(matches!(self, Self::Update | Self::Delete))
+                .open_world(false),
+        )
+    }
+
+    pub(super) async fn call<S: CustomFoodStore + ?Sized>(
+        self,
+        store: &S,
+        arguments: Option<Map<String, Value>>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        match self
+            .execute(store, Value::Object(arguments.unwrap_or_default()))
+            .await
+        {
+            Ok(value) => Ok(CallToolResult::structured(value).into()),
+            Err(ToolFailure::InvalidInput(message)) => Ok(tool_error(message).into()),
+            Err(ToolFailure::NotFound) => Ok(tool_error("custom food not found").into()),
+            Err(ToolFailure::Storage) => Ok(tool_error("custom food operation failed").into()),
+            Err(ToolFailure::Serialization) => Err(ErrorData::internal_error(
+                "custom food serialization failed",
+                None,
+            )),
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::List => "list_custom_foods",
+            Self::Get => "get_custom_food",
+            Self::Create => "create_custom_food",
+            Self::Update => "update_custom_food",
+            Self::Delete => "delete_custom_food",
+        }
+    }
+
+    fn schema(self) -> Map<String, Value> {
+        let mut schema = Map::from_iter([
+            ("type".to_owned(), json!("object")),
+            ("additionalProperties".to_owned(), json!(false)),
+        ]);
+        let id = json!({"type": "integer", "minimum": 1, "description": "Local Crumbs food ID."});
+        match self {
+            Self::List => {
+                schema.insert(
+                    "properties".to_owned(),
+                    json!({
+                        "limit": {
+                            "type": "integer",
+                            "default": 20,
+                            "description": "Maximum foods returned; clamped to 20 through 1000."
+                        }
+                    }),
+                );
+            }
+            Self::Get | Self::Delete => {
+                schema.insert("required".to_owned(), json!(["id"]));
+                schema.insert("properties".to_owned(), json!({"id": id}));
+            }
+            Self::Create => {
+                schema.insert("required".to_owned(), json!(["food"]));
+                schema.insert(
+                    "properties".to_owned(),
+                    json!({"food": {"$ref": "#/$defs/food"}}),
+                );
+                schema.insert("$defs".to_owned(), food_definitions());
+            }
+            Self::Update => {
+                schema.insert("required".to_owned(), json!(["id", "food"]));
+                schema.insert(
+                    "properties".to_owned(),
+                    json!({
+                        "id": id,
+                        "food": {"$ref": "#/$defs/food"}
+                    }),
+                );
+                schema.insert("$defs".to_owned(), food_definitions());
+            }
+        }
+        schema
+    }
+
+    async fn execute<S: CustomFoodStore + ?Sized>(
+        self,
+        store: &S,
+        arguments: Value,
+    ) -> Result<Value, ToolFailure> {
+        match self {
+            Self::List => {
+                let request: ListRequest = parse(arguments)?;
+                let foods = store
+                    .list_custom_foods(request.limit)
+                    .await
+                    .map_err(|_| ToolFailure::Storage)?;
+                serialize(ListResponse { foods })
+            }
+            Self::Get => {
+                let request: IdRequest = parse(arguments)?;
+                let food = store
+                    .custom_food(request.id.food_id())
+                    .await
+                    .map_err(|_| ToolFailure::Storage)?
+                    .ok_or(ToolFailure::NotFound)?;
+                serialize(food)
+            }
+            Self::Create => {
+                let request: CreateRequest = parse(arguments)?;
+                let food = store
+                    .create_custom_food(&request.food)
+                    .await
+                    .map_err(|_| ToolFailure::Storage)?;
+                serialize(food)
+            }
+            Self::Update => {
+                let request: UpdateRequest = parse(arguments)?;
+                let food = store
+                    .update_custom_food(request.id.food_id(), &request.food)
+                    .await
+                    .map_err(|_| ToolFailure::Storage)?
+                    .ok_or(ToolFailure::NotFound)?;
+                serialize(food)
+            }
+            Self::Delete => {
+                let request: IdRequest = parse(arguments)?;
+                let id = request.id.food_id();
+                if !store
+                    .delete_custom_food(id)
+                    .await
+                    .map_err(|_| ToolFailure::Storage)?
+                {
+                    return Err(ToolFailure::NotFound);
+                }
+                Ok(json!({"id": id, "deleted": true}))
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IdRequest {
+    id: FoodIdParameter,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateRequest {
+    food: CustomFoodInput,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateRequest {
+    id: FoodIdParameter,
+    food: CustomFoodInput,
+}
+
+enum ToolFailure {
+    InvalidInput(String),
+    NotFound,
+    Storage,
+    Serialization,
+}
+
+fn parse<T: DeserializeOwned>(value: Value) -> Result<T, ToolFailure> {
+    serde_json::from_value(value).map_err(|error| ToolFailure::InvalidInput(error.to_string()))
+}
+
+fn serialize<T: Serialize>(value: T) -> Result<Value, ToolFailure> {
+    serde_json::to_value(value).map_err(|_| ToolFailure::Serialization)
+}
+
+fn tool_error(message: impl Into<String>) -> CallToolResult {
+    CallToolResult::structured_error(json!({"error": message.into()}))
+}
+
+fn food_definitions() -> Value {
+    json!({
+        "food": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["description"],
+            "properties": {
+                "description": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank food name or description without NUL characters."},
+                "category": {"type": ["string", "null"]},
+                "notes": {"type": ["string", "null"], "description": "Free text such as ingredients. Returned with the food but excluded from full-text search."},
+                "parsed_data": {"$ref": "#/$defs/food_data"}
+            }
+        },
+        "food_data": {
+            "type": "object",
+            "description": "Nutrition applies per 100 g or 100 ml. Omitted nutrient amounts are unknown. Amounts are unit-bearing decimal strings, such as 7 g or 120 kcal.",
+            "properties": {
+                "nutrition": {"anyOf": [{"$ref": "#/$defs/nutrition"}, {"type": "null"}]},
+                "serving_sizes": {"type": "array", "items": {"$ref": "#/$defs/serving"}}
+            }
+        },
+        "mass": {"type": ["string", "null"], "description": "Nonnegative reported mass with a unit, for example 7 g. Use a string to preserve decimal precision."},
+        "nutrition": {
+            "type": "object",
+            "required": ["per"],
+            "properties": {
+                "per": {"type": "string", "enum": ["100 g", "100 ml"]},
+                "energy": {"type": ["string", "null"], "description": "Reported energy with a unit, for example 120 kcal or 500 kJ."},
+                "fat": {"$ref": "#/$defs/fat"},
+                "carbohydrates": {"$ref": "#/$defs/carbohydrates"},
+                "fibre": {"$ref": "#/$defs/mass"},
+                "protein": {"$ref": "#/$defs/mass"},
+                "sodium": {"$ref": "#/$defs/mass"},
+                "salt": {"$ref": "#/$defs/mass"},
+                "cholesterol": {"$ref": "#/$defs/mass"}
+            }
+        },
+        "fat": mass_properties(&["total", "saturated", "monounsaturated", "polyunsaturated", "trans"]),
+        "carbohydrates": {
+            "type": "object",
+            "properties": {
+                "including_fibre": {"$ref": "#/$defs/mass"},
+                "excluding_fibre": {"$ref": "#/$defs/mass"},
+                "starch": {"$ref": "#/$defs/mass"},
+                "sugars": {"$ref": "#/$defs/sugars"}
+            }
+        },
+        "sugars": mass_properties(&["total", "added", "lactose"]),
+        "serving": {
+            "type": "object",
+            "required": ["name", "quantity"],
+            "properties": {
+                "name": {"type": "string"},
+                "quantity": {"type": "string", "description": "Positive measured mass or volume, for example 30 g or 250 ml."}
+            }
+        }
+    })
+}
+
+fn mass_properties(names: &[&str]) -> Value {
+    let properties: Map<String, Value> = names
+        .iter()
+        .map(|name| ((*name).to_owned(), json!({"$ref": "#/$defs/mass"})))
+        .collect();
+    json!({"type": "object", "properties": properties})
+}

@@ -4,9 +4,9 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crumbs_database::FoodReader;
 use crumbs_database::oauth::OAuthStore;
 use crumbs_database::users::Users;
+use crumbs_database::{CustomFoodStore, FoodReader};
 use tokio::net::TcpListener;
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
@@ -26,7 +26,7 @@ use crate::{Error, HttpConfig};
 /// message cannot be written to standard output, or the HTTP server fails.
 pub async fn start<S>(reader: Arc<S>, config: HttpConfig) -> Result<(), Error>
 where
-    S: FoodReader + Users + OAuthStore + Send + 'static,
+    S: FoodReader + CustomFoodStore + Users + OAuthStore + Send + 'static,
 {
     if !config.oauth.issuer.secure() && !config.bind.is_loopback() {
         return Err(Error::InsecureOAuthBind);

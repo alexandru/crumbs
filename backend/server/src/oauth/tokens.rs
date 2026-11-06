@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use crumbs_database::oauth::{
-    ClientAuthentication, CodeRedemption, OAuthClient, OAuthStore, TokenPair,
+    AuthStoreError, ClientAuthentication, CodeRedemption, OAuthClient, OAuthStore, TokenPair,
 };
 use crumbs_database::users::Users;
 use serde::Deserialize;
@@ -18,7 +18,7 @@ use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 use super::{
-    ACCESS_TTL, AuthorizationServer, READ_SCOPE, SESSION_TTL, internal_error, oauth_error, protocol,
+    ACCESS_TTL, AuthorizationServer, FoodScopes, SESSION_TTL, internal_error, oauth_error, protocol,
 };
 
 #[derive(Deserialize)]
@@ -71,6 +71,13 @@ where
     let grants = request
         .grant_types
         .unwrap_or_else(|| vec!["authorization_code".to_owned()]);
+    let scopes = match request.scope.as_deref() {
+        Some(scope) => FoodScopes::parse(scope),
+        None => Some(FoodScopes::Read),
+    };
+    let Some(scopes) = scopes else {
+        return oauth_error(StatusCode::BAD_REQUEST, "invalid_client_metadata");
+    };
     if name.trim().is_empty()
         || name.len() > 100
         || name.chars().any(char::is_control)
@@ -88,10 +95,6 @@ where
             .response_types
             .as_ref()
             .is_some_and(|types| types.as_slice() != ["code"])
-        || request
-            .scope
-            .as_deref()
-            .is_some_and(|scope| scope != READ_SCOPE)
     {
         return oauth_error(StatusCode::BAD_REQUEST, "invalid_client_metadata");
     }
@@ -127,7 +130,7 @@ where
         "token_endpoint_auth_method": method.as_str(),
         "grant_types": grants,
         "response_types": ["code"],
-        "scope": READ_SCOPE,
+        "scope": scopes.as_str(),
     });
     if !matches!(method, ClientAuthenticationMethod::Public) {
         response["client_secret"] = json!(secret.as_str());
@@ -162,13 +165,13 @@ where
     else {
         return oauth_error(StatusCode::BAD_REQUEST, "invalid_target");
     };
-    if request
-        .scope
-        .as_deref()
-        .is_some_and(|scope| scope != READ_SCOPE)
-    {
-        return oauth_error(StatusCode::BAD_REQUEST, "invalid_scope");
-    }
+    let requested_scopes = match request.scope.as_deref() {
+        Some(scope) => match FoodScopes::parse(scope) {
+            Some(scopes) => Some(scopes),
+            None => return oauth_error(StatusCode::BAD_REQUEST, "invalid_scope"),
+        },
+        None => None,
+    };
     let (Ok(access), Ok(refresh), Ok(now)) =
         (protocol::secret(), protocol::secret(), protocol::now())
     else {
@@ -211,6 +214,7 @@ where
                         resource: resource.to_owned(),
                         code_challenge,
                     },
+                    requested_scopes.map(FoodScopes::as_str),
                     &pair,
                     now,
                 )
@@ -222,7 +226,14 @@ where
             };
             server
                 .store
-                .rotate_refresh(&protocol::digest(&token), &client.id, resource, &pair, now)
+                .rotate_refresh(
+                    &protocol::digest(&token),
+                    &client.id,
+                    resource,
+                    requested_scopes.map(FoodScopes::as_str),
+                    &pair,
+                    now,
+                )
                 .await
         }
         "refresh_token" => return oauth_error(StatusCode::BAD_REQUEST, "unauthorized_client"),
@@ -230,10 +241,13 @@ where
     };
     match session {
         Ok(Some(session)) => {
+            let Some(scopes) = FoodScopes::parse(&session.scope) else {
+                return internal_error();
+            };
             let mut response = json!({
                 "access_token": access.as_str(), "token_type": "Bearer",
                 "expires_in": (access_expires_at.min(session.expires_at) - now) / 1000,
-                "scope": session.scope,
+                "scope": scopes.as_str(),
             });
             if client.allow_refresh {
                 response["refresh_token"] = json!(refresh.as_str());
@@ -241,6 +255,7 @@ where
             Json(response).into_response()
         }
         Ok(None) => oauth_error(StatusCode::BAD_REQUEST, "invalid_grant"),
+        Err(AuthStoreError::InvalidScope) => oauth_error(StatusCode::BAD_REQUEST, "invalid_scope"),
         Err(_) => internal_error(),
     }
 }

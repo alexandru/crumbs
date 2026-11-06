@@ -65,7 +65,16 @@ The public homepage (`GET /`) is a simple welcome page. Food search and MCP APIs
 | `POST /oauth/revoke` | Revoke a client token |
 | `GET /assets/login.css` | Embedded sign-in stylesheet |
 
-All REST and MCP API routes require an `Authorization: Bearer` access token. REST tokens have audience `<issuer>/`; MCP tokens have audience `<issuer>/mcp`. Tokens use the `crumbs:read` scope. A token is accepted only for the resource audience selected during authorization.
+All REST and MCP API routes require an `Authorization: Bearer` access token. REST tokens have audience `<issuer>/`; MCP tokens have audience `<issuer>/mcp`. A token is accepted only for the resource audience selected during authorization. Crumbs supports two scopes:
+
+| Scope | Permission |
+| --- | --- |
+| `crumbs:read` | Search and read the shared food library, including nutrition data. |
+| `crumbs:write` | Create, replace, and delete custom foods. |
+
+Clients may request either scope or both as a space-separated list. Crumbs normalizes the order and duplicate values. If a client omits scope during registration or authorization, Crumbs uses `crumbs:read`. The authorization page shows the permissions requested by the client. A REST request requires `crumbs:read` for `GET` and `HEAD`, and `crumbs:write` for `POST`, `PUT`, `PATCH`, and `DELETE`. MCP calls use the requested tool's permission. Read-only tokens cannot call write operations.
+
+The token endpoint does not support reducing or increasing the approved scope. When a token request explicitly includes scope, it must match the approved scope. When omitted, the issued token keeps the approved scope. Refresh tokens retain the original approved scope.
 
 All active users can read the same shared food catalogue; Crumbs does not currently separate catalogue access by user or role.
 

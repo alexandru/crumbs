@@ -1,6 +1,6 @@
 use std::error::Error as StdError;
 
-use super::{SearchLimit, SearchQuery, SearchQueryError};
+use super::{FoodSearchResults, SearchLimit, SearchQuery, SearchQueryError};
 
 #[test]
 fn query_construction_and_deserialization_reject_empty_or_nul_values()
@@ -32,5 +32,14 @@ fn search_limits_default_and_clamp_to_the_contract_range() -> Result<(), Box<dyn
         let decoded: SearchLimit = serde_json::from_str(json)?;
         assert_eq!(decoded.get(), expected, "input {json}");
     }
+    Ok(())
+}
+
+#[test]
+fn grouped_search_results_serialize_all_empty_groups() -> Result<(), Box<dyn StdError>> {
+    let value = serde_json::to_value(FoodSearchResults::default())?;
+    assert_eq!(value["common"], serde_json::json!([]));
+    assert_eq!(value["branded"], serde_json::json!([]));
+    assert_eq!(value["custom"], serde_json::json!([]));
     Ok(())
 }
