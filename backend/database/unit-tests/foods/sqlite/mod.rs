@@ -4,23 +4,15 @@ use std::time::{Duration, SystemTime};
 
 use sqlx::{FromRow, query_scalar};
 
+use crate::Database;
 use crate::clock::{Clock, UnixMillis};
+use crate::foods::tests::open_database;
 use crate::foods::*;
-use crate::{Database, DatabaseConfig};
 
 #[derive(Debug, PartialEq, Eq, FromRow)]
 pub(super) struct Timestamps {
     pub(super) created_at: UnixMillis,
     pub(super) updated_at: Option<UnixMillis>,
-}
-
-pub(super) async fn open_database() -> Result<(tempfile::TempDir, Database), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let database = Database::open(DatabaseConfig {
-        path: directory.path().join("crumbs.db"),
-    })
-    .await?;
-    Ok((directory, database))
 }
 
 pub(super) fn set_clock(database: &mut Database, time: SystemTime) {

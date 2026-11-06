@@ -96,8 +96,9 @@ mod timestamps {
 
     use crate::foods::sqlite::tests::Timestamps;
     use crate::foods::sqlite::tests::{
-        at, food_timestamps, make_food, open_database, set_clock, source_timestamps,
+        at, food_timestamps, make_food, set_clock, source_timestamps,
     };
+    use crate::foods::tests::open_database;
     use crate::foods::*;
 
     #[tokio::test]

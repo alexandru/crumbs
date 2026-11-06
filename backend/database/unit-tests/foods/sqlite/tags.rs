@@ -181,9 +181,9 @@ mod timestamps {
     use std::io;
 
     use crate::foods::sqlite::tests::{
-        Timestamps, assignment_timestamps, at, has_assignment, make_food, open_database, set_clock,
-        tag_timestamps,
+        Timestamps, assignment_timestamps, at, has_assignment, make_food, set_clock, tag_timestamps,
     };
+    use crate::foods::tests::open_database;
     use crate::foods::*;
 
     #[tokio::test]

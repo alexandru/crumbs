@@ -3,7 +3,8 @@ mod queries {
     use std::io;
 
     use crate::Database;
-    use crate::foods::sqlite::tests::{make_food, open_database};
+    use crate::foods::sqlite::tests::make_food;
+    use crate::foods::tests::open_database;
     use crate::foods::*;
 
     #[tokio::test]
@@ -286,6 +287,7 @@ mod fts {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
     use sqlx::{SqliteConnection, query, query_as, query_scalar};
 
+    use crate::foods::tests::open_database;
     use crate::foods::{
         FoodCategory, FoodDescription, FoodLimit, FoodNotes, FoodSearch, SearchQuery, TagName,
         TagStore,
@@ -1212,15 +1214,6 @@ mod fts {
         assert_eq!(indexed_ids, vec![1, 2]);
         pool.close().await;
         Ok(())
-    }
-
-    async fn open_database() -> Result<(tempfile::TempDir, Database), Box<dyn StdError>> {
-        let directory = tempfile::tempdir()?;
-        let database = Database::open(DatabaseConfig {
-            path: directory.path().join("crumbs.db"),
-        })
-        .await?;
-        Ok((directory, database))
     }
 
     async fn insert_food(

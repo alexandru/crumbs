@@ -171,7 +171,7 @@ impl StdError for FoodStoreError {
 }
 
 impl FoodStoreError {
-    pub(crate) fn new(source: impl StdError + Send + Sync + 'static) -> Self {
+    pub(super) fn new(source: impl StdError + Send + Sync + 'static) -> Self {
         Self(Box::new(source))
     }
 }
