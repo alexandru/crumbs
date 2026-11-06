@@ -1,5 +1,5 @@
 use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
-use crumbs_database::oauth::CredentialHash;
+use crumbs_database::identity::CredentialHash;
 use std::time::Duration;
 
 use super::*;

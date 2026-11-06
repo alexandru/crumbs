@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::Router;
-use crumbs_database::CustomFoodStore;
+use crumbs_database::foods::CustomFoodStore;
 
 use super::handlers;
 

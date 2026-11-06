@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use crumbs_database::oauth::OAuthScope;
+use crumbs_database::identity::OAuthScope;
 
 #[derive(Clone)]
 pub(crate) struct McpAuthorization {

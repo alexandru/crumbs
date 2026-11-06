@@ -85,7 +85,7 @@ Management reads and writes only address foods whose source and dataset are both
 
 ## Rust API
 
-The `crumbs_database` crate exposes `Dataset`, `Food`, `FoodSearchResults`, and `CustomFoodInput`. `FoodReader::search_foods` returns the three dataset arrays. `CustomFoodStore` exposes `create_custom_food`, `custom_food`, `list_custom_foods`, `update_custom_food`, and `delete_custom_food` with the same management boundaries and replacement semantics as HTTP. These traits keep storage-specific errors behind associated types.
+The `crumbs_database::foods` module exposes `Dataset`, `Food`, `SearchResults`, and `CustomFoodInput`. `FoodSearch::search_foods` returns the three dataset arrays. `CustomFoodStore` exposes `create_custom_food`, `custom_food`, `list_custom_foods`, `update_custom_food`, and `delete_custom_food` with the same management boundaries and replacement semantics as HTTP. These traits keep storage-specific errors behind associated types.
 
 ## Existing databases
 

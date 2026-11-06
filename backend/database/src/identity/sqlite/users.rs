@@ -1,9 +1,11 @@
 use sqlx::{FromRow, error::DatabaseError};
 
-use super::{
+use crate::identity::users::{
     PasswordHash, User, UserCredentials, UserError, UserId, UserTimestamp, Username, Users,
 };
-use crate::Database;
+use crate::runtime::Database;
+
+use super::sessions::revoke_user_sessions;
 
 impl Users for Database {
     async fn create_user(
@@ -90,7 +92,9 @@ impl Users for Database {
         if update.rows_affected() == 0 {
             return Err(UserError::NotFound);
         }
-        revoke_user_sessions(id, &mut transaction).await?;
+        revoke_user_sessions(&mut transaction, id)
+            .await
+            .map_err(storage_error)?;
         transaction.commit().await.map_err(storage_error)
     }
 
@@ -106,7 +110,9 @@ impl Users for Database {
             return Err(UserError::NotFound);
         }
         if !active {
-            revoke_user_sessions(id, &mut transaction).await?;
+            revoke_user_sessions(&mut transaction, id)
+                .await
+                .map_err(storage_error)?;
         }
         transaction.commit().await.map_err(storage_error)
     }
@@ -122,23 +128,6 @@ impl Users for Database {
         }
         Ok(())
     }
-}
-
-async fn revoke_user_sessions(
-    id: UserId,
-    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-) -> Result<(), UserError> {
-    sqlx::query("DELETE FROM users_sessions WHERE user_id = ?")
-        .bind(id.get())
-        .execute(&mut **transaction)
-        .await
-        .map_err(storage_error)?;
-    sqlx::query("DELETE FROM oauth_authorizations WHERE user_id = ?")
-        .bind(id.get())
-        .execute(&mut **transaction)
-        .await
-        .map_err(storage_error)?;
-    Ok(())
 }
 
 fn storage_error(source: sqlx::Error) -> UserError {
@@ -199,5 +188,5 @@ impl UserCredentialsRow {
 }
 
 #[cfg(test)]
-#[path = "../../unit-tests/users/sqlite.rs"]
+#[path = "../../../unit-tests/identity/sqlite/users.rs"]
 mod tests;

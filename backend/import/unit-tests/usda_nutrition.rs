@@ -2,7 +2,7 @@ use std::error::Error;
 use std::io;
 
 use super::*;
-use crumbs_database::nutrition::{NutritionBasis, Qualifier, Reported};
+use crumbs_database::nutrition_model::{NutritionBasis, Qualifier, Reported};
 
 fn parse_data(input: &str, kind: FoodKind) -> Result<FoodData, NutritionError> {
     super::parse_food_data(input, kind).map(|parsed| parsed.food_data)

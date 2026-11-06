@@ -6,9 +6,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use common::DatabaseFixture;
-use crumbs_database::{
-    Database, Dataset, Food, FoodCategory, FoodDescription, FoodId, FoodSummary, FoodWriter,
-    Source, TagName,
+use crumbs_database::Database;
+use crumbs_database::foods::{
+    Dataset, Food, FoodCategory, FoodDescription, FoodId, FoodLookup, FoodSummary, FoodWriter,
+    Source, TagName, TagStore,
 };
 use crumbs_import::import_usda;
 use sqlx::{SqlitePool, query, query_scalar};

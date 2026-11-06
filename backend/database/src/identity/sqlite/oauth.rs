@@ -1,12 +1,14 @@
 use sqlx::{FromRow, Sqlite, Transaction};
 
-use super::{
+use crate::identity::oauth::{
     Approval, AuthStoreError, AuthTimestamp, AuthorizationGrant, ClientAuthentication,
     CodeRedemption, CredentialHash, OAuthClient, OAuthScope, OAuthStore, PendingAuthorization,
     ResourceUri, SessionId, TokenPair, UserSession,
 };
-use crate::Database;
-use crate::users::UserId;
+use crate::identity::users::UserId;
+use crate::runtime::Database;
+
+use super::sessions;
 
 impl OAuthStore for Database {
     async fn register_client(
@@ -516,14 +518,7 @@ impl OAuthStore for Database {
 
     async fn revoke_user_sessions(&self, user_id: UserId) -> Result<(), AuthStoreError> {
         let mut transaction = begin_immediate(self).await?;
-        sqlx::query("DELETE FROM users_sessions WHERE user_id = ?")
-            .bind(user_id.get())
-            .execute(&mut *transaction)
-            .await
-            .map_err(storage_error)?;
-        sqlx::query("DELETE FROM oauth_authorizations WHERE user_id = ?")
-            .bind(user_id.get())
-            .execute(&mut *transaction)
+        sessions::revoke_user_sessions(&mut transaction, user_id)
             .await
             .map_err(storage_error)?;
         transaction.commit().await.map_err(storage_error)
@@ -808,5 +803,5 @@ const CLIENT_SECRET_BASIC: &str = "secret_basic";
 const CLIENT_SECRET_POST: &str = "secret_post";
 
 #[cfg(test)]
-#[path = "../../unit-tests/oauth/sqlite.rs"]
+#[path = "../../../unit-tests/identity/sqlite/oauth.rs"]
 mod tests;

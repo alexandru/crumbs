@@ -573,6 +573,12 @@ async fn migration_checksum_mismatch_is_reported_without_a_handle() -> Result<()
 
     assert!(matches!(error, Error::Migration { .. }));
     assert!(
+        error
+            .source()
+            .is_some_and(|source| source.is::<sqlx::migrate::MigrateError>()),
+        "migration error lost its underlying cause: {error}"
+    );
+    assert!(
         error.to_string().contains(&path.display().to_string()),
         "migration error did not name the database path: {error}"
     );
@@ -613,6 +619,12 @@ async fn database_path_that_is_a_directory_reports_the_path() -> Result<(), Box<
     };
 
     assert!(matches!(error, Error::Open { .. }));
+    assert!(
+        error
+            .source()
+            .is_some_and(|source| source.is::<sqlx::Error>()),
+        "open error lost its underlying cause: {error}"
+    );
     assert!(
         error.to_string().contains(&path.display().to_string()),
         "open error did not name the database path: {error}"

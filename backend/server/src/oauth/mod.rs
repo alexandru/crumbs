@@ -10,8 +10,7 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use crumbs_database::oauth::OAuthStore;
-use crumbs_database::users::{PasswordHash, UserError, Users};
+use crumbs_database::identity::{OAuthStore, PasswordHash, UserError, Users};
 use serde_json::json;
 use tokio::sync::Semaphore;
 
@@ -36,7 +35,7 @@ pub(crate) struct AuthorizationServer<S> {
     limits: limits::Limits,
 }
 
-pub(crate) use crumbs_database::oauth::OAuthScope as FoodScopes;
+pub(crate) use crumbs_database::identity::OAuthScope as FoodScopes;
 
 impl<S> AuthorizationServer<S>
 where

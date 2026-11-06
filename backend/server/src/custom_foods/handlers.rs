@@ -7,7 +7,7 @@ use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use crumbs_database::{CustomFoodInput, CustomFoodStore};
+use crumbs_database::foods::{CustomFoodInput, CustomFoodStore};
 use serde_json::json;
 
 use super::model::{FoodIdParameter, ListRequest, ListResponse};

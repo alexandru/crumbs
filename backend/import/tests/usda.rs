@@ -10,11 +10,12 @@ use std::time::Duration;
 use sqlx::{FromRow, SqlitePool, query, query_scalar};
 
 use common::DatabaseFixture;
-use crumbs_database::nutrition::{FoodData, NutritionBasis, ServingSize};
-use crumbs_database::{
-    Database, Food, FoodCategory, FoodDescription, FoodId, FoodNotes, FoodWriter, SourceFoodId,
-    TagName,
+use crumbs_database::Database;
+use crumbs_database::foods::{
+    Food, FoodCategory, FoodDescription, FoodId, FoodNotes, FoodWriter, SourceFoodId, TagName,
+    TagStore,
 };
+use crumbs_database::nutrition_model::{FoodData, NutritionBasis, ServingSize};
 use crumbs_import::{
     DiagnosticKind, ImportDiagnostic, ImportError, import_usda, import_usda_with_diagnostics,
 };

@@ -4,7 +4,7 @@ mod handlers;
 mod mcp;
 mod routes;
 
-use crumbs_database::{FoodReader, FoodSearchResults, SearchError, SearchLimit, SearchQuery};
+use crumbs_database::foods::{FoodLimit, FoodSearch, SearchError, SearchQuery, SearchResults};
 use serde::Deserialize;
 
 pub(crate) use mcp::mcp_tools;
@@ -14,13 +14,13 @@ pub(crate) use routes::routes;
 struct SearchRequest {
     query: SearchQuery,
     #[serde(default)]
-    limit: SearchLimit,
+    limit: FoodLimit,
 }
 
-async fn execute<S: FoodReader + ?Sized>(
+async fn execute<S: FoodSearch + ?Sized>(
     reader: &S,
     request: SearchRequest,
-) -> Result<FoodSearchResults, SearchError<S::Error>> {
+) -> Result<SearchResults, SearchError<S::Error>> {
     reader.search_foods(&request.query, request.limit).await
 }
 

@@ -4,4 +4,4 @@
 
 Changes to this lifecycle decision require agreement with the repository owner.
 
-The SQLite cleanup tests in `backend/database/unit-tests/lib.rs`, particularly `dropping_database_is_nonblocking_and_pool_eventually_closes` and `close_waits_for_checked_out_connections_and_is_idempotent`, verify the drop and explicit-close contracts against actual SQLite file handles on Linux.
+The SQLite cleanup tests in `backend/database/unit-tests/runtime.rs`, particularly `dropping_database_is_nonblocking_and_pool_eventually_closes` and `close_waits_for_checked_out_connections_and_is_idempotent`, verify the drop and explicit-close contracts against actual SQLite file handles on Linux.

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crumbs_database::oauth::OAuthScope;
-use crumbs_database::{CustomFoodInput, CustomFoodStore};
+use crumbs_database::foods::{CustomFoodInput, CustomFoodStore};
+use crumbs_database::identity::OAuthScope;
 use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::ToolRoute;
 use rmcp::handler::server::tool::ToolCallContext;

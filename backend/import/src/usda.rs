@@ -19,8 +19,8 @@ use tokio::sync::mpsc;
 #[path = "usda_nutrition.rs"]
 mod usda_nutrition;
 
-use crumbs_database::nutrition::FoodData;
-use crumbs_database::{Dataset, Food, Source, SourceFoodId};
+use crumbs_database::foods::{Dataset, Food, Source, SourceFoodId};
+use crumbs_database::nutrition_model::FoodData;
 
 /// A validated food record ready for persistence.
 ///

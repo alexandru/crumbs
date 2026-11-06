@@ -1,9 +1,9 @@
 use std::error::Error;
 
 use axum::http::StatusCode;
-use crumbs_database::nutrition::FoodData;
-use crumbs_database::oauth::OAuthScope;
-use crumbs_database::{Dataset, Food, FoodWriter, Source};
+use crumbs_database::foods::{Dataset, Food, FoodWriter, Source};
+use crumbs_database::identity::OAuthScope;
+use crumbs_database::nutrition_model::FoodData;
 use serde_json::{Value, json};
 
 use crate::oauth::tests::{

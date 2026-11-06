@@ -8,10 +8,10 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use crumbs_database::oauth::{
+use crumbs_database::identity::Users;
+use crumbs_database::identity::{
     AuthStoreError, ClientAuthentication, CodeRedemption, OAuthClient, OAuthStore, TokenPair,
 };
-use crumbs_database::users::Users;
 use serde::Deserialize;
 use serde_json::json;
 use subtle::ConstantTimeEq;

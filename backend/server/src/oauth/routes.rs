@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use axum::Router;
-use crumbs_database::oauth::OAuthStore;
-use crumbs_database::users::Users;
+use crumbs_database::identity::OAuthStore;
+use crumbs_database::identity::Users;
 
 use super::{AuthorizationServer, authorization, tokens};
 

@@ -5,7 +5,7 @@ use crate::{DiagnosticField, DiagnosticReason};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
-use crumbs_database::nutrition::{
+use crumbs_database::nutrition_model::{
     Energy, FoodData, Mass, MeasuredQuantity, Measurement, NutritionBasis, NutritionProfile,
     Qualifier, QuantityError, Reported, ServingSize,
 };

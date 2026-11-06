@@ -4,12 +4,12 @@ use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use crumbs_database::nutrition::FoodData;
-use crumbs_database::{
-    CustomFoodInput, CustomFoodStore, Database, DatabaseConfig, Dataset, Food, FoodId, FoodReader,
-    FoodSearchResult, FoodSearchResults, FoodWriter, SearchError, SearchLimit, SearchQuery, Source,
-    TagName,
+use crumbs_database::foods::{
+    CustomFoodInput, CustomFoodStore, Dataset, Food, FoodId, FoodLimit, FoodSearch, FoodWriter,
+    SearchError, SearchQuery, SearchResults, Source, StoredFood, TagName, TagStore,
 };
+use crumbs_database::nutrition_model::FoodData;
+use crumbs_database::{Database, DatabaseConfig};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -116,7 +116,7 @@ async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result
         reader.invocations()?,
         vec![SearchInvocation {
             query: SearchQuery::new("beans")?,
-            limit: SearchLimit::from(1),
+            limit: FoodLimit::from(1),
         }]
     );
 
@@ -135,11 +135,11 @@ async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result
         vec![
             SearchInvocation {
                 query: SearchQuery::new("beans")?,
-                limit: SearchLimit::from(1),
+                limit: FoodLimit::from(1),
             },
             SearchInvocation {
                 query: SearchQuery::new("lentils")?,
-                limit: SearchLimit::from(1_001),
+                limit: FoodLimit::from(1_001),
             },
         ]
     );
@@ -281,7 +281,7 @@ enum ReaderOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SearchInvocation {
     query: SearchQuery,
-    limit: SearchLimit,
+    limit: FoodLimit,
 }
 
 struct RecordingFoodReader {
@@ -316,14 +316,14 @@ impl RecordingFoodReader {
     }
 }
 
-impl FoodReader for RecordingFoodReader {
+impl FoodSearch for RecordingFoodReader {
     type Error = io::Error;
 
     async fn search_foods(
         &self,
         query: &SearchQuery,
-        limit: SearchLimit,
-    ) -> Result<FoodSearchResults, SearchError<Self::Error>> {
+        limit: FoodLimit,
+    ) -> Result<SearchResults, SearchError<Self::Error>> {
         self.invocations
             .lock()
             .map_err(|_| {
@@ -347,8 +347,8 @@ impl FoodReader for RecordingFoodReader {
                     "serving_sizes": []
                 }))
                 .map_err(|error| SearchError::Storage(io::Error::other(error)))?;
-                Ok(FoodSearchResults {
-                    common: vec![FoodSearchResult {
+                Ok(SearchResults {
+                    common: vec![StoredFood {
                         id: FoodId(42),
                         food: Food {
                             source: Source::Borrowed("recording"),
@@ -360,7 +360,7 @@ impl FoodReader for RecordingFoodReader {
                             parsed_data,
                         },
                     }],
-                    ..FoodSearchResults::default()
+                    ..SearchResults::default()
                 })
             }
             ReaderOutcome::InvalidQuery => Err(SearchError::InvalidQuery(
@@ -379,22 +379,19 @@ impl CustomFoodStore for RecordingFoodReader {
     async fn create_custom_food(
         &self,
         _input: &CustomFoodInput,
-    ) -> Result<FoodSearchResult, Self::Error> {
+    ) -> Result<StoredFood, Self::Error> {
         Err(io::Error::other(
             "management unavailable in recording reader",
         ))
     }
 
-    async fn custom_food(&self, _id: FoodId) -> Result<Option<FoodSearchResult>, Self::Error> {
+    async fn custom_food(&self, _id: FoodId) -> Result<Option<StoredFood>, Self::Error> {
         Err(io::Error::other(
             "management unavailable in recording reader",
         ))
     }
 
-    async fn list_custom_foods(
-        &self,
-        _limit: SearchLimit,
-    ) -> Result<Vec<FoodSearchResult>, Self::Error> {
+    async fn list_custom_foods(&self, _limit: FoodLimit) -> Result<Vec<StoredFood>, Self::Error> {
         Err(io::Error::other(
             "management unavailable in recording reader",
         ))
@@ -404,7 +401,7 @@ impl CustomFoodStore for RecordingFoodReader {
         &self,
         _id: FoodId,
         _input: &CustomFoodInput,
-    ) -> Result<Option<FoodSearchResult>, Self::Error> {
+    ) -> Result<Option<StoredFood>, Self::Error> {
         Err(io::Error::other(
             "management unavailable in recording reader",
         ))
