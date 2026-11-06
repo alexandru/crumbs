@@ -110,6 +110,14 @@ pub struct FoodSearchResult {
     pub food: Food,
 }
 
+/// Search results grouped by the dataset assigned to each food.
+#[derive(Debug, Default, Serialize)]
+pub struct FoodSearchResults {
+    pub common: Vec<FoodSearchResult>,
+    pub branded: Vec<FoodSearchResult>,
+    pub custom: Vec<FoodSearchResult>,
+}
+
 /// Failure while searching indexed food data.
 #[derive(Debug, thiserror::Error)]
 pub enum SearchError<E: StdError> {

@@ -3,11 +3,11 @@ use std::fs;
 
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
-use sqlx::{SqliteConnection, query, query_scalar};
+use sqlx::{SqliteConnection, query, query_as, query_scalar};
 
 use crate::{
-    Database, DatabaseConfig, FoodCategory, FoodDescription, FoodReader, SearchLimit, SearchQuery,
-    TagName,
+    Database, DatabaseConfig, FoodCategory, FoodDescription, FoodNotes, FoodReader, SearchLimit,
+    SearchQuery, TagName,
 };
 
 const MIGRATION_0001: &str = include_str!("../migrations/0001_create_crumbs_sources.sql");
@@ -95,26 +95,24 @@ async fn source_and_dataset_are_searchable_fields() -> Result<(), Box<dyn StdErr
     insert_food(&database, 2, "other", "other-1", "Chicken breast", None, "").await?;
     insert_food(&database, 3, "usda", "fdc-2", "Chicken thigh", None, "").await?;
     insert_food(&database, 4, "usda", "fdc-3", "Survey pancakes", None, "").await?;
-    query("UPDATE crumbs_foods SET dataset = 'usda_foundation' WHERE id = 1")
+    query("UPDATE crumbs_foods SET dataset = 'common' WHERE id = 1")
         .execute(&database.pool)
         .await?;
-    query("UPDATE crumbs_foods SET dataset = 'usda_branded' WHERE id = 2")
+    query("UPDATE crumbs_foods SET dataset = 'branded' WHERE id = 2")
         .execute(&database.pool)
         .await?;
-    query("UPDATE crumbs_foods SET dataset = 'usda_sr_legacy' WHERE id = 3")
+    query("UPDATE crumbs_foods SET dataset = 'common' WHERE id = 3")
         .execute(&database.pool)
         .await?;
-    query("UPDATE crumbs_foods SET dataset = 'usda_survey_fndds' WHERE id = 4")
+    query("UPDATE crumbs_foods SET dataset = 'common' WHERE id = 4")
         .execute(&database.pool)
         .await?;
 
-    assert_search_matches(&database, "dataset:usda_foundation", &[1]).await?;
+    assert_search_matches(&database, "dataset:common", &[1, 3, 4]).await?;
     assert_search_matches(&database, "source:USDA", &[1, 3, 4]).await?;
     assert_search_matches(&database, "chicken source:usda", &[1, 3]).await?;
-    assert_search_matches(&database, "source:usda AND dataset:usda_foundation", &[1]).await?;
-    assert_search_matches(&database, "dataset:usda_sr_legacy", &[3]).await?;
-    assert_search_matches(&database, "dataset:usda_survey_fndds", &[4]).await?;
-    assert_search_matches(&database, "dataset:usda_branded", &[2]).await?;
+    assert_search_matches(&database, "chicken source:usda AND dataset:common", &[1, 3]).await?;
+    assert_search_matches(&database, "dataset:branded", &[2]).await?;
     query("INSERT INTO crumbs_sources (id, created_at) VALUES ('community', 0)")
         .execute(&database.pool)
         .await?;
@@ -123,11 +121,11 @@ async fn source_and_dataset_are_searchable_fields() -> Result<(), Box<dyn StdErr
         .await?;
     assert_search_matches(&database, "source:usda", &[3, 4]).await?;
     assert_search_matches(&database, "source:community", &[1]).await?;
-    query("UPDATE crumbs_foods SET dataset = 'Community_Custom' WHERE id = 1")
+    query("UPDATE crumbs_foods SET dataset = 'custom' WHERE id = 1")
         .execute(&database.pool)
         .await?;
-    assert_search_matches(&database, "dataset:usda_foundation", &[]).await?;
-    assert_search_matches(&database, "dataset:Community_Custom", &[1]).await?;
+    assert_search_matches(&database, "dataset:common", &[3, 4]).await?;
+    assert_search_matches(&database, "dataset:custom", &[1]).await?;
     assert_fts_integrity(&database).await?;
     Ok(())
 }
@@ -712,7 +710,7 @@ async fn transaction_rollback_restores_food_and_index() -> Result<(), Box<dyn St
     query(
         "INSERT INTO crumbs_foods
             (id, source, source_food_id, dataset, description, category, parsed_data, created_at)
-         VALUES (3, 'usda', 'rolled-insert', 'Foundation', 'Rolled back insert', NULL, '{}', 0)",
+         VALUES (3, 'usda', 'rolled-insert', 'common', 'Rolled back insert', NULL, '{}', 0)",
     )
     .execute(&mut *insert)
     .await?;
@@ -753,7 +751,10 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
             (id, source, source_food_id, dataset, description, category, parsed_data, created_at)
          VALUES
             (1, 'usda', 'old-1', 'usda_foundation', 'Roșii coapte', 'Legume', '{}', 0),
-            (2, 'usda', 'old-2', 'usda_foundation', 'Cheddar Cheese', 'Dairy', '{}', 0)",
+            (2, 'usda', 'old-2', 'usda_foundation', 'Cheddar Cheese', 'Dairy', '{}', 0),
+            (3, 'usda', 'old-3', 'usda_sr_legacy', 'Legacy apple', 'Fruit', '{}', 0),
+            (4, 'usda', 'old-4', 'usda_survey_fndds', 'Survey oats', 'Grains', '{}', 0),
+            (5, 'usda', 'old-5', 'usda_branded', 'Brand cereal', 'Cereal', '{}', 0)",
     )
     .execute(&pool)
     .await?;
@@ -776,23 +777,23 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         path: database_path.clone(),
     })
     .await?;
-    assert_eq!(migration_count(&database).await?, 5);
+    assert_eq!(migration_count(&database).await?, 6);
     assert_matches(&database, "rosii", &[1]).await?;
     assert_matches(&database, "cheddar", &[2]).await?;
     assert_matches(&database, "dairy", &[2]).await?;
     assert_matches(&database, "sharp", &[2]).await?;
-    assert_search_matches(&database, "dataset:usda_foundation", &[1, 2]).await?;
-    assert_search_matches(&database, "source:usda", &[1, 2]).await?;
-    assert_search_matches(
-        &database,
-        "source:usda AND dataset:usda_foundation",
-        &[1, 2],
-    )
-    .await?;
-    assert_search_matches(&database, "SOURCE:usda", &[1, 2]).await?;
-    assert_eq!(dataset(&database, 1).await?, "usda_foundation");
-    assert_eq!(dataset(&database, 2).await?, "usda_foundation");
-    assert_eq!(fts_row_count(&database).await?, 2);
+    assert_search_matches(&database, "dataset:common", &[1, 2, 3, 4]).await?;
+    assert_search_matches(&database, "dataset:branded", &[5]).await?;
+    assert_search_matches(&database, "source:usda", &[1, 2, 3, 4, 5]).await?;
+    assert_search_matches(&database, "source:usda AND dataset:common", &[1, 2, 3, 4]).await?;
+    assert_search_matches(&database, "SOURCE:usda", &[1, 2, 3, 4, 5]).await?;
+    assert_eq!(dataset(&database, 1).await?, "common");
+    assert_eq!(dataset(&database, 2).await?, "common");
+    assert_eq!(dataset(&database, 3).await?, "common");
+    assert_eq!(dataset(&database, 4).await?, "common");
+    assert_eq!(dataset(&database, 5).await?, "branded");
+    assert_eq!(notes(&database, 1).await?, None);
+    assert_eq!(fts_row_count(&database).await?, 5);
     assert_eq!(description(&database, 1).await?, "Roșii coapte");
     assert_fts_integrity(&database).await?;
     database.close().await;
@@ -801,12 +802,119 @@ async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<
         path: database_path,
     })
     .await?;
-    assert_eq!(migration_count(&reopened).await?, 5);
+    assert_eq!(migration_count(&reopened).await?, 6);
     assert_matches(&reopened, "rosii", &[1]).await?;
     assert_matches(&reopened, "cheddar", &[2]).await?;
-    assert_search_matches(&reopened, "dataset:usda_foundation", &[1, 2]).await?;
-    assert_eq!(fts_row_count(&reopened).await?, 2);
+    assert_search_matches(&reopened, "dataset:common", &[1, 2, 3, 4]).await?;
+    assert_search_matches(&reopened, "dataset:branded", &[5]).await?;
+    assert_eq!(fts_row_count(&reopened).await?, 5);
     assert_fts_integrity(&reopened).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn unknown_legacy_dataset_rolls_back_dataset_and_notes_migration()
+-> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let migrations = directory.path().join("migrations");
+    fs::create_dir(&migrations)?;
+    fs::write(
+        migrations.join("0001_create_crumbs_sources.sql"),
+        MIGRATION_0001,
+    )?;
+    fs::write(
+        migrations.join("0002_create_crumbs_foods.sql"),
+        MIGRATION_0002,
+    )?;
+    let migrator = Migrator::new(migrations.as_path()).await?;
+    let database_path = directory.path().join("crumbs.db");
+    let options = SqliteConnectOptions::new()
+        .filename(&database_path)
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let pool = SqlitePool::connect_with(options).await?;
+    migrator.run(&pool).await?;
+    query("INSERT INTO crumbs_sources (id, created_at) VALUES ('usda', 0)")
+        .execute(&pool)
+        .await?;
+    query(
+        "INSERT INTO crumbs_foods
+            (id, source, source_food_id, dataset, description, category, parsed_data, created_at)
+         VALUES
+            (1, 'usda', 'known', 'usda_foundation', 'Known legacy food', NULL, '{}', 0),
+            (2, 'usda', 'unknown', 'future_dataset', 'Future food', NULL, '{}', 0)",
+    )
+    .execute(&pool)
+    .await?;
+    query(
+        "INSERT INTO crumbs_tags (id, name, name_key, created_at)
+         VALUES (1, 'migration tag', 'migration tag', 0)",
+    )
+    .execute(&pool)
+    .await?;
+    query(
+        "INSERT INTO crumbs_food_tags (food_id, tag_id, created_at)
+         VALUES (1, 1, 0), (2, 1, 0)",
+    )
+    .execute(&pool)
+    .await?;
+    pool.close().await;
+
+    let migration_error = match Database::open(DatabaseConfig {
+        path: database_path.clone(),
+    })
+    .await
+    {
+        Err(crate::Error::Migration { source, .. }) => source.to_string(),
+        Err(error) => return Err(error.into()),
+        Ok(database) => {
+            database.close().await;
+            return Err("unknown dataset unexpectedly passed migration".into());
+        }
+    };
+    assert!(
+        migration_error.contains("foods_dataset_must_be_common_branded_or_custom"),
+        "{migration_error}"
+    );
+
+    let options = SqliteConnectOptions::new()
+        .filename(&database_path)
+        .foreign_keys(true);
+    let pool = SqlitePool::connect_with(options).await?;
+    let datasets: Vec<(FoodId, DatasetText)> =
+        query_as("SELECT id, dataset FROM crumbs_foods ORDER BY id")
+            .fetch_all(&pool)
+            .await?;
+    assert_eq!(
+        datasets,
+        vec![
+            (1, "usda_foundation".to_owned()),
+            (2, "future_dataset".to_owned()),
+        ]
+    );
+    let notes_column_count: FoodCount =
+        query_scalar("SELECT COUNT(*) FROM pragma_table_info('crumbs_foods') WHERE name = 'notes'")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(notes_column_count, 0);
+    let tag_assignment_count: FoodCount = query_scalar("SELECT COUNT(*) FROM crumbs_food_tags")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(tag_assignment_count, 2);
+    let migration_count: MigrationCount =
+        query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(migration_count, 5);
+    let indexed_ids: Vec<FoodId> = query_scalar(
+        "SELECT rowid FROM crumbs_foods_fts
+         WHERE crumbs_foods_fts MATCH 'migration tag'
+         ORDER BY rowid",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert_eq!(indexed_ids, vec![1, 2]);
+    pool.close().await;
     Ok(())
 }
 
@@ -835,7 +943,7 @@ async fn insert_food(
     query(
         "INSERT INTO crumbs_foods
             (id, source, source_food_id, dataset, description, category, parsed_data, created_at)
-         VALUES (?, ?, ?, 'Foundation', ?, ?, '{}', 0)",
+         VALUES (?, ?, ?, 'common', ?, ?, '{}', 0)",
     )
     .bind(id)
     .bind(source)
@@ -860,6 +968,13 @@ async fn description(database: &Database, id: FoodId) -> Result<FoodDescription,
 
 async fn dataset(database: &Database, id: FoodId) -> Result<DatasetText, sqlx::Error> {
     query_scalar("SELECT dataset FROM crumbs_foods WHERE id = ?")
+        .bind(id)
+        .fetch_one(&database.pool)
+        .await
+}
+
+async fn notes(database: &Database, id: FoodId) -> Result<Option<FoodNotes>, sqlx::Error> {
+    query_scalar("SELECT notes FROM crumbs_foods WHERE id = ?")
         .bind(id)
         .fetch_one(&database.pool)
         .await
@@ -922,7 +1037,10 @@ async fn assert_search_matches(
         .search_foods(&query, SearchLimit::default())
         .await?;
     let mut actual = results
+        .common
         .into_iter()
+        .chain(results.branded)
+        .chain(results.custom)
         .map(|result| result.id.0)
         .collect::<Vec<_>>();
     actual.sort_unstable();

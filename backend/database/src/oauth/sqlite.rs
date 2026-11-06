@@ -117,7 +117,7 @@ impl OAuthStore for Database {
         .bind(&authorization.grant.client_id)
         .bind(&authorization.grant.redirect_uri)
         .bind(&authorization.grant.resource)
-        .bind(&authorization.grant.scope)
+        .bind(authorization.grant.scope.as_str())
         .bind(&authorization.grant.state)
         .bind(&authorization.grant.code_challenge)
         .bind(authorization.expires_at)
@@ -177,6 +177,7 @@ impl OAuthStore for Database {
         if row.user_id.is_some() || row.code_hash.is_some() || row.session_id.is_some() {
             return Err(AuthStoreError::InvalidRecord);
         }
+        let grant = row.grant()?;
         let user_is_current_and_active: bool = sqlx::query_scalar(
             "SELECT EXISTS(
                 SELECT 1 FROM users
@@ -210,7 +211,6 @@ impl OAuthStore for Database {
             transaction.commit().await.map_err(storage_error)?;
             return Ok(None);
         }
-        let grant = row.grant();
         transaction.commit().await.map_err(storage_error)?;
         Ok(Some(grant))
     }
@@ -244,7 +244,7 @@ impl OAuthStore for Database {
         if row.user_id.is_some() || row.session_id.is_some() {
             return Err(AuthStoreError::InvalidRecord);
         }
-        let grant = row.grant();
+        let grant = row.grant()?;
         sqlx::query(
             "DELETE FROM oauth_authorizations
              WHERE request_hash = ? AND csrf_hash = ? AND code_hash IS NULL AND expires_at > ?",
@@ -262,6 +262,7 @@ impl OAuthStore for Database {
     async fn redeem_code(
         &self,
         redemption: &CodeRedemption,
+        requested_scope: Option<&OAuthScope>,
         tokens: &TokenPair,
         now: AuthTimestamp,
     ) -> Result<Option<UserSession>, AuthStoreError> {
@@ -297,6 +298,11 @@ impl OAuthStore for Database {
             transaction.commit().await.map_err(storage_error)?;
             return Ok(None);
         }
+        let scope = row.parsed_scope()?;
+        if requested_scope.is_some_and(|requested| *requested != scope) {
+            transaction.rollback().await.map_err(storage_error)?;
+            return Err(AuthStoreError::InvalidScope);
+        }
         let Some(user_id) = row.user_id else {
             return Err(AuthStoreError::InvalidRecord);
         };
@@ -319,7 +325,7 @@ impl OAuthStore for Database {
         .bind(user_id)
         .bind(&row.client_id)
         .bind(&row.resource)
-        .bind(&row.scope)
+        .bind(scope.as_str())
         .bind(now)
         .bind(tokens.session_expires_at)
         .fetch_one(&mut *transaction)
@@ -359,7 +365,7 @@ impl OAuthStore for Database {
             user_id: UserId::new(user_id).map_err(|_| AuthStoreError::InvalidRecord)?,
             client_id: row.client_id,
             resource: row.resource,
-            scope: row.scope,
+            scope,
             expires_at: tokens.session_expires_at,
         };
         transaction.commit().await.map_err(storage_error)?;
@@ -371,6 +377,7 @@ impl OAuthStore for Database {
         refresh_hash: &CredentialHash,
         client_id: &str,
         resource: &str,
+        requested_scope: Option<&OAuthScope>,
         tokens: &TokenPair,
         now: AuthTimestamp,
     ) -> Result<Option<UserSession>, AuthStoreError> {
@@ -416,6 +423,11 @@ impl OAuthStore for Database {
         if row.used != 0 {
             return Err(AuthStoreError::InvalidRecord);
         }
+        let scope = row.parsed_scope()?;
+        if requested_scope.is_some_and(|requested| *requested != scope) {
+            transaction.rollback().await.map_err(storage_error)?;
+            return Err(AuthStoreError::InvalidScope);
+        }
         let access_expires_at = tokens.access_expires_at.min(row.session_expires_at);
         if access_expires_at <= now {
             return Err(AuthStoreError::InvalidRecord);
@@ -450,7 +462,7 @@ impl OAuthStore for Database {
             user_id: UserId::new(row.user_id).map_err(|_| AuthStoreError::InvalidRecord)?,
             client_id: row.client_id,
             resource: row.resource,
-            scope: row.scope,
+            scope,
             expires_at: row.session_expires_at,
         };
         transaction.commit().await.map_err(storage_error)?;
@@ -704,22 +716,26 @@ struct AuthorizationRow {
 }
 
 impl AuthorizationRow {
-    fn grant(&self) -> AuthorizationGrant {
-        AuthorizationGrant {
+    fn parsed_scope(&self) -> Result<OAuthScope, AuthStoreError> {
+        OAuthScope::parse(&self.scope).ok_or(AuthStoreError::InvalidRecord)
+    }
+
+    fn grant(&self) -> Result<AuthorizationGrant, AuthStoreError> {
+        Ok(AuthorizationGrant {
             client_id: self.client_id.clone(),
             redirect_uri: self.redirect_uri.clone(),
             resource: self.resource.clone(),
-            scope: self.scope.clone(),
+            scope: self.parsed_scope()?,
             state: self.state.clone(),
             code_challenge: self.code_challenge.clone(),
-        }
+        })
     }
 
     fn into_pending(self) -> Result<PendingAuthorization, AuthStoreError> {
         if self.user_id.is_some() || self.code_hash.is_some() || self.session_id.is_some() {
             return Err(AuthStoreError::InvalidRecord);
         }
-        let grant = self.grant();
+        let grant = self.grant()?;
         Ok(PendingAuthorization {
             request_hash: decode_hash(self.request_hash)?,
             csrf_hash: decode_hash(self.csrf_hash)?,
@@ -742,7 +758,7 @@ struct SessionRow {
     user_id: i64,
     client_id: String,
     resource: ResourceUri,
-    scope: OAuthScope,
+    scope: String,
     expires_at: AuthTimestamp,
 }
 
@@ -756,7 +772,7 @@ impl SessionRow {
             user_id: UserId::new(self.user_id).map_err(|_| AuthStoreError::InvalidRecord)?,
             client_id: self.client_id,
             resource: self.resource,
-            scope: self.scope,
+            scope: OAuthScope::parse(&self.scope).ok_or(AuthStoreError::InvalidRecord)?,
             expires_at: self.expires_at,
         })
     }
@@ -770,10 +786,16 @@ struct RefreshSessionRow {
     user_id: i64,
     client_id: String,
     resource: ResourceUri,
-    scope: OAuthScope,
+    scope: String,
     session_expires_at: AuthTimestamp,
     active: i64,
     allow_refresh: i64,
+}
+
+impl RefreshSessionRow {
+    fn parsed_scope(&self) -> Result<OAuthScope, AuthStoreError> {
+        OAuthScope::parse(&self.scope).ok_or(AuthStoreError::InvalidRecord)
+    }
 }
 
 const MAX_OAUTH_CLIENTS: i64 = 4_096;

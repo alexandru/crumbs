@@ -2,12 +2,12 @@ use std::collections::HashSet;
 
 use sqlx::error::DatabaseError;
 use sqlx::sqlite::SqliteError;
-use sqlx::{FromRow, Row};
+use sqlx::{FromRow, Row, SqliteConnection};
 
 use super::{
-    Dataset, Food, FoodCategory, FoodDescription, FoodId, FoodReader, FoodSearchResult,
-    FoodSummary, FoodWriter, SearchError, SearchLimit, SearchQuery, Source, SourceFoodId, Tag,
-    TagId, TagKey, TagName,
+    CustomFoodInput, CustomFoodStore, Dataset, Food, FoodCategory, FoodDescription, FoodId,
+    FoodNotes, FoodReader, FoodSearchResult, FoodSearchResults, FoodSummary, FoodWriter,
+    SearchError, SearchLimit, SearchQuery, Source, SourceFoodId, Tag, TagId, TagKey, TagName,
 };
 use crate::Database;
 use crate::clock::{ClockError, UnixMillis};
@@ -31,21 +31,23 @@ impl FoodWriter for Database {
         .await?;
         let id = sqlx::query_scalar(
             "INSERT INTO crumbs_foods (
-                source, source_food_id, dataset, description, category, parsed_data, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                source, source_food_id, dataset, description, category, notes, parsed_data, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (source, source_food_id) DO UPDATE SET
                 dataset = excluded.dataset,
                 description = excluded.description,
                 category = excluded.category,
+                notes = excluded.notes,
                 parsed_data = excluded.parsed_data,
                 updated_at = ?
             RETURNING id",
         )
         .bind(food.source.as_ref())
         .bind(&food.source_food_id)
-        .bind(food.dataset.as_ref())
+        .bind(food.dataset.as_str())
         .bind(&food.description)
         .bind(food.category.as_deref())
+        .bind(food.notes.as_deref())
         .bind(parsed_data)
         .bind(now)
         .bind(now)
@@ -63,34 +65,118 @@ impl FoodReader for Database {
         &self,
         query: &SearchQuery,
         limit: SearchLimit,
-    ) -> Result<Vec<FoodSearchResult>, SearchError<Self::Error>> {
+    ) -> Result<FoodSearchResults, SearchError<Self::Error>> {
         let mut connection = self.pool.acquire().await.map_err(SearchError::Storage)?;
-        let rows = match sqlx::query_as::<_, FoodSearchRow>(SEARCH_SQL)
-            .bind(query.as_str())
-            .bind(limit.get())
-            .fetch_all(&mut *connection)
-            .await
-        {
-            Ok(rows) => rows,
-            Err(error) => {
-                let Some(message) = fts_query_error_message(&error).map(str::to_owned) else {
-                    return Err(SearchError::Storage(error));
-                };
-                // SQLite may defer schema errors until step. A valid FTS query
-                // separates those errors from diagnostics caused by this input.
-                match sqlx::query(SEARCH_SQL)
-                    .bind(FTS_ERROR_PROBE_QUERY)
-                    .bind(1_i64)
-                    .fetch_optional(&mut *connection)
-                    .await
-                {
-                    Ok(_) => return Err(SearchError::InvalidQuery(message)),
-                    Err(probe_error) => return Err(SearchError::Storage(probe_error)),
-                }
-            }
-        };
+        Ok(FoodSearchResults {
+            common: search_dataset(&mut connection, query, Dataset::Common, limit).await?,
+            branded: search_dataset(&mut connection, query, Dataset::Branded, limit).await?,
+            custom: search_dataset(&mut connection, query, Dataset::Custom, limit).await?,
+        })
+    }
+}
 
-        rows.into_iter().map(FoodSearchRow::into_result).collect()
+impl CustomFoodStore for Database {
+    type Error = sqlx::Error;
+
+    async fn create_custom_food(
+        &self,
+        input: &CustomFoodInput,
+    ) -> Result<FoodSearchResult, Self::Error> {
+        let now: UnixMillis = self.clock.now()?;
+        let parsed_data = serde_json::to_string(&input.parsed_data)
+            .map_err(|source| sqlx::Error::Encode(Box::new(source)))?;
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO crumbs_sources (id, created_at) VALUES ('custom', ?)
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(now)
+        .execute(&mut *transaction)
+        .await?;
+        let row = sqlx::query_as::<_, FoodSearchRow>(
+            "INSERT INTO crumbs_foods (
+                source, source_food_id, dataset, description, category, notes, parsed_data, created_at
+            ) VALUES ('custom', lower(hex(randomblob(16))), 'custom', ?, ?, ?, ?, ?)
+            RETURNING id, source, source_food_id, dataset, description, category, notes, parsed_data",
+        )
+        .bind(input.description.as_str())
+        .bind(input.category.as_deref())
+        .bind(input.notes.as_deref())
+        .bind(parsed_data)
+        .bind(now)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let food = row.into_result()?;
+        transaction.commit().await?;
+        Ok(food)
+    }
+
+    async fn custom_food(&self, id: FoodId) -> Result<Option<FoodSearchResult>, Self::Error> {
+        let row = sqlx::query_as::<_, FoodSearchRow>(
+            "SELECT id, source, source_food_id, dataset, description, category, notes, parsed_data
+             FROM crumbs_foods
+             WHERE id = ? AND source = 'custom' AND dataset = 'custom'",
+        )
+        .bind(id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(FoodSearchRow::into_result).transpose()
+    }
+
+    async fn list_custom_foods(
+        &self,
+        limit: SearchLimit,
+    ) -> Result<Vec<FoodSearchResult>, Self::Error> {
+        sqlx::query_as::<_, FoodSearchRow>(
+            "SELECT id, source, source_food_id, dataset, description, category, notes, parsed_data
+             FROM crumbs_foods
+             WHERE source = 'custom' AND dataset = 'custom'
+             ORDER BY id ASC
+             LIMIT ?",
+        )
+        .bind(limit.get())
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(FoodSearchRow::into_result)
+        .collect()
+    }
+
+    async fn update_custom_food(
+        &self,
+        id: FoodId,
+        input: &CustomFoodInput,
+    ) -> Result<Option<FoodSearchResult>, Self::Error> {
+        let now: UnixMillis = self.clock.now()?;
+        let parsed_data = serde_json::to_string(&input.parsed_data)
+            .map_err(|source| sqlx::Error::Encode(Box::new(source)))?;
+        let row = sqlx::query_as::<_, FoodSearchRow>(
+            "UPDATE crumbs_foods
+             SET description = ?, category = ?, notes = ?, parsed_data = ?, updated_at = ?
+             WHERE id = ? AND source = 'custom' AND dataset = 'custom'
+             RETURNING id, source, source_food_id, dataset, description, category, notes, parsed_data",
+        )
+        .bind(input.description.as_str())
+        .bind(input.category.as_deref())
+        .bind(input.notes.as_deref())
+        .bind(parsed_data)
+        .bind(now)
+        .bind(id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(FoodSearchRow::into_result).transpose()
+    }
+
+    async fn delete_custom_food(&self, id: FoodId) -> Result<bool, Self::Error> {
+        let deleted = sqlx::query_scalar::<_, RowId>(
+            "DELETE FROM crumbs_foods
+             WHERE id = ? AND source = 'custom' AND dataset = 'custom'
+             RETURNING id",
+        )
+        .bind(id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(deleted.is_some())
     }
 }
 
@@ -107,14 +193,14 @@ impl Database {
         source_food_id: &SourceFoodId,
     ) -> Result<Option<FoodSummary>, sqlx::Error> {
         let row = sqlx::query_as::<_, FoodRow>(
-            "SELECT id, source, source_food_id, dataset, description, category
+            "SELECT id, source, source_food_id, dataset, description, category, notes
              FROM crumbs_foods WHERE source = ? AND source_food_id = ?",
         )
         .bind(source.as_ref())
         .bind(source_food_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(FoodSummary::from))
+        row.map(FoodSummary::try_from).transpose()
     }
 
     /// Atomically replaces a food's assignments, creating missing tags.
@@ -199,6 +285,44 @@ impl Database {
     }
 }
 
+async fn search_dataset(
+    connection: &mut SqliteConnection,
+    query: &SearchQuery,
+    dataset: Dataset,
+    limit: SearchLimit,
+) -> Result<Vec<FoodSearchResult>, SearchError<sqlx::Error>> {
+    let rows = match sqlx::query_as::<_, FoodSearchRow>(SEARCH_SQL)
+        .bind(query.as_str())
+        .bind(dataset.as_str())
+        .bind(limit.get())
+        .fetch_all(&mut *connection)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            let Some(message) = fts_query_error_message(&error).map(str::to_owned) else {
+                return Err(SearchError::Storage(error));
+            };
+            // SQLite may defer schema errors until step. A valid FTS query
+            // separates those errors from diagnostics caused by this input.
+            match sqlx::query(SEARCH_SQL)
+                .bind(FTS_ERROR_PROBE_QUERY)
+                .bind(dataset.as_str())
+                .bind(1_i64)
+                .fetch_optional(&mut *connection)
+                .await
+            {
+                Ok(_) => return Err(SearchError::InvalidQuery(message)),
+                Err(probe_error) => return Err(SearchError::Storage(probe_error)),
+            }
+        }
+    };
+
+    rows.into_iter()
+        .map(|row| row.into_result().map_err(SearchError::Storage))
+        .collect()
+}
+
 impl From<ClockError> for sqlx::Error {
     fn from(error: ClockError) -> Self {
         Self::Encode(Box::new(error))
@@ -218,15 +342,16 @@ struct FoodSearchRow {
     dataset: DatasetText,
     description: FoodDescription,
     category: Option<FoodCategory>,
+    notes: Option<FoodNotes>,
     parsed_data: ParsedFoodDataText,
 }
 
 const SEARCH_SQL: &str = "
 SELECT f.id, f.source, f.source_food_id, f.dataset,
-       f.description, f.category, f.parsed_data
+       f.description, f.category, f.notes, f.parsed_data
 FROM crumbs_foods_fts
 JOIN crumbs_foods AS f ON f.id = crumbs_foods_fts.rowid
-WHERE crumbs_foods_fts MATCH ?
+WHERE crumbs_foods_fts MATCH ? AND f.dataset = ?
 ORDER BY crumbs_foods_fts.rank ASC, f.id ASC
 LIMIT ?
 ";
@@ -234,17 +359,22 @@ LIMIT ?
 const FTS_ERROR_PROBE_QUERY: &str = "crumbsftsvalidation";
 
 impl FoodSearchRow {
-    fn into_result(self) -> Result<FoodSearchResult, SearchError<sqlx::Error>> {
+    fn into_result(self) -> Result<FoodSearchResult, sqlx::Error> {
+        let dataset = self
+            .dataset
+            .parse::<Dataset>()
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
         let parsed_data = serde_json::from_str::<FoodData>(&self.parsed_data)
-            .map_err(|error| SearchError::Storage(sqlx::Error::Decode(Box::new(error))))?;
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
         Ok(FoodSearchResult {
             id: FoodId(self.id),
             food: Food {
                 source: Source::Owned(self.source),
                 source_food_id: self.source_food_id,
-                dataset: Dataset::Owned(self.dataset),
+                dataset,
                 description: self.description,
                 category: self.category,
+                notes: self.notes,
                 parsed_data,
             },
         })
@@ -284,18 +414,26 @@ struct FoodRow {
     dataset: DatasetText,
     description: FoodDescription,
     category: Option<FoodCategory>,
+    notes: Option<FoodNotes>,
 }
 
-impl From<FoodRow> for FoodSummary {
-    fn from(row: FoodRow) -> Self {
-        Self {
+impl TryFrom<FoodRow> for FoodSummary {
+    type Error = sqlx::Error;
+
+    fn try_from(row: FoodRow) -> Result<Self, Self::Error> {
+        let dataset = row
+            .dataset
+            .parse::<Dataset>()
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
+        Ok(Self {
             id: FoodId(row.id),
             source: row.source.into(),
             source_food_id: row.source_food_id,
-            dataset: row.dataset.into(),
+            dataset,
             description: row.description,
             category: row.category,
-        }
+            notes: row.notes,
+        })
     }
 }
 

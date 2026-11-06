@@ -54,7 +54,7 @@ Search fields:
 - `category`: food categories.
 - `tags`: assigned tags.
 - `source`: data provider. USDA source values are stored as `usda`.
-- `dataset`: named collection supplied by a provider, such as `usda_foundation` or `usda_branded`.
+- `dataset`: source-independent search classification: `common`, `branded`, or `custom`.
 
 Examples:
 - `chicken breast`
@@ -63,22 +63,22 @@ Examples:
 - `chicken OR turkey`
 - `description:chicken`, `category:dairy`, `tags:organic`
 - `source:usda`, `chicken source:usda`
-- `dataset:usda_foundation`, `chicken dataset:usda_foundation`
-- `dataset:usda_branded`, `dataset:usda_sr_legacy`, `dataset:usda_survey_fndds`
+- `dataset:common`, `chicken dataset:common`
+- `dataset:branded`, `dataset:custom`
 
-Clients must quote values requiring quotes, such as values containing spaces, hyphens, or slashes. No matches return an empty foods list. Invalid expressions return an error."#
+Clients must quote values requiring quotes, such as values containing spaces, hyphens, or slashes. Results contain separate `common`, `branded`, and `custom` lists, each with its own limit. No matches return three empty lists. Food notes are returned but are not searched. Invalid expressions return an error."#
                 },
                 "limit": {
                     "type": "integer",
                     "default": 20,
-                    "description": "Maximum foods returned. Defaults to 20; supplied values are clamped to 20 through 1000."
+                    "description": "Maximum foods returned per dataset. Defaults to 20; supplied values are clamped to 20 through 1000 independently for common, branded, and custom."
                 }
             }),
         ),
     ]);
     Tool::new_with_raw(
         NAME,
-        Some("Search foods with Crumbs full-text expressions over descriptions, categories, tags, source, and dataset. Results include full nutrition data and are ordered by best-effort relevance, then food ID. No matches return an empty foods list. Invalid search expressions return an error. There is no pagination.".into()),
+        Some("Search foods with Crumbs full-text expressions over descriptions, categories, tags, source, and dataset. Results contain common, branded, and custom lists with independent limits, full nutrition data, and optional notes. Within each dataset, results use best-effort relevance, then food ID. Choose the appropriate food across datasets. No matches return three empty lists. Invalid search expressions return an error. There is no pagination.".into()),
         schema,
     )
     .with_annotations(

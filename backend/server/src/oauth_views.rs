@@ -4,11 +4,14 @@ use axum::http::{Response, StatusCode, header::HeaderValue};
 use maud::{DOCTYPE, Markup, html};
 use rust_embed::Embed;
 
+use crate::oauth::FoodScopes;
+
 pub(crate) struct LoginPage<'a> {
     pub request_id: &'a str,
     pub csrf_token: &'a str,
     pub client_name: &'a str,
     pub redirect_origin: &'a str,
+    pub scopes: FoodScopes,
     pub error: Option<&'a str>,
 }
 
@@ -47,8 +50,13 @@ pub(crate) fn login(page: LoginPage<'_>) -> Markup {
                         section class="permissions" aria-labelledby="permissions-title" {
                             h2 id="permissions-title" { "This connection can" }
                             ul {
-                                li { "Read the food library" }
-                                li { "Search the food library and view nutrition data" }
+                                @if page.scopes.can_read() {
+                                    li { "Read the food library" }
+                                    li { "Search the food library and view nutrition data" }
+                                }
+                                @if page.scopes.can_write() {
+                                    li { "Create, edit, and delete custom foods" }
+                                }
                             }
                         }
 

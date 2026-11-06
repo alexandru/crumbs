@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::io;
 use std::time::{Duration, SystemTime};
@@ -7,8 +6,9 @@ use sqlx::{FromRow, query_scalar};
 
 use crate::clock::{Clock, UnixMillis};
 use crate::{
-    Database, DatabaseConfig, Food, FoodId, FoodReader, FoodSearchResult, FoodWriter, SearchError,
-    SearchLimit, SearchQuery, Source, Tag, TagName,
+    CustomFoodDescription, CustomFoodInput, CustomFoodStore, Database, DatabaseConfig, Dataset,
+    Food, FoodId, FoodReader, FoodSearchResult, FoodWriter, SearchError, SearchLimit, SearchQuery,
+    Source, Tag, TagName,
 };
 
 #[tokio::test]
@@ -366,9 +366,10 @@ fn make_food(
     Ok(Food {
         source: Source::Borrowed(source),
         source_food_id: source_food_id.to_owned(),
-        dataset: Cow::Borrowed("Foundation"),
+        dataset: crate::Dataset::Common,
         description: description.to_owned(),
         category: None,
+        notes: None,
         parsed_data: crate::nutrition::FoodData::default(),
     })
 }
@@ -483,6 +484,60 @@ async fn searches_indexed_fields_and_returns_full_nutrition() -> Result<(), Box<
         assert_eq!(json["parsed_data"]["nutrition"]["energy"], "18 kcal");
         assert_eq!(json["parsed_data"]["nutrition"]["protein"], "0.9 g");
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_applies_the_limit_independently_to_each_dataset() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    for index in 0..21 {
+        database
+            .upsert_food(&make_food(
+                "common-provider",
+                &index.to_string(),
+                &format!("Chicken common {index}"),
+            )?)
+            .await?;
+        let mut branded = make_food(
+            "branded-provider",
+            &index.to_string(),
+            &format!("Chicken branded {index}"),
+        )?;
+        branded.dataset = Dataset::Branded;
+        database.upsert_food(&branded).await?;
+        database
+            .create_custom_food(&CustomFoodInput {
+                description: CustomFoodDescription::new(format!("Chicken custom {index}"))?,
+                category: None,
+                notes: None,
+                parsed_data: crate::nutrition::FoodData::default(),
+            })
+            .await?;
+    }
+
+    let results = database
+        .search_foods(&SearchQuery::new("chicken")?, SearchLimit::from(20))
+        .await?;
+    assert_eq!(results.common.len(), 20);
+    assert_eq!(results.branded.len(), 20);
+    assert_eq!(results.custom.len(), 20);
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_returns_empty_vectors_for_datasets_without_matches() -> Result<(), Box<dyn StdError>>
+{
+    let (_directory, database) = open_database().await?;
+    database
+        .upsert_food(&make_food("common-provider", "common-1", "Chicken soup")?)
+        .await?;
+
+    let results = database
+        .search_foods(&SearchQuery::new("chicken")?, SearchLimit::default())
+        .await?;
+    assert_eq!(results.common.len(), 1);
+    assert!(results.branded.is_empty());
+    assert!(results.custom.is_empty());
     Ok(())
 }
 
@@ -645,7 +700,8 @@ async fn search_database(
 ) -> Result<Vec<FoodSearchResult>, Box<dyn StdError>> {
     Ok(database
         .search_foods(&SearchQuery::new(expression)?, limit)
-        .await?)
+        .await?
+        .common)
 }
 
 async fn search_food_ids(

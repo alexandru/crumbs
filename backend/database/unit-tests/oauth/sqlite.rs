@@ -113,14 +113,24 @@ async fn authorization_bindings_are_checked_and_code_replay_revokes_the_family()
     ] {
         assert!(
             database
-                .redeem_code(&invalid, &tokens, NOW + 20)
+                .redeem_code(&invalid, None, &tokens, NOW + 20)
                 .await?
                 .is_none()
         );
     }
 
+    let extra_scope = OAuthScope::Write;
+    assert!(matches!(
+        database
+            .redeem_code(&redemption, Some(&extra_scope), &tokens, NOW + 20)
+            .await,
+        Err(AuthStoreError::InvalidScope)
+    ));
+
+    let equivalent_scope = OAuthScope::parse("crumbs:read crumbs:read")
+        .ok_or_else(|| io::Error::other("duplicate read scope was rejected"))?;
     let session = database
-        .redeem_code(&redemption, &tokens, NOW + 20)
+        .redeem_code(&redemption, Some(&equivalent_scope), &tokens, NOW + 20)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
     assert_eq!(session.user_id, user_id);
@@ -136,7 +146,7 @@ async fn authorization_bindings_are_checked_and_code_replay_revokes_the_family()
     let replay_tokens = token_pair(30, 31, 1_300, 1_600);
     assert!(
         database
-            .redeem_code(&redemption, &replay_tokens, 1_200)
+            .redeem_code(&redemption, None, &replay_tokens, 1_200)
             .await?
             .is_none()
     );
@@ -146,6 +156,88 @@ async fn authorization_bindings_are_checked_and_code_replay_revokes_the_family()
             .await?
             .is_none()
     );
+    database.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn readwrite_scope_order_is_normalized_for_redemption_and_refresh()
+-> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    let client = public_client("readwrite-client");
+    database.register_client(&client, NOW).await?;
+    let (user_id, password_hash) = create_user(&database).await?;
+    let authorization = PendingAuthorization {
+        request_hash: hash(50),
+        csrf_hash: hash(51),
+        grant: AuthorizationGrant {
+            client_id: client.id.clone(),
+            redirect_uri: "https://client.example/callback".to_owned(),
+            resource: "https://api.example".to_owned(),
+            scope: OAuthScope::ReadWrite,
+            state: None,
+            code_challenge: "readwrite-challenge".to_owned(),
+        },
+        expires_at: 2_000,
+    };
+    database.begin_authorization(&authorization, NOW).await?;
+    let approval = Approval {
+        request_hash: authorization.request_hash,
+        csrf_hash: authorization.csrf_hash,
+        user_id,
+        password_hash,
+        code_hash: hash(52),
+        code_expires_at: 1_100,
+    };
+    let approved = database
+        .approve_authorization(&approval, NOW + 10)
+        .await?
+        .ok_or_else(|| io::Error::other("valid authorization request was rejected"))?;
+    assert_eq!(approved.scope, OAuthScope::ReadWrite);
+    let redemption = CodeRedemption {
+        code_hash: approval.code_hash,
+        client_id: approved.client_id,
+        redirect_uri: approved.redirect_uri,
+        resource: approved.resource,
+        code_challenge: approved.code_challenge,
+    };
+    let initial = token_pair(53, 54, 1_180, 1_500);
+    let reversed_with_duplicate = OAuthScope::parse("crumbs:write crumbs:read crumbs:write")
+        .ok_or_else(|| io::Error::other("reversed duplicate readwrite scope was rejected"))?;
+    let session = database
+        .redeem_code(
+            &redemption,
+            Some(&reversed_with_duplicate),
+            &initial,
+            NOW + 20,
+        )
+        .await?
+        .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
+    assert_eq!(session.scope, OAuthScope::ReadWrite);
+    assert_eq!(session.scope.as_str(), "crumbs:read crumbs:write");
+
+    let opposite_order = OAuthScope::parse("crumbs:write crumbs:read")
+        .ok_or_else(|| io::Error::other("reversed readwrite scope was rejected"))?;
+    let rotated = token_pair(55, 56, 1_800, 9_999);
+    let rotated_session = database
+        .rotate_refresh(
+            &initial.refresh_hash,
+            &client.id,
+            &session.resource,
+            Some(&opposite_order),
+            &rotated,
+            NOW + 50,
+        )
+        .await?
+        .ok_or_else(|| io::Error::other("valid refresh token was rejected"))?;
+    assert_eq!(rotated_session.scope, OAuthScope::ReadWrite);
+    assert_eq!(rotated_session.scope.as_str(), "crumbs:read crumbs:write");
+    let stored_scope: String = sqlx::query_scalar("SELECT scope FROM users_sessions WHERE id = ?")
+        .bind(session.id)
+        .fetch_one(&database.pool)
+        .await?;
+    assert_eq!(stored_scope, "crumbs:read crumbs:write");
+
     database.close().await;
     Ok(())
 }
@@ -174,7 +266,7 @@ async fn refresh_rotation_clamps_expiry_and_replay_revokes_the_family()
     .await?;
     let initial = token_pair(43, 44, 1_150, 1_500);
     let session = database
-        .redeem_code(&redemption, &initial, NOW + 20)
+        .redeem_code(&redemption, None, &initial, NOW + 20)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
 
@@ -185,6 +277,7 @@ async fn refresh_rotation_clamps_expiry_and_replay_revokes_the_family()
                 &initial.refresh_hash,
                 "wrong-client",
                 &session.resource,
+                None,
                 &rotated,
                 1_050
             )
@@ -197,17 +290,34 @@ async fn refresh_rotation_clamps_expiry_and_replay_revokes_the_family()
                 &initial.refresh_hash,
                 &client.id,
                 "wrong-resource",
+                None,
                 &rotated,
                 1_050
             )
             .await?
             .is_none()
     );
+    let extra_scope = OAuthScope::Write;
+    assert!(matches!(
+        database
+            .rotate_refresh(
+                &initial.refresh_hash,
+                &client.id,
+                &session.resource,
+                Some(&extra_scope),
+                &rotated,
+                1_050,
+            )
+            .await,
+        Err(AuthStoreError::InvalidScope)
+    ));
+    let approved_scope = OAuthScope::Read;
     let rotated_session = database
         .rotate_refresh(
             &initial.refresh_hash,
             &client.id,
             &session.resource,
+            Some(&approved_scope),
             &rotated,
             1_050,
         )
@@ -240,6 +350,7 @@ async fn refresh_rotation_clamps_expiry_and_replay_revokes_the_family()
                 &initial.refresh_hash,
                 &client.id,
                 &session.resource,
+                None,
                 &replay_tokens,
                 1_100,
             )
@@ -284,6 +395,7 @@ async fn password_change_deactivation_and_delete_revoke_authorizations_and_sessi
         database
             .redeem_code(
                 &pending_redemption,
+                None,
                 &token_pair(63, 64, 1_400, 1_600),
                 1_100,
             )
@@ -308,7 +420,7 @@ async fn password_change_deactivation_and_delete_revoke_authorizations_and_sessi
     .await?;
     let first_tokens = token_pair(68, 69, 1_500, 1_800);
     let first_session = database
-        .redeem_code(&first_redemption, &first_tokens, 1_120)
+        .redeem_code(&first_redemption, None, &first_tokens, 1_120)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
     database.set_user_active(user_id, false).await?;
@@ -337,7 +449,7 @@ async fn password_change_deactivation_and_delete_revoke_authorizations_and_sessi
     .await?;
     let second_tokens = token_pair(73, 74, 1_600, 1_900);
     let second_session = database
-        .redeem_code(&second_redemption, &second_tokens, 1_220)
+        .redeem_code(&second_redemption, None, &second_tokens, 1_220)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
     database.delete_user(user_id).await?;
@@ -374,8 +486,8 @@ async fn concurrent_redemptions_have_one_successful_result() -> Result<(), Box<d
     .await?;
     let tokens = token_pair(83, 84, 1_300, 1_500);
     let (first, second) = tokio::join!(
-        database.redeem_code(&redemption, &tokens, 1_100),
-        database.redeem_code(&redemption, &tokens, 1_100),
+        database.redeem_code(&redemption, None, &tokens, 1_100),
+        database.redeem_code(&redemption, None, &tokens, 1_100),
     );
     let first = first?;
     let second = second?;
@@ -408,7 +520,7 @@ async fn used_authorization_codes_survive_pruning_until_their_session_expires()
     .await?;
     let tokens = token_pair(93, 94, 1_200, 1_500);
     let session = database
-        .redeem_code(&redemption, &tokens, 1_050)
+        .redeem_code(&redemption, None, &tokens, 1_050)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
     database.prune_oauth(1_300).await?;
@@ -422,7 +534,7 @@ async fn used_authorization_codes_survive_pruning_until_their_session_expires()
     let replay_tokens = token_pair(95, 96, 1_400, 1_600);
     assert!(
         database
-            .redeem_code(&redemption, &replay_tokens, 1_300)
+            .redeem_code(&redemption, None, &replay_tokens, 1_300)
             .await?
             .is_none()
     );
@@ -462,7 +574,7 @@ async fn database_reopen_preserves_oauth_clients_and_sessions() -> Result<(), Bo
     .await?;
     let tokens = token_pair(103, 104, 1_300, 1_500);
     let session = database
-        .redeem_code(&redemption, &tokens, 1_100)
+        .redeem_code(&redemption, None, &tokens, 1_100)
         .await?
         .ok_or_else(|| io::Error::other("valid authorization code was rejected"))?;
     database.close().await;
@@ -598,7 +710,7 @@ fn pending(
             client_id: client_id.to_owned(),
             redirect_uri: "https://client.example/callback".to_owned(),
             resource: "https://api.example".to_owned(),
-            scope: "read".to_owned(),
+            scope: OAuthScope::Read,
             state: Some("client-state".to_owned()),
             code_challenge: "challenge-123".to_owned(),
         },

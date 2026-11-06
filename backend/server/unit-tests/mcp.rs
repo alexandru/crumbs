@@ -7,9 +7,11 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use crumbs_database::nutrition::FoodData;
+use crumbs_database::oauth::OAuthScope;
 use crumbs_database::{
-    Database, DatabaseConfig, Dataset, Food, FoodId, FoodReader, FoodSearchResult, FoodWriter,
-    SearchError, SearchLimit, SearchQuery, Source, TagName,
+    CustomFoodInput, CustomFoodStore, Database, DatabaseConfig, Dataset, Food, FoodId, FoodReader,
+    FoodSearchResult, FoodSearchResults, FoodWriter, SearchError, SearchLimit, SearchQuery, Source,
+    TagName,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -17,11 +19,15 @@ use tower::ServiceExt;
 
 use super::{config, search::NAME};
 use crate::oauth::tests::{
-    TEST_MCP_ACCESS_TOKEN, TEST_REST_ACCESS_TOKEN, test_authorization_server,
+    TEST_ISSUER, TEST_MCP_ACCESS_TOKEN, TEST_MCP_RESOURCE, TEST_MCP_WRITE_ACCESS_TOKEN,
+    TEST_REST_ACCESS_TOKEN, TEST_REST_WRITE_ACCESS_TOKEN, seed_session_with_scope,
+    test_authorization_server,
 };
 
+const TEST_MCP_WRITE_ONLY_ACCESS_TOKEN: &str = "test-mcp-write-only-access-token";
+const TEST_MCP_WRITE_ONLY_REFRESH_TOKEN: &str = "test-mcp-write-only-refresh-token";
+
 type SourceFoodIdRef<'a> = &'a str;
-type DatasetRef = &'static str;
 type FoodDescriptionRef<'a> = &'a str;
 
 struct TestApplication {
@@ -70,9 +76,10 @@ impl TestApplication {
             .upsert_food(&Food {
                 source: Source::Borrowed("test"),
                 source_food_id: source_food_id.to_owned(),
-                dataset: Dataset::Borrowed("ingredient"),
+                dataset: Dataset::Common,
                 description: description.to_owned(),
                 category: Some("Protein".to_owned()),
+                notes: None,
                 parsed_data,
             })
             .await?;
@@ -95,7 +102,11 @@ async fn request_router(
     let status = response.status();
     let headers = response.headers().clone();
     let body = to_bytes(response.into_body(), usize::MAX).await?;
-    let json = serde_json::from_slice(&body)?;
+    let json = if body.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&body)?
+    };
     Ok(ResponseBody {
         status,
         headers,
@@ -109,14 +120,70 @@ struct ResponseBody {
     json: Value,
 }
 
+fn assert_mcp_insufficient_scope_challenge(
+    response: &ResponseBody,
+    scope: &str,
+) -> Result<(), Box<dyn Error>> {
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    let challenge = response
+        .headers
+        .get(header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or("MCP scope denial has no WWW-Authenticate challenge")?;
+    let metadata = format!("{TEST_ISSUER}/.well-known/oauth-protected-resource/mcp");
+    assert!(challenge.starts_with("Bearer "), "{challenge}");
+    assert!(
+        challenge.contains("error=\"insufficient_scope\""),
+        "{challenge}"
+    );
+    assert!(
+        challenge.contains(&format!("scope=\"{scope}\"")),
+        "{challenge}"
+    );
+    assert!(
+        challenge.contains(&format!("resource_metadata=\"{metadata}\"")),
+        "{challenge}"
+    );
+    Ok(())
+}
+
 fn http_request(uri: &str) -> Result<Request<Body>, Box<dyn Error>> {
+    http_request_with_token(uri, TEST_REST_ACCESS_TOKEN)
+}
+
+fn http_request_with_token(uri: &str, token: &str) -> Result<Request<Body>, Box<dyn Error>> {
     Ok(Request::builder()
         .uri(uri)
         .header(header::HOST, "foods.example")
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {TEST_REST_ACCESS_TOKEN}"),
-        )
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())?)
+}
+
+fn http_json_request(
+    method: &str,
+    uri: &str,
+    token: &str,
+    value: Value,
+) -> Result<Request<Body>, Box<dyn Error>> {
+    Ok(Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::HOST, "foods.example")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(serde_json::to_vec(&value)?))?)
+}
+
+fn http_method_request(
+    method: &str,
+    uri: &str,
+    token: &str,
+) -> Result<Request<Body>, Box<dyn Error>> {
+    Ok(Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::HOST, "foods.example")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .body(Body::empty())?)
 }
 
@@ -128,16 +195,21 @@ fn mcp_request_with_origin(
     body: Value,
     origin: Option<&str>,
 ) -> Result<Request<Body>, Box<dyn Error>> {
+    mcp_request_with_token_and_origin(body, TEST_MCP_ACCESS_TOKEN, origin)
+}
+
+fn mcp_request_with_token_and_origin(
+    body: Value,
+    token: &str,
+    origin: Option<&str>,
+) -> Result<Request<Body>, Box<dyn Error>> {
     let mut builder = Request::builder()
         .method("POST")
         .uri("/mcp")
         .header(header::HOST, "foods.example")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ACCEPT, "application/json, text/event-stream");
-    builder = builder.header(
-        header::AUTHORIZATION,
-        format!("Bearer {TEST_MCP_ACCESS_TOKEN}"),
-    );
+    builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
     if let Some(origin) = origin {
         builder = builder.header(header::ORIGIN, origin);
     }
@@ -145,16 +217,17 @@ fn mcp_request_with_origin(
 }
 
 fn protocol_request(body: Value) -> Result<Request<Body>, Box<dyn Error>> {
+    protocol_request_with_token(body, TEST_MCP_ACCESS_TOKEN)
+}
+
+fn protocol_request_with_token(body: Value, token: &str) -> Result<Request<Body>, Box<dyn Error>> {
     Ok(Request::builder()
         .method("POST")
         .uri("/mcp")
         .header(header::HOST, "foods.example")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ACCEPT, "application/json, text/event-stream")
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {TEST_MCP_ACCESS_TOKEN}"),
-        )
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header("MCP-Protocol-Version", "2025-11-25")
         .body(Body::from(serde_json::to_vec(&body)?))?)
 }
@@ -207,14 +280,27 @@ async fn mcp_call_router(
     name: &str,
     arguments: Value,
 ) -> Result<ResponseBody, Box<dyn Error>> {
+    mcp_call_router_with_token(router, id, name, arguments, TEST_MCP_ACCESS_TOKEN).await
+}
+
+async fn mcp_call_router_with_token(
+    router: &Router,
+    id: u64,
+    name: &str,
+    arguments: Value,
+    token: &str,
+) -> Result<ResponseBody, Box<dyn Error>> {
     request_router(
         router,
-        protocol_request(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "tools/call",
-            "params": { "name": name, "arguments": arguments }
-        }))?,
+        protocol_request_with_token(
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": { "name": name, "arguments": arguments }
+            }),
+            token,
+        )?,
     )
     .await
 }
@@ -222,16 +308,17 @@ async fn mcp_call_router(
 async fn add_usda_food(
     database: &Database,
     source_food_id: SourceFoodIdRef<'_>,
-    dataset: DatasetRef,
+    dataset: Dataset,
     description: FoodDescriptionRef<'_>,
 ) -> Result<(), Box<dyn Error>> {
     database
         .upsert_food(&Food {
             source: Source::Borrowed("usda"),
             source_food_id: source_food_id.to_owned(),
-            dataset: Dataset::Borrowed(dataset),
+            dataset,
             description: description.to_owned(),
             category: None,
+            notes: None,
             parsed_data: FoodData::default(),
         })
         .await?;
@@ -270,13 +357,13 @@ async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result
 
     let http = request_router(&router, http_request("/foods/search?query=beans&limit=1")?).await?;
     assert_eq!(http.status, StatusCode::OK, "{:?}", http.json);
-    assert_eq!(http.json["foods"][0]["description"], "Test lentils");
+    assert_eq!(http.json["common"][0]["description"], "Test lentils");
     assert_eq!(
-        http.json["foods"][0]["parsed_data"]["nutrition"]["energy"],
+        http.json["common"][0]["parsed_data"]["nutrition"]["energy"],
         "120 kcal"
     );
     assert_eq!(
-        http.json["foods"][0]["parsed_data"]["nutrition"]["protein"],
+        http.json["common"][0]["parsed_data"]["nutrition"]["protein"],
         "8 g"
     );
     assert_eq!(
@@ -292,9 +379,9 @@ async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result
     assert_eq!(mcp.status, StatusCode::OK, "{:?}", mcp.json);
     assert_eq!(mcp.json["result"]["isError"], false);
     let mcp_result = &mcp.json["result"]["structuredContent"];
-    assert_eq!(mcp_result["foods"][0]["description"], "Test lentils");
+    assert_eq!(mcp_result["common"][0]["description"], "Test lentils");
     assert_eq!(
-        mcp_result["foods"][0]["parsed_data"]["nutrition"]["energy"],
+        mcp_result["common"][0]["parsed_data"]["nutrition"]["energy"],
         "120 kcal"
     );
     assert_eq!(
@@ -352,35 +439,35 @@ async fn http_and_mcp_use_food_reader_and_map_its_results_and_errors() -> Result
 }
 
 #[tokio::test]
-async fn mcp_search_supports_source_and_namespaced_dataset_filters() -> Result<(), Box<dyn Error>> {
+async fn mcp_search_supports_source_and_shared_dataset_filters() -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
     add_usda_food(
         &app.database,
         "foundation-1",
-        "usda_foundation",
+        Dataset::Common,
         "Chicken breast, raw",
     )
     .await?;
-    add_usda_food(&app.database, "branded-1", "usda_branded", "Chicken broth").await?;
-
-    mcp_initialize(&app).await?;
-    let foundation = mcp_call(
-        &app,
-        2,
-        NAME,
-        json!({"query":"chicken dataset:usda_foundation"}),
+    add_usda_food(
+        &app.database,
+        "branded-1",
+        Dataset::Branded,
+        "Chicken broth",
     )
     .await?;
-    assert_eq!(foundation.status, StatusCode::OK, "{:?}", foundation.json);
-    assert_eq!(foundation.json["result"]["isError"], false);
+
+    mcp_initialize(&app).await?;
+    let common = mcp_call(&app, 2, NAME, json!({"query":"chicken dataset:common"})).await?;
+    assert_eq!(common.status, StatusCode::OK, "{:?}", common.json);
+    assert_eq!(common.json["result"]["isError"], false);
     assert_eq!(
-        foundation.json["result"]["structuredContent"]["foods"]
+        common.json["result"]["structuredContent"]["common"]
             .as_array()
             .map(Vec::len),
         Some(1)
     );
     assert_eq!(
-        foundation.json["result"]["structuredContent"]["foods"][0]["description"],
+        common.json["result"]["structuredContent"]["common"][0]["description"],
         "Chicken breast, raw"
     );
 
@@ -388,11 +475,574 @@ async fn mcp_search_supports_source_and_namespaced_dataset_filters() -> Result<(
     assert_eq!(usda.status, StatusCode::OK, "{:?}", usda.json);
     assert_eq!(usda.json["result"]["isError"], false);
     assert_eq!(
-        usda.json["result"]["structuredContent"]["foods"]
+        usda.json["result"]["structuredContent"]["common"]
             .as_array()
             .map(Vec::len),
-        Some(2)
+        Some(1)
     );
+    assert_eq!(
+        usda.json["result"]["structuredContent"]["branded"][0]["description"],
+        "Chicken broth"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn rest_custom_foods_support_full_crud_and_search_notes_are_not_indexed()
+-> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    let input = json!({
+        "description": "My mozzarella toast",
+        "category": "Breakfast",
+        "notes": "Mozzarella, basil, and shallot",
+        "parsed_data": {
+            "nutrition": { "per": "100 g", "energy": "280 kcal", "protein": "14 g" },
+            "serving_sizes": [{ "name": "one slice", "quantity": "90 g" }]
+        }
+    });
+    let created = app
+        .request(http_json_request(
+            "POST",
+            "/foods/custom",
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            input,
+        )?)
+        .await?;
+    assert_eq!(created.status, StatusCode::CREATED, "{:?}", created.json);
+    let id = created.json["id"]
+        .as_i64()
+        .ok_or("created food has no ID")?;
+    assert_eq!(created.json["source"], "custom");
+    assert_eq!(created.json["dataset"], "custom");
+    assert_eq!(created.json["notes"], "Mozzarella, basil, and shallot");
+    assert_eq!(created.json["parsed_data"]["nutrition"]["protein"], "14 g");
+    assert_eq!(
+        created
+            .headers
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/foods/custom/{id}").as_str())
+    );
+    app.database
+        .set_food_tags(FoodId(id), &[TagName::new("dietary")?])
+        .await?;
+
+    let item_uri = format!("/foods/custom/{id}");
+    let fetched = app.request(http_request(&item_uri)?).await?;
+    assert_eq!(fetched.status, StatusCode::OK);
+    assert_eq!(fetched.json, created.json);
+
+    let listed = app.request(http_request("/foods/custom?limit=20")?).await?;
+    assert_eq!(listed.status, StatusCode::OK);
+    assert_eq!(listed.json["foods"].as_array().map(Vec::len), Some(1));
+    assert_eq!(listed.json["foods"][0], created.json);
+
+    let visible = app
+        .request(http_request("/foods/search?query=mozzarella")?)
+        .await?;
+    assert_eq!(visible.status, StatusCode::OK);
+    assert_eq!(visible.json["custom"].as_array().map(Vec::len), Some(1));
+    assert_eq!(visible.json["custom"][0]["notes"], created.json["notes"]);
+    let notes_only = app
+        .request(http_request("/foods/search?query=shallot")?)
+        .await?;
+    assert_eq!(
+        notes_only.json,
+        json!({ "common": [], "branded": [], "custom": [] })
+    );
+
+    let replaced = app
+        .request(http_json_request(
+            "PUT",
+            &item_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({ "description": "Updated cheese toast" }),
+        )?)
+        .await?;
+    assert_eq!(replaced.status, StatusCode::OK, "{:?}", replaced.json);
+    assert_eq!(replaced.json["id"], json!(id));
+    assert_eq!(replaced.json["description"], "Updated cheese toast");
+    assert_eq!(replaced.json["category"], Value::Null);
+    assert_eq!(replaced.json["notes"], Value::Null);
+    assert_eq!(replaced.json["parsed_data"]["nutrition"], Value::Null);
+    let old_name = app
+        .request(http_request("/foods/search?query=mozzarella")?)
+        .await?;
+    assert_eq!(old_name.json["custom"].as_array().map(Vec::len), Some(0));
+    let new_name = app
+        .request(http_request("/foods/search?query=updated")?)
+        .await?;
+    assert_eq!(new_name.json["custom"].as_array().map(Vec::len), Some(1));
+    let retained_tag = app
+        .request(http_request("/foods/search?query=tags%3Adietary")?)
+        .await?;
+    assert_eq!(
+        retained_tag.json["custom"].as_array().map(Vec::len),
+        Some(1)
+    );
+
+    let deleted = app
+        .request(http_method_request(
+            "DELETE",
+            &item_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+        )?)
+        .await?;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT);
+    assert_eq!(deleted.json, Value::Null);
+    let missing = app.request(http_request(&item_uri)?).await?;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rest_custom_foods_reject_invalid_input_and_protect_imported_foods()
+-> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    for input in [
+        json!({}),
+        json!({"description":"   "}),
+        json!({
+            "description":"Valid name",
+            "source":"usda"
+        }),
+    ] {
+        let response = app
+            .request(http_json_request(
+                "POST",
+                "/foods/custom",
+                TEST_REST_WRITE_ACCESS_TOKEN,
+                input,
+            )?)
+            .await?;
+        assert_eq!(
+            response.status,
+            StatusCode::BAD_REQUEST,
+            "{:?}",
+            response.json
+        );
+    }
+
+    let imported_id = app
+        .database
+        .upsert_food(&Food {
+            source: Source::Borrowed("usda"),
+            source_food_id: "protected-import".to_owned(),
+            dataset: Dataset::Common,
+            description: "Imported oats".to_owned(),
+            category: None,
+            notes: None,
+            parsed_data: FoodData::default(),
+        })
+        .await?;
+    let uri = format!("/foods/custom/{}", imported_id.0);
+    let update = app
+        .request(http_json_request(
+            "PUT",
+            &uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"description":"Hijacked oats"}),
+        )?)
+        .await?;
+    assert_eq!(update.status, StatusCode::NOT_FOUND);
+    let delete = app
+        .request(http_method_request(
+            "DELETE",
+            &uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+        )?)
+        .await?;
+    assert_eq!(delete.status, StatusCode::NOT_FOUND);
+
+    let invalid_id = app
+        .request(http_request("/foods/custom/not-an-id")?)
+        .await?;
+    assert_eq!(invalid_id.status, StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rest_custom_food_writes_require_write_scope() -> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    let created = app
+        .request(http_json_request(
+            "POST",
+            "/foods/custom",
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"description":"Permission check food"}),
+        )?)
+        .await?;
+    let id = created.json["id"]
+        .as_i64()
+        .ok_or("created food has no ID")?;
+    let uri = format!("/foods/custom/{id}");
+
+    let create = app
+        .request(http_json_request(
+            "POST",
+            "/foods/custom",
+            TEST_REST_ACCESS_TOKEN,
+            json!({"description":"Read-only create"}),
+        )?)
+        .await?;
+    assert_eq!(create.status, StatusCode::FORBIDDEN);
+    let update = app
+        .request(http_json_request(
+            "PUT",
+            &uri,
+            TEST_REST_ACCESS_TOKEN,
+            json!({"description":"Read-only update"}),
+        )?)
+        .await?;
+    assert_eq!(update.status, StatusCode::FORBIDDEN);
+    let deleted = app
+        .request(http_method_request("DELETE", &uri, TEST_REST_ACCESS_TOKEN)?)
+        .await?;
+    assert_eq!(deleted.status, StatusCode::FORBIDDEN);
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Result<(), Box<dyn Error>>
+{
+    let app = TestApplication::new().await?;
+    seed_session_with_scope(
+        app._authorization_database.as_ref(),
+        "test-mcp-write-only-client",
+        TEST_MCP_RESOURCE,
+        TEST_MCP_WRITE_ONLY_ACCESS_TOKEN,
+        TEST_MCP_WRITE_ONLY_REFRESH_TOKEN,
+        OAuthScope::Write,
+    )
+    .await?;
+    mcp_initialize(&app).await?;
+
+    let tools = app
+        .request(protocol_request(json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}
+        }))?)
+        .await?;
+    let tools = tools.json["result"]["tools"]
+        .as_array()
+        .ok_or("MCP tools list is missing")?;
+    for name in [
+        "list_custom_foods",
+        "get_custom_food",
+        "create_custom_food",
+        "update_custom_food",
+        "delete_custom_food",
+    ] {
+        assert!(
+            tools.iter().any(|tool| tool["name"] == name),
+            "missing {name}"
+        );
+    }
+    let create_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "create_custom_food")
+        .ok_or("MCP create tool is missing")?;
+    assert_eq!(create_tool["annotations"]["readOnlyHint"], false);
+    assert_eq!(create_tool["annotations"]["destructiveHint"], false);
+    let update_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "update_custom_food")
+        .ok_or("MCP update tool is missing")?;
+    assert_eq!(update_tool["annotations"]["readOnlyHint"], false);
+    assert_eq!(update_tool["annotations"]["destructiveHint"], true);
+    let delete_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "delete_custom_food")
+        .ok_or("MCP delete tool is missing")?;
+    assert_eq!(delete_tool["annotations"]["destructiveHint"], true);
+
+    let create_arguments = json!({
+        "food": {
+            "description": "MCP sesame noodles",
+            "notes": "Noodles, sesame paste, lime",
+            "parsed_data": {
+                "nutrition": { "per": "100 g", "energy": "315 kcal", "protein": "9 g" },
+                "serving_sizes": []
+            }
+        }
+    });
+    let read_denied_create = mcp_call_router_with_token(
+        &app.router,
+        3,
+        "create_custom_food",
+        create_arguments.clone(),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_mcp_insufficient_scope_challenge(&read_denied_create, "crumbs:write")?;
+    assert_eq!(read_denied_create.json["result"]["isError"], true);
+    assert_eq!(
+        read_denied_create.json["result"]["structuredContent"],
+        json!({"error":"insufficient_scope", "required_scope":"crumbs:write"})
+    );
+
+    let empty_after_denial = mcp_call_router_with_token(
+        &app.router,
+        16,
+        "list_custom_foods",
+        json!({}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(empty_after_denial.status, StatusCode::OK);
+    assert_eq!(
+        empty_after_denial.json["result"]["structuredContent"]["foods"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
+
+    let created = mcp_call_router_with_token(
+        &app.router,
+        3,
+        "create_custom_food",
+        create_arguments,
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(created.status, StatusCode::OK, "{:?}", created.json);
+    assert_eq!(created.json["result"]["isError"], false);
+    let created_food = &created.json["result"]["structuredContent"];
+    let id = created_food["id"].as_i64().ok_or("MCP food has no ID")?;
+    assert_eq!(created_food["source"], "custom");
+    assert_eq!(created_food["dataset"], "custom");
+    assert_eq!(created_food["notes"], "Noodles, sesame paste, lime");
+    assert_eq!(
+        created_food["parsed_data"]["nutrition"]["energy"],
+        "315 kcal"
+    );
+
+    let fetched = mcp_call_router_with_token(
+        &app.router,
+        5,
+        "get_custom_food",
+        json!({"id":id}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(fetched.json["result"]["isError"], false);
+    assert_eq!(fetched.json["result"]["structuredContent"], *created_food);
+    let listed = mcp_call_router_with_token(
+        &app.router,
+        6,
+        "list_custom_foods",
+        json!({"limit":20}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(listed.json["result"]["isError"], false);
+    assert_eq!(
+        listed.json["result"]["structuredContent"]["foods"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        listed.json["result"]["structuredContent"]["foods"][0],
+        *created_food
+    );
+
+    let write_only_read = mcp_call_router_with_token(
+        &app.router,
+        17,
+        "list_custom_foods",
+        json!({}),
+        TEST_MCP_WRITE_ONLY_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_mcp_insufficient_scope_challenge(&write_only_read, "crumbs:read")?;
+    assert_eq!(write_only_read.json["result"]["isError"], true);
+    assert_eq!(
+        write_only_read.json["result"]["structuredContent"],
+        json!({"error":"insufficient_scope", "required_scope":"crumbs:read"})
+    );
+
+    let read_denied_update = mcp_call_router_with_token(
+        &app.router,
+        7,
+        "update_custom_food",
+        json!({"id":id, "food":{"description":"Denied update"}}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_mcp_insufficient_scope_challenge(&read_denied_update, "crumbs:write")?;
+    assert_eq!(read_denied_update.json["result"]["isError"], true);
+    assert_eq!(
+        read_denied_update.json["result"]["structuredContent"]["required_scope"],
+        "crumbs:write"
+    );
+
+    let updated = mcp_call_router_with_token(
+        &app.router,
+        8,
+        "update_custom_food",
+        json!({"id":id, "food":{"description":"MCP updated noodles"}}),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(updated.json["result"]["isError"], false);
+    assert_eq!(
+        updated.json["result"]["structuredContent"]["description"],
+        "MCP updated noodles"
+    );
+    assert_eq!(
+        updated.json["result"]["structuredContent"]["notes"],
+        Value::Null
+    );
+    assert_eq!(
+        updated.json["result"]["structuredContent"]["parsed_data"]["nutrition"],
+        Value::Null
+    );
+    let visible = mcp_call_router_with_token(
+        &app.router,
+        9,
+        NAME,
+        json!({"query":"updated"}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(
+        visible.json["result"]["structuredContent"]["custom"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+
+    let invalid = mcp_call_router_with_token(
+        &app.router,
+        10,
+        "create_custom_food",
+        json!({"food":{"description":"  "}}),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(invalid.json["result"]["isError"], true);
+    assert!(invalid.json["result"]["structuredContent"]["error"].is_string());
+    let missing = mcp_call_router_with_token(
+        &app.router,
+        11,
+        "get_custom_food",
+        json!({"id":999_999}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(missing.json["result"]["isError"], true);
+    assert_eq!(
+        missing.json["result"]["structuredContent"]["error"],
+        "custom food not found"
+    );
+
+    let imported_id = app
+        .database
+        .upsert_food(&Food {
+            source: Source::Borrowed("usda"),
+            source_food_id: "mcp-protected-import".to_owned(),
+            dataset: Dataset::Common,
+            description: "Imported lentils".to_owned(),
+            category: None,
+            notes: None,
+            parsed_data: FoodData::default(),
+        })
+        .await?;
+    let imported_update = mcp_call_router_with_token(
+        &app.router,
+        12,
+        "update_custom_food",
+        json!({"id":imported_id.0, "food":{"description":"Hijacked lentils"}}),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(imported_update.json["result"]["isError"], true);
+    assert_eq!(
+        imported_update.json["result"]["structuredContent"]["error"],
+        "custom food not found"
+    );
+    let imported_delete = mcp_call_router_with_token(
+        &app.router,
+        13,
+        "delete_custom_food",
+        json!({"id":imported_id.0}),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(imported_delete.json["result"]["isError"], true);
+    assert_eq!(
+        imported_delete.json["result"]["structuredContent"]["error"],
+        "custom food not found"
+    );
+
+    let read_denied_delete = mcp_call_router_with_token(
+        &app.router,
+        14,
+        "delete_custom_food",
+        json!({"id":id}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_mcp_insufficient_scope_challenge(&read_denied_delete, "crumbs:write")?;
+    assert_eq!(read_denied_delete.json["result"]["isError"], true);
+    assert_eq!(
+        read_denied_delete.json["result"]["structuredContent"]["required_scope"],
+        "crumbs:write"
+    );
+    let deleted = mcp_call_router_with_token(
+        &app.router,
+        15,
+        "delete_custom_food",
+        json!({"id":id}),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(deleted.json["result"]["isError"], false);
+    assert_eq!(
+        deleted.json["result"]["structuredContent"],
+        json!({"id":id, "deleted":true})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_and_mcp_search_keep_independent_dataset_limits() -> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    for index in 0..21 {
+        add_usda_food(
+            &app.database,
+            &format!("common-{index}"),
+            Dataset::Common,
+            &format!("Apricot common food {index}"),
+        )
+        .await?;
+        add_usda_food(
+            &app.database,
+            &format!("branded-{index}"),
+            Dataset::Branded,
+            &format!("Apricot branded product {index}"),
+        )
+        .await?;
+    }
+    app.database
+        .create_custom_food(&serde_json::from_value::<CustomFoodInput>(json!({
+            "description": "Apricot custom recipe",
+            "notes": "Dried apricots and oats"
+        }))?)
+        .await?;
+
+    let http = app
+        .request(http_request("/foods/search?query=apricot&limit=20")?)
+        .await?;
+    assert_eq!(http.status, StatusCode::OK, "{:?}", http.json);
+    assert_eq!(http.json["common"].as_array().map(Vec::len), Some(20));
+    assert_eq!(http.json["branded"].as_array().map(Vec::len), Some(20));
+    assert_eq!(http.json["custom"].as_array().map(Vec::len), Some(1));
+
+    let mcp = mcp_call(&app, 2, NAME, json!({"query":"apricot", "limit":20})).await?;
+    assert_eq!(mcp.status, StatusCode::OK, "{:?}", mcp.json);
+    assert_eq!(mcp.json["result"]["isError"], false);
+    assert_eq!(mcp.json["result"]["structuredContent"], http.json);
     Ok(())
 }
 
@@ -448,7 +1098,7 @@ impl FoodReader for RecordingFoodReader {
         &self,
         query: &SearchQuery,
         limit: SearchLimit,
-    ) -> Result<Vec<FoodSearchResult>, SearchError<Self::Error>> {
+    ) -> Result<FoodSearchResults, SearchError<Self::Error>> {
         self.invocations
             .lock()
             .map_err(|_| {
@@ -472,17 +1122,21 @@ impl FoodReader for RecordingFoodReader {
                     "serving_sizes": []
                 }))
                 .map_err(|error| SearchError::Storage(io::Error::other(error)))?;
-                Ok(vec![FoodSearchResult {
-                    id: FoodId(42),
-                    food: Food {
-                        source: Source::Borrowed("recording"),
-                        source_food_id: "fixture-42".to_owned(),
-                        dataset: Dataset::Borrowed("ingredient"),
-                        description: "Test lentils".to_owned(),
-                        category: Some("Legumes".to_owned()),
-                        parsed_data,
-                    },
-                }])
+                Ok(FoodSearchResults {
+                    common: vec![FoodSearchResult {
+                        id: FoodId(42),
+                        food: Food {
+                            source: Source::Borrowed("recording"),
+                            source_food_id: "fixture-42".to_owned(),
+                            dataset: Dataset::Common,
+                            description: "Test lentils".to_owned(),
+                            category: Some("Legumes".to_owned()),
+                            notes: Some("Lentils, water".to_owned()),
+                            parsed_data,
+                        },
+                    }],
+                    ..FoodSearchResults::default()
+                })
             }
             ReaderOutcome::InvalidQuery => Err(SearchError::InvalidQuery(
                 "invalid FTS query from reader".to_owned(),
@@ -491,6 +1145,50 @@ impl FoodReader for RecordingFoodReader {
                 "private storage detail",
             ))),
         }
+    }
+}
+
+impl CustomFoodStore for RecordingFoodReader {
+    type Error = io::Error;
+
+    async fn create_custom_food(
+        &self,
+        _input: &CustomFoodInput,
+    ) -> Result<FoodSearchResult, Self::Error> {
+        Err(io::Error::other(
+            "management unavailable in recording reader",
+        ))
+    }
+
+    async fn custom_food(&self, _id: FoodId) -> Result<Option<FoodSearchResult>, Self::Error> {
+        Err(io::Error::other(
+            "management unavailable in recording reader",
+        ))
+    }
+
+    async fn list_custom_foods(
+        &self,
+        _limit: SearchLimit,
+    ) -> Result<Vec<FoodSearchResult>, Self::Error> {
+        Err(io::Error::other(
+            "management unavailable in recording reader",
+        ))
+    }
+
+    async fn update_custom_food(
+        &self,
+        _id: FoodId,
+        _input: &CustomFoodInput,
+    ) -> Result<Option<FoodSearchResult>, Self::Error> {
+        Err(io::Error::other(
+            "management unavailable in recording reader",
+        ))
+    }
+
+    async fn delete_custom_food(&self, _id: FoodId) -> Result<bool, Self::Error> {
+        Err(io::Error::other(
+            "management unavailable in recording reader",
+        ))
     }
 }
 
@@ -503,14 +1201,14 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         .request(http_request("/foods/search?query=tags%3Avegan")?)
         .await?;
     assert_eq!(http.status, StatusCode::OK, "{:?}", http.json);
-    assert_eq!(http.json["foods"].as_array().map(Vec::len), Some(1));
-    assert_eq!(http.json["foods"][0]["description"], "Chickpeas");
+    assert_eq!(http.json["common"].as_array().map(Vec::len), Some(1));
+    assert_eq!(http.json["common"][0]["description"], "Chickpeas");
     assert_eq!(
-        http.json["foods"][0]["parsed_data"]["nutrition"]["energy"],
+        http.json["common"][0]["parsed_data"]["nutrition"]["energy"],
         "210 kcal"
     );
     assert_eq!(
-        http.json["foods"][0]["parsed_data"]["nutrition"]["protein"],
+        http.json["common"][0]["parsed_data"]["nutrition"]["protein"],
         "7 g"
     );
     assert_eq!(
@@ -527,7 +1225,11 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         }))?)
         .await?;
     assert_eq!(tools.status, StatusCode::OK, "{:?}", tools.json);
-    let tool = tools.json["result"]["tools"][0].clone();
+    let tool = tools.json["result"]["tools"]
+        .as_array()
+        .and_then(|items| items.iter().find(|tool| tool["name"] == NAME))
+        .cloned()
+        .ok_or("MCP search tool is missing")?;
     assert_eq!(tool["name"], NAME);
     assert_eq!(tool["inputSchema"]["required"], json!(["query"]));
     assert_eq!(tool["inputSchema"]["properties"]["limit"]["default"], 20);
@@ -536,8 +1238,11 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         .as_str()
         .ok_or("MCP search tool has no description")?;
     for guidance in [
-        "descriptions, categories, tags, source, and dataset",
-        "No matches return an empty foods list",
+        "common, branded, and custom lists",
+        "independent limits",
+        "optional notes",
+        "Choose the appropriate food across datasets",
+        "No matches return three empty lists",
         "Invalid search expressions return an error",
     ] {
         assert!(description.contains(guidance), "missing {guidance:?}");
@@ -556,14 +1261,14 @@ async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Bo
         "category:dairy",
         "tags:organic",
         "source:usda",
-        "dataset:usda_foundation",
-        "chicken dataset:usda_foundation",
-        "dataset:usda_branded",
-        "dataset:usda_sr_legacy",
-        "dataset:usda_survey_fndds",
-        "source values are stored as `usda`",
+        "dataset:common",
+        "chicken dataset:common",
+        "dataset:branded",
+        "dataset:custom",
+        "USDA source values are stored as `usda`",
         "values requiring quotes, such as values containing spaces, hyphens, or slashes",
-        "empty foods list",
+        "three empty lists",
+        "Food notes are returned but are not searched",
         "Invalid expressions return an error.",
     ] {
         assert!(query_description.contains(guidance), "missing {guidance:?}");
@@ -606,7 +1311,10 @@ async fn http_rejects_invalid_input_and_returns_empty_matches() -> Result<(), Bo
         .request(http_request("/foods/search?query=chicken")?)
         .await?;
     assert_eq!(no_match.status, StatusCode::OK);
-    assert_eq!(no_match.json, json!({ "foods": [] }));
+    assert_eq!(
+        no_match.json,
+        json!({ "common": [], "branded": [], "custom": [] })
+    );
     Ok(())
 }
 
@@ -625,7 +1333,7 @@ async fn mcp_returns_search_errors_as_tool_errors_and_unknown_tool_as_protocol_e
     assert_eq!(no_match.status, StatusCode::OK);
     assert_eq!(
         no_match.json["result"]["structuredContent"],
-        json!({"foods": []})
+        json!({"common": [], "branded": [], "custom": []})
     );
     assert_eq!(no_match.json["result"]["isError"], false);
     let unknown = mcp_call(&app, 4, "unknown", json!({})).await?;
@@ -685,17 +1393,23 @@ async fn limits_default_to_twenty_and_cap_at_one_thousand() -> Result<(), Box<dy
         .request(http_request("/foods/search?query=chicken")?)
         .await?;
     assert_eq!(default.status, StatusCode::OK);
-    assert_eq!(default.json["foods"].as_array().map(Vec::len), Some(20));
+    assert_eq!(default.json["common"].as_array().map(Vec::len), Some(20));
+    assert!(
+        default.json["branded"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    );
+    assert!(default.json["custom"].as_array().is_some_and(Vec::is_empty));
     let lower = app
         .request(http_request("/foods/search?query=chicken&limit=1")?)
         .await?;
     assert_eq!(lower.status, StatusCode::OK);
-    assert_eq!(lower.json["foods"].as_array().map(Vec::len), Some(20));
+    assert_eq!(lower.json["common"].as_array().map(Vec::len), Some(20));
     let capped = app
         .request(http_request("/foods/search?query=chicken&limit=1001")?)
         .await?;
     assert_eq!(capped.status, StatusCode::OK);
-    assert_eq!(capped.json["foods"].as_array().map(Vec::len), Some(1_000));
+    assert_eq!(capped.json["common"].as_array().map(Vec::len), Some(1_000));
     mcp_initialize(&app).await?;
     let mcp_default = mcp_call(&app, 2, NAME, json!({"query":"chicken"})).await?;
     assert_eq!(mcp_default.status, StatusCode::OK);
@@ -704,7 +1418,7 @@ async fn limits_default_to_twenty_and_cap_at_one_thousand() -> Result<(), Box<dy
         default.json
     );
     assert_eq!(
-        mcp_default.json["result"]["structuredContent"]["foods"]
+        mcp_default.json["result"]["structuredContent"]["common"]
             .as_array()
             .map(Vec::len),
         Some(20)
@@ -713,7 +1427,7 @@ async fn limits_default_to_twenty_and_cap_at_one_thousand() -> Result<(), Box<dy
     assert_eq!(mcp_lower.status, StatusCode::OK);
     assert_eq!(mcp_lower.json["result"]["structuredContent"], lower.json);
     assert_eq!(
-        mcp_lower.json["result"]["structuredContent"]["foods"]
+        mcp_lower.json["result"]["structuredContent"]["common"]
             .as_array()
             .map(Vec::len),
         Some(20)
@@ -721,7 +1435,7 @@ async fn limits_default_to_twenty_and_cap_at_one_thousand() -> Result<(), Box<dy
     let mcp = mcp_call(&app, 4, NAME, json!({"query":"chicken", "limit":1001})).await?;
     assert_eq!(mcp.status, StatusCode::OK);
     assert_eq!(
-        mcp.json["result"]["structuredContent"]["foods"]
+        mcp.json["result"]["structuredContent"]["common"]
             .as_array()
             .map(Vec::len),
         Some(1_000)

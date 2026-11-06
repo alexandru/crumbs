@@ -15,7 +15,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 use url::form_urlencoded;
 
-use super::{AuthorizationServer, protocol};
+use super::{AuthorizationServer, FoodScopes, protocol};
 use crate::{IssuerUrl, OAuthConfig};
 
 pub(crate) const TEST_ISSUER: &str = "https://crumbs.example.com";
@@ -25,12 +25,120 @@ pub(crate) const TEST_USERNAME: &str = "alice";
 pub(crate) const TEST_PASSWORD: &str = "correct horse battery staple";
 pub(crate) const TEST_MCP_ACCESS_TOKEN: &str = "test-mcp-access-token";
 pub(crate) const TEST_REST_ACCESS_TOKEN: &str = "test-rest-access-token";
+pub(crate) const TEST_MCP_WRITE_ACCESS_TOKEN: &str = "test-mcp-write-access-token";
+pub(crate) const TEST_REST_WRITE_ACCESS_TOKEN: &str = "test-rest-write-access-token";
 const TEST_MCP_REFRESH_TOKEN: &str = "test-mcp-refresh-token";
 const TEST_REST_REFRESH_TOKEN: &str = "test-rest-refresh-token";
+const TEST_MCP_WRITE_REFRESH_TOKEN: &str = "test-mcp-write-refresh-token";
+const TEST_REST_WRITE_REFRESH_TOKEN: &str = "test-rest-write-refresh-token";
 const TEST_REDIRECT_URI: &str = "https://client.example/callback";
 const TEST_VERIFIER: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
 
 type TestResult<T> = Result<T, Box<dyn Error>>;
+
+#[test]
+fn food_scopes_parse_supported_values_and_normalize_order_and_duplicates() {
+    for (value, expected, can_read, can_write) in [
+        ("crumbs:read", "crumbs:read", true, false),
+        ("crumbs:write", "crumbs:write", false, true),
+        (
+            "crumbs:write crumbs:read crumbs:write",
+            "crumbs:read crumbs:write",
+            true,
+            true,
+        ),
+    ] {
+        let scopes = FoodScopes::parse(value);
+        assert_eq!(scopes.map(FoodScopes::as_str), Some(expected));
+        assert_eq!(scopes.map(FoodScopes::can_read), Some(can_read));
+        assert_eq!(scopes.map(FoodScopes::can_write), Some(can_write));
+    }
+}
+
+#[test]
+fn food_scopes_reject_empty_and_unknown_values() {
+    for value in ["", "  \t", "crumbs:admin", "crumbs:read,crumbs:write"] {
+        assert!(FoodScopes::parse(value).is_none(), "accepted {value:?}");
+    }
+}
+
+#[tokio::test]
+async fn rest_write_requires_write_scope_and_reports_the_required_scope() -> TestResult<()> {
+    let directory = tempfile::tempdir()?;
+    let database = Arc::new(
+        Database::open(DatabaseConfig {
+            path: directory.path().join("oauth.db"),
+        })
+        .await?,
+    );
+    let authorization = test_authorization_server(database).await?;
+    let router = Router::new()
+        .route(
+            "/custom-foods",
+            axum::routing::post(|| async { StatusCode::NO_CONTENT }),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            authorization,
+            super::require_access::<Database>,
+        ));
+
+    let missing = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/custom-foods")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        missing
+            .headers()
+            .get(header::WWW_AUTHENTICATE)
+            .is_some_and(|value| value
+                .to_str()
+                .is_ok_and(|value| value.contains("scope=\"crumbs:write\"")))
+    );
+
+    let read_only = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/custom-foods")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {TEST_REST_ACCESS_TOKEN}"),
+                )
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(read_only.status(), StatusCode::FORBIDDEN);
+    assert!(
+        read_only
+            .headers()
+            .get(header::WWW_AUTHENTICATE)
+            .is_some_and(|value| value
+                .to_str()
+                .is_ok_and(|value| value.contains("scope=\"crumbs:write\"")))
+    );
+
+    let read_write = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/custom-foods")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {TEST_REST_WRITE_ACCESS_TOKEN}"),
+                )
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(read_write.status(), StatusCode::NO_CONTENT);
+    Ok(())
+}
 
 pub(crate) async fn test_authorization_server(
     store: Arc<Database>,
@@ -51,6 +159,24 @@ pub(crate) async fn test_authorization_server(
         TEST_REST_REFRESH_TOKEN,
     )
     .await?;
+    seed_session_with_scope(
+        &store,
+        "test-mcp-write-client",
+        TEST_MCP_RESOURCE,
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+        TEST_MCP_WRITE_REFRESH_TOKEN,
+        FoodScopes::ReadWrite,
+    )
+    .await?;
+    seed_session_with_scope(
+        &store,
+        "test-rest-write-client",
+        TEST_REST_RESOURCE,
+        TEST_REST_WRITE_ACCESS_TOKEN,
+        TEST_REST_WRITE_REFRESH_TOKEN,
+        FoodScopes::ReadWrite,
+    )
+    .await?;
     Ok(AuthorizationServer::new(store, oauth_config()?).await?)
 }
 
@@ -60,6 +186,25 @@ pub(crate) async fn seed_session(
     resource: &str,
     access_token: &str,
     refresh_token: &str,
+) -> TestResult<()> {
+    seed_session_with_scope(
+        store,
+        client_id,
+        resource,
+        access_token,
+        refresh_token,
+        FoodScopes::Read,
+    )
+    .await
+}
+
+pub(crate) async fn seed_session_with_scope(
+    store: &Database,
+    client_id: &str,
+    resource: &str,
+    access_token: &str,
+    refresh_token: &str,
+    scope: FoodScopes,
 ) -> TestResult<()> {
     let (user_id, password_hash) = test_user(store).await?;
     let now = protocol::now()?;
@@ -87,7 +232,7 @@ pub(crate) async fn seed_session(
                     client_id: client.id.clone(),
                     redirect_uri: TEST_REDIRECT_URI.to_owned(),
                     resource: resource.to_owned(),
-                    scope: "crumbs:read".to_owned(),
+                    scope,
                     state: None,
                     code_challenge: challenge.clone(),
                 },
@@ -118,6 +263,7 @@ pub(crate) async fn seed_session(
                 resource: resource.to_owned(),
                 code_challenge: challenge,
             },
+            None,
             &TokenPair {
                 access_hash: protocol::digest(access_token),
                 refresh_hash: protocol::digest(refresh_token),
@@ -313,7 +459,10 @@ async fn discovery_registration_and_login_complete_the_pkce_flow() -> TestResult
         metadata["code_challenge_methods_supported"],
         json!(["S256"])
     );
-    assert_eq!(metadata["scopes_supported"], json!(["crumbs:read"]));
+    assert_eq!(
+        metadata["scopes_supported"],
+        json!(["crumbs:read", "crumbs:write"])
+    );
 
     let mcp_resource = app
         .request(get_request("/.well-known/oauth-protected-resource/mcp")?)
@@ -326,8 +475,16 @@ async fn discovery_registration_and_login_complete_the_pkce_flow() -> TestResult
         TEST_MCP_RESOURCE
     );
     assert_eq!(
+        serde_json::from_str::<Value>(&mcp_resource.body)?["scopes_supported"],
+        json!(["crumbs:read", "crumbs:write"])
+    );
+    assert_eq!(
         serde_json::from_str::<Value>(&rest_resource.body)?["resource"],
         TEST_REST_RESOURCE
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&rest_resource.body)?["scopes_supported"],
+        json!(["crumbs:read", "crumbs:write"])
     );
 
     let registration = app
@@ -339,8 +496,7 @@ async fn discovery_registration_and_login_complete_the_pkce_flow() -> TestResult
                 "client_name": "Food search client",
                 "token_endpoint_auth_method": "none",
                 "grant_types": ["authorization_code", "refresh_token"],
-                "response_types": ["code"],
-                "scope": "crumbs:read"
+                "response_types": ["code"]
             }),
         )?)
         .await?;
@@ -353,6 +509,7 @@ async fn discovery_registration_and_login_complete_the_pkce_flow() -> TestResult
     let client: Value = serde_json::from_str(&registration.body)?;
     assert!(client["client_id"].is_string());
     assert!(client.get("client_secret").is_none());
+    assert_eq!(client["scope"], "crumbs:read");
 
     let verifier = TEST_VERIFIER;
     let challenge = protocol::pkce_challenge(verifier)?;
@@ -366,7 +523,6 @@ async fn discovery_registration_and_login_complete_the_pkce_flow() -> TestResult
         ("resource", TEST_MCP_RESOURCE),
         ("code_challenge", &challenge),
         ("code_challenge_method", "S256"),
-        ("scope", "crumbs:read"),
         ("state", "client-state-123"),
     ]);
     let page = app
@@ -610,6 +766,65 @@ async fn registration_rejects_invalid_redirect_without_redirecting_to_it() -> Te
         .await?;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(response.headers.get(header::LOCATION).is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn authorization_and_token_requests_reject_unknown_scopes() -> TestResult<()> {
+    let app = Application::new().await?;
+    let registration = app
+        .request(json_request(
+            "POST",
+            "/oauth/register",
+            json!({
+                "redirect_uris": [TEST_REDIRECT_URI],
+                "token_endpoint_auth_method": "none"
+            }),
+        )?)
+        .await?;
+    assert_eq!(registration.status, StatusCode::CREATED);
+    let client: Value = serde_json::from_str(&registration.body)?;
+    let client_id = client["client_id"].as_str().ok_or("client id missing")?;
+
+    let authorization_query = form_query(&[
+        ("client_id", client_id),
+        ("redirect_uri", TEST_REDIRECT_URI),
+        ("response_type", "code"),
+        ("resource", TEST_REST_RESOURCE),
+        ("code_challenge", "A".repeat(43).as_str()),
+        ("code_challenge_method", "S256"),
+        ("scope", "crumbs:admin"),
+    ]);
+    let authorization = app
+        .request(get_request(&format!(
+            "/oauth/authorize?{authorization_query}"
+        ))?)
+        .await?;
+    assert_eq!(authorization.status, StatusCode::SEE_OTHER);
+    assert!(
+        authorization
+            .headers
+            .get(header::LOCATION)
+            .is_some_and(|value| value
+                .to_str()
+                .is_ok_and(|value| value.contains("error=invalid_scope")))
+    );
+
+    let token = app
+        .request(form_request(
+            "/oauth/token",
+            &[
+                ("grant_type", "unsupported"),
+                ("client_id", client_id),
+                ("resource", TEST_REST_RESOURCE),
+                ("scope", "crumbs:admin"),
+            ],
+            None,
+            None,
+        )?)
+        .await?;
+    assert_eq!(token.status, StatusCode::BAD_REQUEST);
+    assert!(token.body.contains("invalid_scope"));
     Ok(())
 }
 
@@ -865,7 +1080,8 @@ async fn invalid_client_registration_is_rejected() -> TestResult<()> {
     for body in [
         json!({"redirect_uris": ["http://not-loopback.example/callback"]}),
         json!({"redirect_uris": ["https://client.example/callback"], "token_endpoint_auth_method": "unknown"}),
-        json!({"redirect_uris": ["https://client.example/callback"], "scope": "crumbs:write"}),
+        json!({"redirect_uris": ["https://client.example/callback"], "scope": "crumbs:unknown"}),
+        json!({"redirect_uris": ["https://client.example/callback"], "scope": "  "}),
     ] {
         let response = app
             .request(json_request("POST", "/oauth/register", body)?)
@@ -877,6 +1093,177 @@ async fn invalid_client_registration_is_rejected() -> TestResult<()> {
             response.body
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn readwrite_scope_is_shown_issued_and_preserved_by_refresh() -> TestResult<()> {
+    let app = Application::new().await?;
+    let registration = app
+        .request(json_request(
+            "POST",
+            "/oauth/register",
+            json!({
+                "redirect_uris": [TEST_REDIRECT_URI],
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token"],
+                "scope": "crumbs:write crumbs:read crumbs:write"
+            }),
+        )?)
+        .await?;
+    assert_eq!(
+        registration.status,
+        StatusCode::CREATED,
+        "{}",
+        registration.body
+    );
+    let client: Value = serde_json::from_str(&registration.body)?;
+    assert_eq!(client["scope"], "crumbs:read crumbs:write");
+    let client_id = client["client_id"].as_str().ok_or("client id missing")?;
+    let challenge = protocol::pkce_challenge(TEST_VERIFIER)?;
+    let query = form_query(&[
+        ("client_id", client_id),
+        ("redirect_uri", TEST_REDIRECT_URI),
+        ("response_type", "code"),
+        ("resource", TEST_REST_RESOURCE),
+        ("code_challenge", &challenge),
+        ("code_challenge_method", "S256"),
+        ("scope", "crumbs:write crumbs:read"),
+    ]);
+    let page = app
+        .request(get_request(&format!("/oauth/authorize?{query}"))?)
+        .await?;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert!(page.body.contains("Read the food library"));
+    assert!(
+        page.body
+            .contains("Search the food library and view nutrition data")
+    );
+    assert!(page.body.contains("Create, edit, and delete custom foods"));
+
+    let cookie = cookie_value(&page.headers).ok_or("login cookie missing")?;
+    let request_id = page_value(&page.body, "request_id").ok_or("request id missing")?;
+    let csrf_token = page_value(&page.body, "csrf_token").ok_or("CSRF token missing")?;
+    let login = app
+        .request(form_request(
+            "/oauth/login",
+            &[
+                ("request_id", request_id),
+                ("csrf_token", csrf_token),
+                ("username", TEST_USERNAME),
+                ("password", TEST_PASSWORD),
+                ("decision", "approve"),
+            ],
+            Some(TEST_ISSUER),
+            Some(&cookie),
+        )?)
+        .await?;
+    assert_eq!(login.status, StatusCode::SEE_OTHER, "{}", login.body);
+    let location = login
+        .headers
+        .get(header::LOCATION)
+        .ok_or("authorization redirect missing")?
+        .to_str()?;
+    let redirect = url::Url::parse(location)?;
+    let parameters: std::collections::HashMap<_, _> = redirect.query_pairs().into_owned().collect();
+    let code = parameters.get("code").ok_or("authorization code missing")?;
+
+    let token = app
+        .request(form_request(
+            "/oauth/token",
+            &[
+                ("grant_type", "authorization_code"),
+                ("client_id", client_id),
+                ("code", code),
+                ("redirect_uri", TEST_REDIRECT_URI),
+                ("code_verifier", TEST_VERIFIER),
+                ("resource", TEST_REST_RESOURCE),
+                ("scope", "crumbs:read crumbs:write"),
+            ],
+            None,
+            None,
+        )?)
+        .await?;
+    assert_eq!(token.status, StatusCode::OK, "{}", token.body);
+    let issued: Value = serde_json::from_str(&token.body)?;
+    assert_eq!(issued["scope"], "crumbs:read crumbs:write");
+    let refresh_token = issued["refresh_token"]
+        .as_str()
+        .ok_or("refresh token missing")?;
+
+    let rotated = app
+        .request(form_request(
+            "/oauth/token",
+            &[
+                ("grant_type", "refresh_token"),
+                ("client_id", client_id),
+                ("refresh_token", refresh_token),
+                ("resource", TEST_REST_RESOURCE),
+                ("scope", "crumbs:write crumbs:read"),
+            ],
+            None,
+            None,
+        )?)
+        .await?;
+    assert_eq!(rotated.status, StatusCode::OK, "{}", rotated.body);
+    let rotated: Value = serde_json::from_str(&rotated.body)?;
+    assert_eq!(rotated["scope"], "crumbs:read crumbs:write");
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_scope_cannot_be_escalated_during_code_exchange() -> TestResult<()> {
+    let app = Application::new().await?;
+    let code = "e".repeat(43);
+    seed_authorization_code(
+        &app.database,
+        "read-only-code-client",
+        TEST_REDIRECT_URI,
+        TEST_REST_RESOURCE,
+        &code,
+        TEST_VERIFIER,
+    )
+    .await?;
+
+    let response = app
+        .request(form_request(
+            "/oauth/token",
+            &[
+                ("grant_type", "authorization_code"),
+                ("client_id", "read-only-code-client"),
+                ("code", &code),
+                ("redirect_uri", TEST_REDIRECT_URI),
+                ("code_verifier", TEST_VERIFIER),
+                ("resource", TEST_REST_RESOURCE),
+                ("scope", "crumbs:read crumbs:write"),
+            ],
+            None,
+            None,
+        )?)
+        .await?;
+
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(response.body.contains("invalid_scope"));
+
+    let valid_retry = app
+        .request(form_request(
+            "/oauth/token",
+            &[
+                ("grant_type", "authorization_code"),
+                ("client_id", "read-only-code-client"),
+                ("code", &code),
+                ("redirect_uri", TEST_REDIRECT_URI),
+                ("code_verifier", TEST_VERIFIER),
+                ("resource", TEST_REST_RESOURCE),
+                ("scope", "crumbs:read"),
+            ],
+            None,
+            None,
+        )?)
+        .await?;
+    assert_eq!(valid_retry.status, StatusCode::OK, "{}", valid_retry.body);
+    let issued: Value = serde_json::from_str(&valid_retry.body)?;
+    assert_eq!(issued["scope"], "crumbs:read");
     Ok(())
 }
 
@@ -916,7 +1303,7 @@ async fn seed_authorization_code(
                     client_id: client_id.to_owned(),
                     redirect_uri: redirect_uri.to_owned(),
                     resource: resource.to_owned(),
-                    scope: "crumbs:read".to_owned(),
+                    scope: FoodScopes::Read,
                     state: None,
                     code_challenge: challenge.clone(),
                 },

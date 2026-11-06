@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 mod usda_nutrition;
 
 use crumbs_database::nutrition::FoodData;
-use crumbs_database::{Food, Source, SourceFoodId};
+use crumbs_database::{Dataset, Food, Source, SourceFoodId};
 
 /// A validated food record ready for persistence.
 ///
@@ -49,9 +49,10 @@ impl PreparedFood {
         Food {
             source: USDA_SOURCE,
             source_food_id: self.fdc_id.0,
-            dataset: self.kind.persisted_as_dataset().into(),
+            dataset: self.kind.dataset(),
             description: self.description.0,
             category: self.category.map(|category| category.0),
+            notes: None,
             parsed_data: self.parsed_data,
         }
     }
@@ -102,13 +103,11 @@ impl FoodKind {
         }
     }
 
-    /// Returns the dataset identifier stored by Crumbs.
-    pub(crate) const fn persisted_as_dataset(self) -> &'static str {
+    /// Returns the search dataset assigned to this USDA food kind.
+    pub(crate) const fn dataset(self) -> Dataset {
         match self {
-            Self::Foundation => "usda_foundation",
-            Self::SrLegacy => "usda_sr_legacy",
-            Self::Survey => "usda_survey_fndds",
-            Self::Branded => "usda_branded",
+            Self::Foundation | Self::SrLegacy | Self::Survey => Dataset::Common,
+            Self::Branded => Dataset::Branded,
         }
     }
 }

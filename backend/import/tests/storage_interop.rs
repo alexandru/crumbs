@@ -1,6 +1,5 @@
 mod common;
 
-use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::fs;
 use std::io;
@@ -8,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 use common::DatabaseFixture;
 use crumbs_database::{
-    Database, Food, FoodCategory, FoodDescription, FoodId, FoodSummary, FoodWriter, Source, TagName,
+    Database, Dataset, Food, FoodCategory, FoodDescription, FoodId, FoodSummary, FoodWriter,
+    Source, TagName,
 };
 use crumbs_import::import_usda;
 use sqlx::{SqlitePool, query, query_scalar};
@@ -28,7 +28,7 @@ async fn food_upserts_and_usda_reimports_preserve_tag_assignments() -> Result<()
     let initial = make_food(
         source.clone(),
         source_food_id,
-        "Foundation",
+        Dataset::Common,
         "Manual description",
         Some("Manual category"),
         r#"{"origin":"manual"}"#,
@@ -43,7 +43,7 @@ async fn food_upserts_and_usda_reimports_preserve_tag_assignments() -> Result<()
     let update = make_food(
         source.clone(),
         source_food_id,
-        "Foundation",
+        Dataset::Common,
         "Updated manual description",
         Some("Updated manual category"),
         r#"{"origin":"updated"}"#,
@@ -60,7 +60,8 @@ async fn food_upserts_and_usda_reimports_preserve_tag_assignments() -> Result<()
     assert_eq!(first_import.committed().get(), 2);
     let imported = find_food(&fixture.database, &source, source_food_id).await?;
     assert_eq!(imported.id, initial_id);
-    assert_eq!(imported.dataset.as_ref(), "usda_foundation");
+    assert_eq!(imported.dataset, Dataset::Common);
+    assert_eq!(imported.notes, None);
     assert_eq!(imported.description, "Hummus, commercial");
     assert_eq!(
         imported.category.as_deref(),
@@ -209,7 +210,7 @@ async fn import_failure_keeps_earlier_food_searchable_and_retry_succeeds()
 fn make_food(
     source: Source,
     source_food_id: &str,
-    dataset: &'static str,
+    dataset: Dataset,
     description: &str,
     category: Option<&str>,
     parsed_data: &str,
@@ -217,9 +218,10 @@ fn make_food(
     Ok(Food {
         source,
         source_food_id: source_food_id.to_owned(),
-        dataset: Cow::Borrowed(dataset),
+        dataset,
         description: description.to_owned(),
         category: category.map(str::to_owned),
+        notes: None,
         parsed_data: serde_json::from_str(parsed_data)?,
     })
 }

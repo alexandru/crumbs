@@ -6,6 +6,7 @@ compile_error!("crumbs-server currently supports Unix targets only");
 use std::io;
 
 mod config;
+mod custom_foods;
 mod handlers;
 mod mcp;
 mod oauth;

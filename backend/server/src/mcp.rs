@@ -1,8 +1,8 @@
-//! Hosted MCP adapter for the shared food search operation.
+//! Hosted MCP tools for food search and custom-food management.
 
 use std::sync::Arc;
 
-use crumbs_database::FoodReader;
+use crumbs_database::{CustomFoodStore, FoodReader};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, ErrorCode, Implementation, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -12,8 +12,15 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use rmcp::{ErrorData, RoleServer, ServerHandler};
+use serde_json::json;
 
+use crate::oauth::FoodScopes;
+
+mod authorization;
+mod custom_foods;
 mod search;
+
+pub(crate) use authorization::McpAuthorization;
 
 pub(crate) struct FoodSearchServer<S> {
     reader: Arc<S>,
@@ -21,13 +28,13 @@ pub(crate) struct FoodSearchServer<S> {
 
 impl<S> ServerHandler for FoodSearchServer<S>
 where
-    S: FoodReader + Send + 'static,
+    S: FoodReader + CustomFoodStore + Send + 'static,
 {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("crumbs", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Search foods using Crumbs full-text expressions. Results include full nutrition data.",
+                "Search foods using Crumbs full-text expressions. Results provide the best matches independently in common, branded, and custom datasets, including nutrition data and optional notes. Choose which foods to use. Manage custom foods with the custom-food tools; changes require crumbs:write.",
             )
     }
 
@@ -36,19 +43,27 @@ where
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(vec![search::tool()]))
+        let tools = std::iter::once(search::tool())
+            .chain(custom_foods::CustomFoodTool::tools())
+            .collect();
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        (name == search::NAME).then(search::tool)
+        if name == search::NAME {
+            Some(search::tool())
+        } else {
+            custom_foods::CustomFoodTool::from_name(name).map(|tool| tool.tool())
+        }
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        if request.name != search::NAME {
+        let custom_tool = custom_foods::CustomFoodTool::from_name(&request.name);
+        if request.name != search::NAME && custom_tool.is_none() {
             return Err(ErrorData::new(
                 ErrorCode::METHOD_NOT_FOUND,
                 "unknown tool",
@@ -56,7 +71,28 @@ where
             ));
         }
 
-        search::call(self.reader.as_ref(), request.arguments).await
+        let required = if custom_tool.is_some_and(|tool| tool.requires_write()) {
+            FoodScopes::Write
+        } else {
+            FoodScopes::Read
+        };
+        let authorization = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(|parts| parts.extensions.get::<McpAuthorization>());
+        let permitted = authorization.is_some_and(|authorization| authorization.permits(required));
+        if !permitted {
+            return Ok(rmcp::model::CallToolResult::structured_error(json!({
+                "error": "insufficient_scope",
+                "required_scope": required.as_str(),
+            }))
+            .into());
+        }
+
+        match custom_tool {
+            Some(tool) => tool.call(self.reader.as_ref(), request.arguments).await,
+            None => search::call(self.reader.as_ref(), request.arguments).await,
+        }
     }
 }
 
@@ -65,7 +101,7 @@ pub(crate) fn service<S>(
     config: StreamableHttpServerConfig,
 ) -> StreamableHttpService<FoodSearchServer<S>, LocalSessionManager>
 where
-    S: FoodReader + Send + 'static,
+    S: FoodReader + CustomFoodStore + Send + 'static,
 {
     StreamableHttpService::new(
         move || {

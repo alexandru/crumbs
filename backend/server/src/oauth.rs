@@ -15,6 +15,7 @@ use crumbs_database::users::{PasswordHash, UserError, Users};
 use serde_json::json;
 use tokio::sync::Semaphore;
 
+use crate::mcp::McpAuthorization;
 use crate::{IssuerUrl, OAuthConfig, oauth_views};
 
 mod authorization;
@@ -29,6 +30,8 @@ pub(crate) struct AuthorizationServer<S> {
     password_slots: Arc<Semaphore>,
     limits: limits::Limits,
 }
+
+pub(crate) use crumbs_database::oauth::OAuthScope as FoodScopes;
 
 impl<S> AuthorizationServer<S>
 where
@@ -134,8 +137,17 @@ where
     S: Users + OAuthStore + Send + 'static,
 {
     let mcp = request.uri().path() == "/mcp" || request.uri().path().starts_with("/mcp/");
+    let required_scope = if mcp {
+        None
+    } else if request.method() == axum::http::Method::GET
+        || request.method() == axum::http::Method::HEAD
+    {
+        Some(FoodScopes::Read)
+    } else {
+        Some(FoodScopes::Write)
+    };
     let Some(token) = protocol::bearer(request.headers()) else {
-        return challenge(&server, mcp);
+        return challenge(&server, mcp, required_scope);
     };
     let Ok(now) = protocol::now() else {
         return internal_error();
@@ -145,12 +157,27 @@ where
         .authenticate_access(&protocol::digest(token), &server.resource(mcp), now)
         .await
     {
-        Ok(Some(session)) if session.scope == READ_SCOPE => {
+        Ok(Some(session)) => {
+            let scopes = session.scope;
+            if let Some(required) = required_scope
+                && !scopes.includes(required)
+            {
+                return insufficient_scope(&server, mcp, required);
+            }
+            let mcp_authorization = mcp.then(|| McpAuthorization::new(scopes));
+            if let Some(authorization) = &mcp_authorization {
+                request.extensions_mut().insert(authorization.clone());
+            }
             request.extensions_mut().insert(session);
-            next.run(request).await
+            let response = next.run(request).await;
+            // Denied calls finish before emitting notifications. With JSON responses enabled,
+            // rmcp waits for this terminal result before returning the HTTP response.
+            match mcp_authorization.and_then(|authorization| authorization.challenge()) {
+                Some(required) => scope_challenge(&server, mcp, required, response),
+                None => response,
+            }
         }
-        Ok(Some(_)) => oauth_error(StatusCode::FORBIDDEN, "insufficient_scope"),
-        Ok(None) => challenge(&server, mcp),
+        Ok(None) => challenge(&server, mcp, required_scope),
         Err(_) => internal_error(),
     }
 }
@@ -191,7 +218,7 @@ where
         "token_endpoint_auth_methods_supported": ["none", "client_secret_basic", "client_secret_post"],
         "revocation_endpoint_auth_methods_supported": ["none", "client_secret_basic", "client_secret_post"],
         "code_challenge_methods_supported": ["S256"],
-        "scopes_supported": [READ_SCOPE],
+        "scopes_supported": SUPPORTED_SCOPES,
         "authorization_response_iss_parameter_supported": true,
     }))
 }
@@ -221,7 +248,7 @@ where
     Json(json!({
         "resource": server.resource(mcp),
         "authorization_servers": [server.issuer.as_str()],
-        "scopes_supported": [READ_SCOPE],
+        "scopes_supported": SUPPORTED_SCOPES,
         "bearer_methods_supported": ["header"],
         "resource_name": "Crumbs food library",
     }))
@@ -261,7 +288,11 @@ where
     next.run(request).await
 }
 
-fn challenge<S>(server: &AuthorizationServer<S>, mcp: bool) -> Response
+fn challenge<S>(
+    server: &AuthorizationServer<S>,
+    mcp: bool,
+    required_scope: Option<FoodScopes>,
+) -> Response
 where
     S: Users + OAuthStore + Send + 'static,
 {
@@ -270,12 +301,56 @@ where
     } else {
         "/.well-known/oauth-protected-resource"
     });
-    let value = format!("Bearer resource_metadata=\"{metadata}\", scope=\"{READ_SCOPE}\"");
+    let value = match required_scope {
+        Some(scope) => format!(
+            "Bearer resource_metadata=\"{metadata}\", scope=\"{}\"",
+            scope.as_str()
+        ),
+        None => format!("Bearer resource_metadata=\"{metadata}\""),
+    };
     (
         StatusCode::UNAUTHORIZED,
         [(header::WWW_AUTHENTICATE, value)],
     )
         .into_response()
+}
+
+fn insufficient_scope<S>(
+    server: &AuthorizationServer<S>,
+    mcp: bool,
+    required: FoodScopes,
+) -> Response {
+    scope_challenge(
+        server,
+        mcp,
+        required,
+        oauth_error(StatusCode::FORBIDDEN, "insufficient_scope"),
+    )
+}
+
+fn scope_challenge<S>(
+    server: &AuthorizationServer<S>,
+    mcp: bool,
+    required: FoodScopes,
+    mut response: Response,
+) -> Response {
+    let metadata = server.issuer.endpoint(if mcp {
+        "/.well-known/oauth-protected-resource/mcp"
+    } else {
+        "/.well-known/oauth-protected-resource"
+    });
+    let challenge = format!(
+        "Bearer error=\"insufficient_scope\", scope=\"{}\", resource_metadata=\"{metadata}\"",
+        required.as_str()
+    );
+    let Ok(challenge) = HeaderValue::from_str(&challenge) else {
+        return internal_error();
+    };
+    *response.status_mut() = StatusCode::FORBIDDEN;
+    response
+        .headers_mut()
+        .insert(header::WWW_AUTHENTICATE, challenge);
+    response
 }
 
 fn oauth_error(status: StatusCode, error: &'static str) -> Response {
@@ -300,7 +375,9 @@ fn same_origin<S>(server: &AuthorizationServer<S>, headers: &HeaderMap) -> bool 
         if value.to_str().ok() == Some(server.issuer.as_str()))
 }
 
-const READ_SCOPE: &str = "crumbs:read";
+const READ_SCOPE: &str = FoodScopes::Read.as_str();
+const WRITE_SCOPE: &str = FoodScopes::Write.as_str();
+const SUPPORTED_SCOPES: [&str; 2] = [READ_SCOPE, WRITE_SCOPE];
 const LOGIN_TTL: Duration = Duration::from_secs(10 * 60);
 const CODE_TTL: Duration = Duration::from_secs(60);
 const ACCESS_TTL: Duration = Duration::from_secs(10 * 60);
