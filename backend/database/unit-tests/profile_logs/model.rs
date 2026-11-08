@@ -188,15 +188,25 @@ fn food_input_amount_units_and_serving_names_are_strict() -> Result<(), Box<dyn 
     assert!(serde_json::from_str::<Amount>("1.5").is_err());
 
     for unit in ["kg", "g", "mg", "µg", "l", "ml"] {
-        assert!(matches!(
-            ServingSelector::parse(unit)?,
-            ServingSelector::Unit(_)
-        ));
+        for selector in [unit.to_owned(), format!(" {unit} ")] {
+            let parsed = ServingSelector::parse(&selector)?;
+            assert!(matches!(parsed, ServingSelector::Unit(_)));
+            let serialized = serde_json::to_string(&parsed)?;
+            assert_eq!(
+                serde_json::from_str::<ServingSelector>(&serialized)?,
+                parsed
+            );
+            assert!(SelectedServingName::new(selector.clone()).is_err());
+            assert!(
+                serde_json::from_str::<SelectedServingName>(&serde_json::to_string(&selector)?)
+                    .is_err()
+            );
+        }
     }
-    assert!(matches!(
-        ServingSelector::parse("  Small bowl  ")?,
-        ServingSelector::Named(name) if name.as_str() == "Small bowl"
-    ));
+    let named = ServingSelector::parse("  Small bowl  ")?;
+    assert!(matches!(&named, ServingSelector::Named(name) if name.as_str() == "Small bowl"));
+    let named_json = serde_json::to_string(&named)?;
+    assert_eq!(serde_json::from_str::<ServingSelector>(&named_json)?, named);
     assert!(ServingSelector::parse(" ").is_err());
 
     let input: FoodLogInput = serde_json::from_value(serde_json::json!({

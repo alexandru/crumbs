@@ -533,16 +533,6 @@ impl fmt::Display for Volume {
     }
 }
 
-/// Applies fixed-point multiplication and maps representational overflow to a domain error.
-fn checked_mul(left: Decimal, right: Decimal) -> Result<Decimal, QuantityError> {
-    left.checked_mul(right).ok_or(QuantityError::Arithmetic)
-}
-
-/// Applies fixed-point division and maps representational overflow to a domain error.
-fn checked_div(left: Decimal, right: Decimal) -> Result<Decimal, QuantityError> {
-    left.checked_div(right).ok_or(QuantityError::Arithmetic)
-}
-
 impl fmt::Display for MeasuredQuantity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -568,6 +558,16 @@ impl<'de> Deserialize<'de> for MeasuredQuantity {
 
 mod sealed {
     pub trait Sealed {}
+}
+
+/// Applies fixed-point multiplication and maps representational overflow to a domain error.
+fn checked_mul(left: Decimal, right: Decimal) -> Result<Decimal, QuantityError> {
+    left.checked_mul(right).ok_or(QuantityError::Arithmetic)
+}
+
+/// Applies fixed-point division and maps representational overflow to a domain error.
+fn checked_div(left: Decimal, right: Decimal) -> Result<Decimal, QuantityError> {
+    left.checked_div(right).ok_or(QuantityError::Arithmetic)
 }
 
 fn qualifier_and_amount(value: &str) -> (Qualifier, &str) {

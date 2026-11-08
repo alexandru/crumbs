@@ -888,6 +888,30 @@ async fn food_logs_scale_mass_and_volume_profiles_and_keep_all_nutrients()
     assert_eq!(named_snapshot.serving_size().name, " small bowl ");
     assert_eq!(named_snapshot.serving_size().quantity().to_string(), "50 g");
 
+    let named_amount_patch: PatchLog =
+        serde_json::from_str(r#"{"entry":{"type":"food","amount":"3"}}"#)?;
+    let patched_named_log = database
+        .patch_profile_log(user, profile.id, named_log.id, &named_amount_patch)
+        .await?
+        .ok_or_else(|| std::io::Error::other("named food log was not found"))?;
+    let ProfileLogData::Food(patched_named_entry) = &patched_named_log.data else {
+        return Err(std::io::Error::other("patched named entry changed category").into());
+    };
+    assert_eq!(patched_named_entry.quantity().to_string(), "150 g");
+    assert_eq!(
+        patched_named_entry.nutrition().calories.amount().value(),
+        Decimal::from(300)
+    );
+    let patched_named_snapshot = patched_named_entry
+        .input()
+        .ok_or_else(|| std::io::Error::other("patched named serving snapshot was not retained"))?;
+    assert_eq!(patched_named_snapshot.amount().value(), Decimal::from(3));
+    assert_eq!(patched_named_snapshot.serving_size().name, " small bowl ");
+    assert_eq!(
+        patched_named_snapshot.serving_size().quantity().to_string(),
+        "50 g"
+    );
+
     let volume_food = create_common_food(
         &database,
         "drink-1",

@@ -375,9 +375,21 @@ impl MeasurementUnit {
             Self::Volume(unit) => unit.quantity(),
         }
     }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "kg" => Some(Self::Mass(MassUnit::Kilograms)),
+            "g" => Some(Self::Mass(MassUnit::Grams)),
+            "mg" => Some(Self::Mass(MassUnit::Milligrams)),
+            "µg" => Some(Self::Mass(MassUnit::Micrograms)),
+            "l" => Some(Self::Volume(VolumeUnit::Litres)),
+            "ml" => Some(Self::Volume(VolumeUnit::Millilitres)),
+            _ => None,
+        }
+    }
 }
 
-/// A nonblank selected name for a source food serving.
+/// A nonblank, nonreserved selected name for a source food serving.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectedServingName(String);
 
@@ -386,12 +398,18 @@ impl SelectedServingName {
     ///
     /// # Errors
     ///
-    /// Returns [`ProfileLogError::InvalidInput`] if the trimmed name is blank.
+    /// Returns [`ProfileLogError::InvalidInput`] if the trimmed name is blank or matches a
+    /// supported measurement-unit token.
     pub fn new(value: impl Into<String>) -> Result<Self, ProfileLogError> {
         let value = value.into();
         let trimmed = value.trim();
         if trimmed.is_empty() {
             return Err(invalid_food("serving name must not be blank"));
+        }
+        if MeasurementUnit::parse(trimmed).is_some() {
+            return Err(invalid_food(
+                "serving name must not match a supported measurement unit",
+            ));
         }
         if trimmed.len() == value.len() {
             Ok(Self(value))
@@ -424,12 +442,12 @@ impl<'de> Deserialize<'de> for SelectedServingName {
     }
 }
 
-/// A unit token or exact, case-sensitive source serving name.
+/// A unit token or exact, case-sensitive nonreserved source serving name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServingSelector {
     /// One unit in a supported mass or volume unit.
     Unit(MeasurementUnit),
-    /// A named source serving.
+    /// A nonreserved named source serving.
     Named(SelectedServingName),
 }
 
@@ -438,17 +456,12 @@ impl ServingSelector {
     ///
     /// # Errors
     ///
-    /// Returns [`ProfileLogError::InvalidInput`] if a selected serving name is blank.
+    /// Returns [`ProfileLogError::InvalidInput`] if a named serving is blank.
     pub fn parse(value: &str) -> Result<Self, ProfileLogError> {
         let value = value.trim();
-        match value {
-            "kg" => Ok(Self::Unit(MeasurementUnit::Mass(MassUnit::Kilograms))),
-            "g" => Ok(Self::Unit(MeasurementUnit::Mass(MassUnit::Grams))),
-            "mg" => Ok(Self::Unit(MeasurementUnit::Mass(MassUnit::Milligrams))),
-            "µg" => Ok(Self::Unit(MeasurementUnit::Mass(MassUnit::Micrograms))),
-            "l" => Ok(Self::Unit(MeasurementUnit::Volume(VolumeUnit::Litres))),
-            "ml" => Ok(Self::Unit(MeasurementUnit::Volume(VolumeUnit::Millilitres))),
-            _ => Ok(Self::Named(SelectedServingName::new(value)?)),
+        match MeasurementUnit::parse(value) {
+            Some(unit) => Ok(Self::Unit(unit)),
+            None => Ok(Self::Named(SelectedServingName::new(value)?)),
         }
     }
 }
