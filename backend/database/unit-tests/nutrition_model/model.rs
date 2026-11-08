@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::str::FromStr;
 
+use rust_decimal::Decimal;
 use serde_json::json;
 
 use super::*;
@@ -8,7 +9,7 @@ use super::*;
 #[test]
 fn food_data_round_trips_mass_and_volume_profiles_without_defaulting_missing_amounts()
 -> Result<(), Box<dyn Error>> {
-    let mass_data: FoodData = serde_json::from_value(json!({
+    let mass_fixture = json!({
         "nutrition": {
             "per": "100 g",
             "energy": "210 kcal",
@@ -26,14 +27,24 @@ fn food_data_round_trips_mass_and_volume_profiles_without_defaulting_missing_amo
             "cholesterol": null
         },
         "serving_sizes": []
-    }))?;
+    });
+    let mass_data: FoodData = serde_json::from_value(mass_fixture.clone())?;
     let encoded = serde_json::to_value(&mass_data)?;
+    let nutrition = &encoded["nutrition"];
+    assert!(nutrition.get("nutrients").is_none());
+    assert_eq!(nutrition["fat"]["monounsaturated"], serde_json::Value::Null);
+    assert_eq!(
+        nutrition["carbohydrates"]["starch"],
+        serde_json::Value::Null
+    );
+    assert_eq!(nutrition["protein"], "7.0 g");
     let decoded: FoodData = serde_json::from_value(encoded)?;
     assert_eq!(decoded, mass_data);
     let profile = mass_data.nutrition.as_ref().ok_or("profile is missing")?;
     assert_eq!(profile.per, NutritionBasis::Per100Grams);
     assert_eq!(
         profile
+            .nutrients
             .carbohydrates
             .including_fibre
             .as_ref()
@@ -41,9 +52,10 @@ fn food_data_round_trips_mass_and_volume_profiles_without_defaulting_missing_amo
             .as_deref(),
         Some("28.5 g")
     );
-    assert_eq!(profile.carbohydrates.excluding_fibre, None);
+    assert_eq!(profile.nutrients.carbohydrates.excluding_fibre, None);
     assert_eq!(
         profile
+            .nutrients
             .carbohydrates
             .sugars
             .lactose
@@ -53,10 +65,15 @@ fn food_data_round_trips_mass_and_volume_profiles_without_defaulting_missing_amo
         Some("0.55 g")
     );
     assert_eq!(
-        profile.sodium.as_ref().map(ToString::to_string).as_deref(),
+        profile
+            .nutrients
+            .sodium
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("150 mg")
     );
-    assert_eq!(profile.salt, None);
+    assert_eq!(profile.nutrients.salt, None);
 
     let volume_data: FoodData = serde_json::from_value(json!({
         "nutrition": { "per": "100 ml" },
@@ -68,10 +85,135 @@ fn food_data_round_trips_mass_and_volume_profiles_without_defaulting_missing_amo
         .ok_or("volume profile is missing")?;
     assert_eq!(volume_profile.per, NutritionBasis::Per100Millilitres);
     assert_eq!(volume_profile.energy, None);
-    assert_eq!(volume_profile.fat.total, None);
-    assert_eq!(volume_profile.carbohydrates.sugars.lactose, None);
-    assert_eq!(volume_profile.sodium, None);
-    assert_eq!(volume_profile.salt, None);
+    assert_eq!(volume_profile.nutrients.fat.total, None);
+    assert_eq!(volume_profile.nutrients.carbohydrates.sugars.lactose, None);
+    assert_eq!(volume_profile.nutrients.sodium, None);
+    assert_eq!(volume_profile.nutrients.salt, None);
+    Ok(())
+}
+
+#[test]
+fn consumed_nutrition_has_required_calories_and_flattened_nutrients() -> Result<(), Box<dyn Error>>
+{
+    let input = json!({
+        "calories": "120 kcal",
+        "protein": "7 g",
+        "fat": { "total": "2 g" },
+        "carbohydrates": { "including_fibre": "18 g" }
+    });
+    let consumed: ConsumedNutrition = serde_json::from_value(input.clone())?;
+    let encoded = serde_json::to_value(&consumed)?;
+    assert_eq!(encoded["calories"], "120 kcal");
+    assert_eq!(encoded["protein"], "7 g");
+    assert_eq!(encoded["fibre"], serde_json::Value::Null);
+    assert!(encoded.get("nutrients").is_none());
+    assert!(serde_json::from_str::<ConsumedNutrition>(r#"{"protein":"7 g"}"#).is_err());
+    assert!(serde_json::from_str::<ConsumedNutrition>(r#"{"calories":"4.184 kJ"}"#).is_err());
+    assert_eq!(consumed.nutrients.fibre, None);
+    Ok(())
+}
+
+#[test]
+fn nutrient_scaling_preserves_qualifiers_units_and_missing_values() -> Result<(), Box<dyn Error>> {
+    let nutrients: Nutrients = serde_json::from_value(json!({
+        "fat": {
+            "total": "<= 10 mg",
+            "saturated": "2 g",
+            "monounsaturated": "3 µg",
+            "polyunsaturated": null,
+            "trans": "~ 4 mg"
+        },
+        "carbohydrates": {
+            "including_fibre": "20 g",
+            "excluding_fibre": null,
+            "sugars": { "total": "5 g", "added": "1 g", "lactose": null },
+            "starch": "14 g"
+        },
+        "fibre": "2 g",
+        "protein": "< 3 g",
+        "sodium": "5 mg",
+        "salt": null,
+        "cholesterol": "6 µg"
+    }))?;
+    let scaled = nutrients.checked_scale(Decimal::new(5, 1))?;
+    assert_eq!(
+        scaled.fat.total.map(|value| value.to_string()).as_deref(),
+        Some("<= 5.0 mg")
+    );
+    assert_eq!(
+        scaled
+            .fat
+            .saturated
+            .map(|value| value.to_string())
+            .as_deref(),
+        Some("1.0 g")
+    );
+    assert_eq!(
+        scaled
+            .fat
+            .monounsaturated
+            .map(|value| value.to_string())
+            .as_deref(),
+        Some("1.5 µg")
+    );
+    assert_eq!(scaled.fat.polyunsaturated, None);
+    assert_eq!(
+        scaled.fat.trans.map(|value| value.to_string()).as_deref(),
+        Some("~ 2.0 mg")
+    );
+    assert_eq!(
+        scaled
+            .carbohydrates
+            .including_fibre
+            .map(|value| value.to_string())
+            .as_deref(),
+        Some("10.0 g")
+    );
+    assert_eq!(scaled.carbohydrates.excluding_fibre, None);
+    assert_eq!(
+        scaled
+            .carbohydrates
+            .sugars
+            .total
+            .map(|value| value.to_string())
+            .as_deref(),
+        Some("2.5 g")
+    );
+    assert_eq!(
+        scaled
+            .carbohydrates
+            .sugars
+            .added
+            .map(|value| value.to_string())
+            .as_deref(),
+        Some("0.5 g")
+    );
+    assert_eq!(scaled.carbohydrates.sugars.lactose, None);
+    assert_eq!(
+        scaled
+            .carbohydrates
+            .starch
+            .map(|value| value.to_string())
+            .as_deref(),
+        Some("7.0 g")
+    );
+    assert_eq!(
+        scaled.fibre.map(|value| value.to_string()).as_deref(),
+        Some("1.0 g")
+    );
+    assert_eq!(
+        scaled.protein.map(|value| value.to_string()).as_deref(),
+        Some("< 1.5 g")
+    );
+    assert_eq!(
+        scaled.sodium.map(|value| value.to_string()).as_deref(),
+        Some("2.5 mg")
+    );
+    assert_eq!(scaled.salt, None);
+    assert_eq!(
+        scaled.cholesterol.map(|value| value.to_string()).as_deref(),
+        Some("3.0 µg")
+    );
     Ok(())
 }
 
@@ -91,16 +233,26 @@ fn represents_absent_profile_partial_profile_and_reported_zero_separately()
         .as_ref()
         .ok_or("partial profile is missing")?;
     assert_eq!(
-        profile.protein.as_ref().map(ToString::to_string).as_deref(),
+        profile
+            .nutrients
+            .protein
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("0 g")
     );
-    assert_eq!(profile.sodium, None);
+    assert_eq!(profile.nutrients.sodium, None);
     assert_eq!(
-        profile.salt.as_ref().map(ToString::to_string).as_deref(),
+        profile
+            .nutrients
+            .salt
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("0.2 g")
     );
-    assert_eq!(profile.carbohydrates.including_fibre, None);
-    assert_eq!(profile.carbohydrates.excluding_fibre, None);
+    assert_eq!(profile.nutrients.carbohydrates.including_fibre, None);
+    assert_eq!(profile.nutrients.carbohydrates.excluding_fibre, None);
     Ok(())
 }
 
@@ -148,6 +300,7 @@ fn serving_sizes_are_positive_measured_quantities_and_keep_servings_separate_fro
         data.nutrition
             .as_ref()
             .ok_or("profile is missing")?
+            .nutrients
             .protein
             .as_ref()
             .map(ToString::to_string)
@@ -223,6 +376,7 @@ fn representative_open_food_facts_values_fit_the_shared_model() -> Result<(), Bo
         .ok_or("European profile is missing")?;
     assert_eq!(
         european_profile
+            .nutrients
             .carbohydrates
             .excluding_fibre
             .as_ref()
@@ -230,10 +384,14 @@ fn representative_open_food_facts_values_fit_the_shared_model() -> Result<(), Bo
             .as_deref(),
         Some("28.5 g")
     );
-    assert_eq!(european_profile.carbohydrates.including_fibre, None);
+    assert_eq!(
+        european_profile.nutrients.carbohydrates.including_fibre,
+        None
+    );
     let us_profile = us.nutrition.as_ref().ok_or("US profile is missing")?;
     assert_eq!(
         us_profile
+            .nutrients
             .carbohydrates
             .including_fibre
             .as_ref()
@@ -241,7 +399,7 @@ fn representative_open_food_facts_values_fit_the_shared_model() -> Result<(), Bo
             .as_deref(),
         Some("28.5 g")
     );
-    assert_eq!(us_profile.carbohydrates.excluding_fibre, None);
+    assert_eq!(us_profile.nutrients.carbohydrates.excluding_fibre, None);
     let beverage_profile = beverage
         .nutrition
         .as_ref()
@@ -257,6 +415,7 @@ fn representative_open_food_facts_values_fit_the_shared_model() -> Result<(), Bo
     );
     assert_eq!(
         beverage_profile
+            .nutrients
             .sodium
             .as_ref()
             .map(ToString::to_string)
@@ -265,6 +424,7 @@ fn representative_open_food_facts_values_fit_the_shared_model() -> Result<(), Bo
     );
     assert_eq!(
         beverage_profile
+            .nutrients
             .fibre
             .as_ref()
             .map(ToString::to_string)

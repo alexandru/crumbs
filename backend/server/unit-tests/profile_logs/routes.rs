@@ -12,7 +12,10 @@ use crate::tests::{
     TestApplication, http_json_request, http_method_request, http_request, http_request_with_token,
 };
 
-use super::{create_test_profile, seed_other_access_token, seed_profile_owner};
+use super::{
+    assert_calories, assert_mass, create_test_food, create_test_profile, seed_other_access_token,
+    seed_profile_owner,
+};
 
 const OTHER_REST_TOKEN: &str = "test-other-profile-log-rest-token";
 const OTHER_REST_REFRESH: &str = "test-other-profile-log-rest-refresh";
@@ -232,6 +235,449 @@ async fn rest_profile_logs_update_current_weight_and_support_date_filters_and_cu
 }
 
 #[tokio::test]
+async fn rest_profile_logs_resolve_food_inputs_and_list_mixed_entries() -> Result<(), Box<dyn Error>>
+{
+    let app = TestApplication::new().await?;
+    seed_profile_owner(&app).await?;
+    let (profile_id, _) = create_test_profile(&app, "Alex", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    let profile_uri = format!("/profiles/{profile_id}");
+    let logs_uri = format!("{profile_uri}/logs");
+    let mass_food_id = create_test_food(
+        &app,
+        "Oat bar",
+        json!({
+            "nutrition": {"per":"100 g", "energy":"180 kcal", "protein":"10 g", "fat":{"total":"8 g"}},
+            "serving_sizes": [{"name":"one bar", "quantity":"50 g"}]
+        }),
+    )
+    .await?;
+    let volume_food_id = create_test_food(
+        &app,
+        "Fruit drink",
+        json!({
+            "nutrition": {"per":"100 ml", "energy":"40 kcal", "protein":"3 g", "sodium":"10 mg"},
+            "serving_sizes": [{"name":"one cup", "quantity":"250 ml"}]
+        }),
+    )
+    .await?;
+
+    let weight = create_log(&app, &logs_uri, Some("08:00"), "2025-07-01", "80 kg").await?;
+    assert_eq!(weight.status, StatusCode::CREATED, "{:?}", weight.json);
+
+    let named_mass = create_food_log(
+        &app,
+        &logs_uri,
+        "2025-07-01",
+        json!({"type":"food", "food_id":mass_food_id, "amount":"2", "serving_size":" one bar "}),
+    )
+    .await?;
+    assert_eq!(
+        named_mass.status,
+        StatusCode::CREATED,
+        "{:?}",
+        named_mass.json
+    );
+    assert_eq!(named_mass.json["data"]["type"], "food");
+    assert_eq!(named_mass.json["data"]["food_id"], mass_food_id);
+    assert_eq!(named_mass.json["data"]["quantity"], "100 g");
+    assert_calories(
+        &named_mass.json["data"]["nutrition"]["calories"],
+        "180 kcal",
+    )?;
+    assert_mass(&named_mass.json["data"]["nutrition"]["protein"], "10 g")?;
+    assert_mass(&named_mass.json["data"]["nutrition"]["fat"]["total"], "8 g")?;
+    assert_eq!(named_mass.json["data"]["description"], "Oat bar");
+    assert_eq!(named_mass.json["data"]["input"]["amount"], "2");
+    assert_eq!(
+        named_mass.json["data"]["input"]["serving_size"]["name"],
+        "one bar"
+    );
+    assert_eq!(
+        named_mass.json["data"]["input"]["serving_size"]["quantity"],
+        "50 g"
+    );
+
+    let grams = create_food_log(
+        &app,
+        &logs_uri,
+        "2025-07-02",
+        json!({"type":"food", "food_id":mass_food_id, "amount":"250", "serving_size":"g"}),
+    )
+    .await?;
+    assert_eq!(grams.status, StatusCode::CREATED, "{:?}", grams.json);
+    assert_eq!(grams.json["data"]["quantity"], "250 g");
+    assert_calories(&grams.json["data"]["nutrition"]["calories"], "450 kcal")?;
+    assert_mass(&grams.json["data"]["nutrition"]["protein"], "25 g")?;
+    assert_mass(&grams.json["data"]["nutrition"]["fat"]["total"], "20 g")?;
+    assert_eq!(grams.json["data"]["input"]["amount"], "250");
+    assert_eq!(grams.json["data"]["input"]["serving_size"]["name"], "g");
+    assert_eq!(
+        grams.json["data"]["input"]["serving_size"]["quantity"],
+        "1 g"
+    );
+
+    let millilitres = create_food_log(
+        &app,
+        &logs_uri,
+        "2025-07-03",
+        json!({"type":"food", "food_id":volume_food_id, "amount":"300", "serving_size":"ml"}),
+    )
+    .await?;
+    assert_eq!(
+        millilitres.status,
+        StatusCode::CREATED,
+        "{:?}",
+        millilitres.json
+    );
+    assert_eq!(millilitres.json["data"]["quantity"], "300 ml");
+    assert_calories(
+        &millilitres.json["data"]["nutrition"]["calories"],
+        "120 kcal",
+    )?;
+    assert_mass(&millilitres.json["data"]["nutrition"]["protein"], "9 g")?;
+    assert_mass(&millilitres.json["data"]["nutrition"]["sodium"], "30 mg")?;
+
+    let named_volume = create_food_log(
+        &app,
+        &logs_uri,
+        "2025-07-03",
+        json!({"type":"food", "food_id":volume_food_id, "amount":"2", "serving_size":"one cup"}),
+    )
+    .await?;
+    assert_eq!(
+        named_volume.status,
+        StatusCode::CREATED,
+        "{:?}",
+        named_volume.json
+    );
+    assert_eq!(named_volume.json["data"]["quantity"], "500 ml");
+    assert_calories(
+        &named_volume.json["data"]["nutrition"]["calories"],
+        "200 kcal",
+    )?;
+    assert_mass(&named_volume.json["data"]["nutrition"]["protein"], "15 g")?;
+
+    let profile_after_food = app.request(http_request(&profile_uri)?).await?;
+    assert_eq!(
+        profile_after_food.json["data"]["cache"]["current_weight"],
+        "80 kg"
+    );
+
+    let all = app.request(http_request(&logs_uri)?).await?;
+    assert_eq!(all.status, StatusCode::OK);
+    let all_items = all.json["items"]
+        .as_array()
+        .ok_or("mixed log list has no items")?;
+    assert_eq!(all_items.len(), 5);
+    assert!(all_items.iter().any(|item| item["data"]["type"] == "food"));
+    assert!(
+        all_items
+            .iter()
+            .any(|item| item["data"]["type"] == "biometric")
+    );
+    let all_ids = all_items
+        .iter()
+        .map(|item| item["id"].as_i64().ok_or("log ID is missing"))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(
+        all_ids
+            .iter()
+            .zip(all_ids.iter().skip(1))
+            .all(|(first, second)| first > second)
+    );
+    let first_id = all_items
+        .first()
+        .and_then(|item| item["id"].as_i64())
+        .ok_or("mixed list first ID is missing")?;
+    let after_first = app
+        .request(http_request(&format!("{logs_uri}?last_id={first_id}"))?)
+        .await?;
+    let after_first_items = after_first.json["items"]
+        .as_array()
+        .ok_or("cursor log list has no items")?;
+    assert_eq!(after_first_items.len(), 4);
+    assert!(
+        after_first_items
+            .iter()
+            .all(|item| item["id"].as_i64().is_some_and(|id| id < first_id))
+    );
+
+    let foods = app
+        .request(http_request(&format!(
+            "{logs_uri}?entry_type=food&from=2025-07-01&to=2025-07-03"
+        ))?)
+        .await?;
+    assert_eq!(foods.json["items"].as_array().map(Vec::len), Some(4));
+    assert!(
+        foods.json["items"]
+            .as_array()
+            .is_some_and(|items| items.iter().all(|item| item["data"]["type"] == "food"))
+    );
+    let biometrics = app
+        .request(http_request(&format!(
+            "{logs_uri}?entry_type=biometric&subtype=weight"
+        ))?)
+        .await?;
+    let biometric_items = biometrics.json["items"]
+        .as_array()
+        .ok_or("biometric list has no items")?;
+    assert_eq!(biometric_items.len(), 1);
+    let biometric_type = biometric_items
+        .first()
+        .and_then(|item| item["data"]["type"].as_str());
+    assert_eq!(biometric_type, Some("biometric"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn rest_profile_log_food_snapshots_survive_food_changes_and_deletion()
+-> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    seed_profile_owner(&app).await?;
+    let (profile_id, _) = create_test_profile(&app, "Alex", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    let logs_uri = format!("/profiles/{profile_id}/logs");
+    let food_id = create_test_food(
+        &app,
+        "Original wings",
+        json!({
+            "nutrition": {"per":"100 g", "energy":"200 kcal", "protein":"20 g"},
+            "serving_sizes": [{"name":"four wings", "quantity":"200 g"}]
+        }),
+    )
+    .await?;
+    let created = create_food_log(
+        &app,
+        &logs_uri,
+        "2025-08-01",
+        json!({"type":"food", "food_id":food_id, "amount":"1", "serving_size":"four wings"}),
+    )
+    .await?;
+    assert_eq!(created.status, StatusCode::CREATED, "{:?}", created.json);
+    let log_id = created.json["id"]
+        .as_i64()
+        .ok_or("food log ID is missing")?;
+    let log_uri = format!("{logs_uri}/{log_id}");
+    let original_snapshot = created.json["data"].clone();
+    assert_eq!(original_snapshot["description"], "Original wings");
+    assert_calories(&original_snapshot["nutrition"]["calories"], "400 kcal")?;
+    let null_input_patch = app
+        .request(http_json_request(
+            "PATCH",
+            &log_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"entry":{"type":"food", "amount":null}}),
+        )?)
+        .await?;
+    assert_eq!(null_input_patch.status, StatusCode::BAD_REQUEST);
+    assert_eq!(null_input_patch.json["code"], "invalid_input");
+
+    let source_uri = format!("/foods/custom/{food_id}");
+    let source_update = app
+        .request(http_json_request(
+            "PUT",
+            &source_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({
+                "description":"Updated wings",
+                "parsed_data": {
+                    "nutrition": {"per":"100 g", "energy":"300 kcal", "protein":"30 g"},
+                    "serving_sizes": [{"name":"four wings", "quantity":"200 g"}]
+                }
+            }),
+        )?)
+        .await?;
+    assert_eq!(
+        source_update.status,
+        StatusCode::OK,
+        "{:?}",
+        source_update.json
+    );
+    let unchanged = app.request(http_request(&log_uri)?).await?;
+    assert_eq!(unchanged.json["data"], original_snapshot);
+    let other_food_id = create_test_food(
+        &app,
+        "Other wings",
+        json!({
+            "nutrition": {"per":"100 g", "energy":"100 kcal"},
+            "serving_sizes": [{"name":"one wing", "quantity":"50 g"}]
+        }),
+    )
+    .await?;
+    let incompatible_food = app
+        .request(http_json_request(
+            "PATCH",
+            &log_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"entry":{"type":"food", "food_id":other_food_id}}),
+        )?)
+        .await?;
+    assert_eq!(incompatible_food.status, StatusCode::BAD_REQUEST);
+    assert_eq!(incompatible_food.json["code"], "invalid_input");
+
+    let refreshed = app
+        .request(http_json_request(
+            "PATCH",
+            &log_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"entry":{"type":"food", "amount":"2"}}),
+        )?)
+        .await?;
+    assert_eq!(refreshed.status, StatusCode::OK, "{:?}", refreshed.json);
+    assert_eq!(refreshed.json["data"]["description"], "Updated wings");
+    assert_eq!(refreshed.json["data"]["quantity"], "400 g");
+    assert_calories(
+        &refreshed.json["data"]["nutrition"]["calories"],
+        "1200 kcal",
+    )?;
+    assert_mass(&refreshed.json["data"]["nutrition"]["protein"], "120 g")?;
+    assert_eq!(refreshed.json["data"]["input"]["amount"], "2");
+
+    let deleted_source = app
+        .request(http_method_request(
+            "DELETE",
+            &source_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+        )?)
+        .await?;
+    assert_eq!(deleted_source.status, StatusCode::NO_CONTENT);
+    let metadata_patch = app
+        .request(http_json_request(
+            "PATCH",
+            &log_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"day":"2025-08-02", "time":"10:30", "entry":{"type":"food"}}),
+        )?)
+        .await?;
+    assert_eq!(
+        metadata_patch.status,
+        StatusCode::OK,
+        "{:?}",
+        metadata_patch.json
+    );
+    assert_eq!(metadata_patch.json["day"], "2025-08-02");
+    assert_eq!(metadata_patch.json["time"], "10:30:00.000");
+    assert_eq!(metadata_patch.json["data"], refreshed.json["data"]);
+
+    let time_only_patch = app
+        .request(http_json_request(
+            "PATCH",
+            &log_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"time":"11:30"}),
+        )?)
+        .await?;
+    assert_eq!(
+        time_only_patch.status,
+        StatusCode::OK,
+        "{:?}",
+        time_only_patch.json
+    );
+    assert_eq!(time_only_patch.json["data"], refreshed.json["data"]);
+
+    let missing_source_patch = app
+        .request(http_json_request(
+            "PATCH",
+            &log_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"entry":{"type":"food", "amount":"3"}}),
+        )?)
+        .await?;
+    assert_eq!(missing_source_patch.status, StatusCode::BAD_REQUEST);
+    assert_eq!(missing_source_patch.json["code"], "invalid_input");
+    Ok(())
+}
+
+#[tokio::test]
+async fn rest_profile_logs_reject_invalid_food_inputs_and_allow_zero_calories()
+-> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    seed_profile_owner(&app).await?;
+    let (profile_id, _) = create_test_profile(&app, "Alex", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    let logs_uri = format!("/profiles/{profile_id}/logs");
+    let mass_food_id = create_test_food(
+        &app,
+        "Mass food",
+        json!({
+            "nutrition": {"per":"100 g", "energy":"100 kcal"},
+            "serving_sizes": [
+                {"name":"piece", "quantity":"30 g"},
+                {"name":"piece", "quantity":"40 g"}
+            ]
+        }),
+    )
+    .await?;
+    let missing_energy_id = create_test_food(
+        &app,
+        "Food without calories",
+        json!({"nutrition":{"per":"100 g", "protein":"5 g"}}),
+    )
+    .await?;
+    let zero_calorie_id = create_test_food(
+        &app,
+        "Zero-calorie food",
+        json!({"nutrition":{"per":"100 g", "energy":"0 kcal"}}),
+    )
+    .await?;
+
+    for entry in [
+        json!({"type":"food", "food_id":99999999, "amount":"1", "serving_size":"g"}),
+        json!({"type":"food", "food_id":mass_food_id, "amount":"1", "serving_size":"not a serving"}),
+        json!({"type":"food", "food_id":mass_food_id, "amount":"1", "serving_size":"piece"}),
+        json!({"type":"food", "food_id":mass_food_id, "amount":"1", "serving_size":"Piece"}),
+        json!({"type":"food", "food_id":mass_food_id, "amount":"1", "serving_size":"ml"}),
+        json!({"type":"food", "food_id":mass_food_id, "amount":"0", "serving_size":"g"}),
+        json!({"type":"food", "food_id":mass_food_id, "amount":null, "serving_size":"g"}),
+        json!({"type":"food", "food_id":null, "amount":"1", "serving_size":"g"}),
+        json!({"type":"food", "food_id":mass_food_id, "amount":"1", "serving_size":null}),
+        json!({"type":"food", "food_id":mass_food_id, "amount":"1", "serving_size":"g", "description":"forged"}),
+    ] {
+        let response = create_food_log(&app, &logs_uri, "2025-08-03", entry).await?;
+        assert_eq!(
+            response.status,
+            StatusCode::BAD_REQUEST,
+            "{:?}",
+            response.json
+        );
+        assert_eq!(response.json["code"], "invalid_input");
+    }
+
+    let missing_energy = create_food_log(
+        &app,
+        &logs_uri,
+        "2025-08-03",
+        json!({"type":"food", "food_id":missing_energy_id, "amount":"1", "serving_size":"g"}),
+    )
+    .await?;
+    assert_eq!(missing_energy.status, StatusCode::BAD_REQUEST);
+    assert_eq!(missing_energy.json["code"], "invalid_input");
+    let message = missing_energy.json["error"]
+        .as_str()
+        .ok_or("missing-calorie error has no message")?
+        .to_lowercase();
+    assert!(message.contains("calor"));
+    assert!(message.contains("edit") || message.contains("create"));
+
+    let zero_calories = create_food_log(
+        &app,
+        &logs_uri,
+        "2025-08-03",
+        json!({"type":"food", "food_id":zero_calorie_id, "amount":"1", "serving_size":"g"}),
+    )
+    .await?;
+    assert_eq!(
+        zero_calories.status,
+        StatusCode::CREATED,
+        "{:?}",
+        zero_calories.json
+    );
+    assert_calories(
+        &zero_calories.json["data"]["nutrition"]["calories"],
+        "0 kcal",
+    )?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn rest_profile_logs_enforce_scope_and_hide_other_profiles_and_logs()
 -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
@@ -241,6 +687,23 @@ async fn rest_profile_logs_enforce_scope_and_hide_other_profiles_and_logs()
     let created = create_log(&app, &logs_uri, Some("07:30"), "2025-02-01", "72 kg").await?;
     let log_id = created.json["id"].as_i64().ok_or("created log has no ID")?;
     let log_uri = format!("{logs_uri}/{log_id}");
+    let food_id = create_test_food(
+        &app,
+        "Shared fruit",
+        json!({"nutrition":{"per":"100 g", "energy":"90 kcal"}}),
+    )
+    .await?;
+    let food_created = create_food_log(
+        &app,
+        &logs_uri,
+        "2025-02-01",
+        json!({"type":"food", "food_id":food_id, "amount":"100", "serving_size":"g"}),
+    )
+    .await?;
+    let food_log_id = food_created.json["id"]
+        .as_i64()
+        .ok_or("created food log has no ID")?;
+    let food_log_uri = format!("{logs_uri}/{food_log_id}");
 
     let read_list = app.request(http_request(&logs_uri)?).await?;
     assert_eq!(read_list.status, StatusCode::OK);
@@ -252,6 +715,16 @@ async fn rest_profile_logs_enforce_scope_and_hide_other_profiles_and_logs()
             &logs_uri,
             TEST_REST_ACCESS_TOKEN,
             log_input("2025-02-01", None, "73 kg"),
+        )?)
+        .await?,
+        app.request(http_json_request(
+            "POST",
+            &logs_uri,
+            TEST_REST_ACCESS_TOKEN,
+            json!({
+                "day":"2025-02-01",
+                "entry":{"type":"food", "food_id":food_id, "amount":"100", "serving_size":"g"}
+            }),
         )?)
         .await?,
         app.request(http_json_request(
@@ -279,6 +752,14 @@ async fn rest_profile_logs_enforce_scope_and_hide_other_profiles_and_logs()
         OTHER_REST_CLIENT,
     )
     .await?;
+    let (another_profile_id, _) =
+        create_test_profile(&app, "Cristi", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    let hidden_by_profile = app
+        .request(http_request(&format!(
+            "/profiles/{another_profile_id}/logs/{food_log_id}"
+        ))?)
+        .await?;
+    assert_eq!(hidden_by_profile.status, StatusCode::NOT_FOUND);
     let hidden_list = app
         .request(http_request_with_token(&logs_uri, &other_token)?)
         .await?;
@@ -287,6 +768,10 @@ async fn rest_profile_logs_enforce_scope_and_hide_other_profiles_and_logs()
         .request(http_request_with_token(&log_uri, &other_token)?)
         .await?;
     assert_eq!(hidden_get.status, StatusCode::NOT_FOUND);
+    let hidden_food_get = app
+        .request(http_request_with_token(&food_log_uri, &other_token)?)
+        .await?;
+    assert_eq!(hidden_food_get.status, StatusCode::NOT_FOUND);
     let hidden_patch = app
         .request(http_json_request(
             "PATCH",
@@ -296,10 +781,23 @@ async fn rest_profile_logs_enforce_scope_and_hide_other_profiles_and_logs()
         )?)
         .await?;
     assert_eq!(hidden_patch.status, StatusCode::NOT_FOUND);
+    let hidden_food_patch = app
+        .request(http_json_request(
+            "PATCH",
+            &food_log_uri,
+            &other_token,
+            json!({"day":"2025-02-03"}),
+        )?)
+        .await?;
+    assert_eq!(hidden_food_patch.status, StatusCode::NOT_FOUND);
     let hidden_delete = app
         .request(http_method_request("DELETE", &log_uri, &other_token)?)
         .await?;
     assert_eq!(hidden_delete.status, StatusCode::NOT_FOUND);
+    let hidden_food_delete = app
+        .request(http_method_request("DELETE", &food_log_uri, &other_token)?)
+        .await?;
+    assert_eq!(hidden_food_delete.status, StatusCode::NOT_FOUND);
     let hidden_create = app
         .request(http_json_request(
             "POST",
@@ -325,6 +823,21 @@ async fn create_log(
         uri,
         TEST_REST_WRITE_ACCESS_TOKEN,
         body.take(),
+    )?)
+    .await
+}
+
+async fn create_food_log(
+    app: &TestApplication,
+    uri: &str,
+    day: &str,
+    entry: Value,
+) -> Result<crate::tests::ResponseBody, Box<dyn Error>> {
+    app.request(http_json_request(
+        "POST",
+        uri,
+        TEST_REST_WRITE_ACCESS_TOKEN,
+        json!({"day":day, "entry":entry}),
     )?)
     .await
 }

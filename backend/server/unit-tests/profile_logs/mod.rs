@@ -9,10 +9,11 @@ use crumbs_database::identity::{
     OAuthClient, OAuthScope, OAuthStore, PasswordHash, PendingAuthorization, TokenPair, Username,
     Users,
 };
+use crumbs_database::nutrition_model::{Kilocalories, Mass, Reported};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::oauth::tests::{TEST_MCP_RESOURCE, TEST_REST_RESOURCE};
+use crate::oauth::tests::{TEST_MCP_RESOURCE, TEST_REST_RESOURCE, TEST_REST_WRITE_ACCESS_TOKEN};
 use crate::tests::{TestApplication, http_json_request};
 
 pub(super) async fn seed_profile_owner(app: &TestApplication) -> Result<(), Box<dyn Error>> {
@@ -62,6 +63,51 @@ pub(super) async fn create_test_profile(
         .as_i64()
         .ok_or("created profile has no ID")?;
     Ok((id, response.json))
+}
+
+pub(super) async fn create_test_food(
+    app: &TestApplication,
+    description: &str,
+    parsed_data: Value,
+) -> Result<i64, Box<dyn Error>> {
+    let response = app
+        .request(http_json_request(
+            "POST",
+            "/foods/custom",
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"description":description, "parsed_data":parsed_data}),
+        )?)
+        .await?;
+    if !response.status.is_success() {
+        return Err(format!("custom food creation failed: {:?}", response.json).into());
+    }
+    response.json["id"]
+        .as_i64()
+        .ok_or_else(|| "created custom food has no ID".into())
+}
+
+pub(super) fn assert_calories(actual: &Value, expected: &str) -> Result<(), Box<dyn Error>> {
+    let actual = actual
+        .as_str()
+        .ok_or("calorie value is not serialized as a string")?
+        .parse::<Reported<Kilocalories>>()?;
+    let expected = expected.parse::<Reported<Kilocalories>>()?;
+    if actual != expected {
+        return Err(format!("expected {expected}, received {actual}").into());
+    }
+    Ok(())
+}
+
+pub(super) fn assert_mass(actual: &Value, expected: &str) -> Result<(), Box<dyn Error>> {
+    let actual = actual
+        .as_str()
+        .ok_or("mass value is not serialized as a string")?
+        .parse::<Reported<Mass>>()?;
+    let expected = expected.parse::<Reported<Mass>>()?;
+    if actual != expected {
+        return Err(format!("expected {expected}, received {actual}").into());
+    }
+    Ok(())
 }
 
 pub(super) async fn seed_other_access_token(

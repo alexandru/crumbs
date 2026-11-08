@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::str::FromStr;
 
+use rust_decimal::Decimal;
+
 use super::*;
 
 #[test]
@@ -154,6 +156,91 @@ fn profile_mass_and_height_units_use_fixed_point_values() -> Result<(), Box<dyn 
     assert!(Kilograms::from_str("70 lb").is_err());
     assert!(Centimetres::from_str("172 mm").is_err());
     assert!(Kilograms::from_str("-1 kg").is_err());
+    Ok(())
+}
+
+#[test]
+fn mass_volume_and_energy_conversions_use_checked_metric_factors() -> Result<(), Box<dyn Error>> {
+    assert_eq!(
+        Mass::from_str("1.25 kg")?.to_grams()?.value(),
+        Decimal::from(1250)
+    );
+    assert_eq!(
+        Mass::from_str("1250 mg")?.to_grams()?.value(),
+        Decimal::new(125, 2)
+    );
+    assert_eq!(
+        Mass::from_str("250000 µg")?.to_grams()?.value(),
+        Decimal::new(25, 2)
+    );
+    assert_eq!(
+        Volume::from_str("1.25 l")?.to_millilitres()?.value(),
+        Decimal::from(1250)
+    );
+    assert_eq!(
+        Volume::from_str("250 ml")?.to_millilitres()?.value(),
+        Decimal::from(250)
+    );
+    assert_eq!(
+        Energy::from_str("4.184 kJ")?.to_kilocalories()?.to_string(),
+        "1 kcal"
+    );
+    assert_eq!(
+        Energy::from_str("2 kcal")?.to_kilocalories()?.to_string(),
+        "2 kcal"
+    );
+
+    for input in ["1 kg", "1 l", "250 ml"] {
+        let quantity = MeasuredQuantity::from_str(input)?;
+        assert_eq!(quantity.to_string(), input);
+        let encoded = serde_json::to_string(&quantity)?;
+        assert_eq!(encoded, format!("\"{input}\""));
+        assert_eq!(
+            serde_json::from_str::<MeasuredQuantity>(&encoded)?,
+            quantity
+        );
+    }
+    let quantity = MeasuredQuantity::from_str("1 l")?;
+    assert_eq!(
+        quantity.volume(),
+        Some(Volume::Litres(Litres::from_str("1 l")?))
+    );
+    assert!(MeasuredQuantity::from_str("1 oz").is_err());
+    Ok(())
+}
+
+#[test]
+fn checked_scaling_preserves_units_and_qualifiers_and_reports_rounding_overflow()
+-> Result<(), Box<dyn Error>> {
+    let mass = Mass::from_str("1.25 kg")?.checked_scale(Decimal::from(2))?;
+    assert_eq!(mass.to_string(), "2.50 kg");
+    let volume = Volume::from_str("2 l")?.checked_scale(Decimal::new(15, 1))?;
+    assert_eq!(volume.to_string(), "3.0 l");
+    let energy = Energy::from_str("2 kJ")?.checked_scale(Decimal::from(2))?;
+    assert_eq!(energy.to_string(), "4 kJ");
+
+    let reported = Reported::<Mass>::from_str("< 2 mg")?.checked_scale(Decimal::from(3))?;
+    assert_eq!(reported.to_string(), "< 6 mg");
+    let quantity = MeasuredQuantity::from_str("2 ml")?.checked_scale(Decimal::new(5, 1))?;
+    assert_eq!(quantity.to_string(), "1.0 ml");
+
+    let odd_tie = Grams::try_new(Decimal::new(3, 28))?.checked_scale(Decimal::new(5, 1))?;
+    assert_eq!(odd_tie.value(), Decimal::new(2, 28));
+    let even_tie = Grams::try_new(Decimal::new(1, 28))?.checked_scale(Decimal::new(5, 1))?;
+    assert_eq!(even_tie.value(), Decimal::ZERO);
+    let strict_upper = Reported::new(Qualifier::LessThan, Grams::try_new(Decimal::new(1, 28))?)?;
+    assert!(matches!(
+        strict_upper.checked_scale(Decimal::new(5, 1)),
+        Err(QuantityError::ZeroStrictUpperBound)
+    ));
+    assert!(matches!(
+        Grams::try_new(Decimal::MAX)?.checked_scale(Decimal::from(2)),
+        Err(QuantityError::Arithmetic)
+    ));
+    assert!(matches!(
+        Grams::try_new(Decimal::ONE)?.checked_scale(Decimal::from(-1)),
+        Err(QuantityError::Negative)
+    ));
     Ok(())
 }
 

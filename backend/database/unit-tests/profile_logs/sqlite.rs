@@ -7,7 +7,9 @@ use sqlx::FromRow;
 use tokio::sync::Barrier;
 
 use super::open_database;
+use crate::foods::{CustomFoodInput, CustomFoodStore, Dataset, Food, FoodId, FoodWriter};
 use crate::identity::UserId;
+use crate::nutrition_model::FoodData;
 use crate::profile_logs::*;
 use crate::profiles::{CreateProfile, Profile, ProfileId, Profiles};
 use crate::runtime::Database;
@@ -65,6 +67,71 @@ async fn create_weight_log(
         .create_profile_log(user, profile, &input)
         .await?
         .ok_or_else(|| std::io::Error::other("owned profile was not found").into())
+}
+
+async fn create_custom_food(
+    database: &Database,
+    description: &str,
+    parsed_data: serde_json::Value,
+) -> Result<FoodId, Box<dyn Error>> {
+    let input: CustomFoodInput = serde_json::from_value(serde_json::json!({
+        "description": description,
+        "parsed_data": parsed_data
+    }))?;
+    Ok(database.create_custom_food(&input).await?.id)
+}
+
+async fn create_food_log(
+    database: &Database,
+    user: UserId,
+    profile: ProfileId,
+    food_id: FoodId,
+    day: &str,
+    amount: &str,
+    serving_size: &str,
+) -> Result<ProfileLog, Box<dyn Error>> {
+    let input = food_create_request(day, food_id, amount, serving_size)?;
+    database
+        .create_profile_log(user, profile, &input)
+        .await?
+        .ok_or_else(|| std::io::Error::other("owned profile was not found").into())
+}
+
+fn food_create_request(
+    day: &str,
+    food_id: FoodId,
+    amount: &str,
+    serving_size: &str,
+) -> Result<CreateLog, serde_json::Error> {
+    serde_json::from_value(serde_json::json!({
+        "day": day,
+        "time": "12:00",
+        "entry": {
+            "type": "food",
+            "food_id": food_id.0,
+            "amount": amount,
+            "serving_size": serving_size
+        }
+    }))
+}
+
+async fn create_common_food(
+    database: &Database,
+    source_food_id: &str,
+    description: &str,
+    parsed_data: serde_json::Value,
+) -> Result<FoodId, Box<dyn Error>> {
+    let parsed_data: FoodData = serde_json::from_value(parsed_data)?;
+    let food = Food {
+        source: std::borrow::Cow::Borrowed("profile-log-test"),
+        source_food_id: source_food_id.to_owned(),
+        dataset: Dataset::Common,
+        description: description.to_owned(),
+        category: None,
+        notes: None,
+        parsed_data,
+    };
+    Ok(database.upsert_food(&food).await?)
 }
 
 async fn get_profile(
@@ -197,8 +264,9 @@ async fn ownership_patch_get_delete_and_cache_are_scoped_to_profile() -> Result<
     assert_eq!(
         database
             .profile_log(alex, alex_profile.id, original.id)
-            .await?,
-        Some(original)
+            .await?
+            .as_ref(),
+        Some(&original)
     );
 
     let original_profile_state = profile_state(&database, alex_profile.id).await?;
@@ -692,6 +760,490 @@ async fn concurrent_weight_creates_leave_cache_at_latest_local_day() -> Result<(
         .await?;
     assert_eq!(count, 2);
     drop(database);
+    Ok(())
+}
+
+#[tokio::test]
+async fn food_logs_scale_mass_and_volume_profiles_and_keep_all_nutrients()
+-> Result<(), Box<dyn Error>> {
+    let (_directory, database, _) = open_database(1_000).await?;
+    let user = insert_user(&database, 1).await?;
+    let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
+    let mass_food = create_custom_food(
+        &database,
+        "Sarmale",
+        serde_json::json!({
+            "nutrition": {
+                "per": "100 g",
+                "energy": "200 kcal",
+                "fat": {
+                    "total": "10 g",
+                    "saturated": "< 2 g",
+                    "monounsaturated": "<= 3 g",
+                    "polyunsaturated": "> 4 g",
+                    "trans": ">= 5 g"
+                },
+                "carbohydrates": {
+                    "including_fibre": "1 g",
+                    "excluding_fibre": "2 g",
+                    "sugars": {
+                        "total": "3 g",
+                        "added": "~ 0.5 g",
+                        "lactose": "< 1 g"
+                    },
+                    "starch": "4 g"
+                },
+                "fibre": "1 g",
+                "protein": "<= 8 g",
+                "sodium": "5 mg",
+                "salt": "6 mg",
+                "cholesterol": "7 mg"
+            },
+            "serving_sizes": [
+                {"name": " small bowl ", "quantity": "50 g"}
+            ]
+        }),
+    )
+    .await?;
+
+    let unit_log = create_food_log(
+        &database,
+        user,
+        profile.id,
+        mass_food,
+        "2024-01-01",
+        "250",
+        "g",
+    )
+    .await?;
+    let ProfileLogData::Food(unit_entry) = &unit_log.data else {
+        return Err(std::io::Error::other("food input did not create food data").into());
+    };
+    assert_eq!(unit_entry.food_id(), Some(mass_food));
+    assert_eq!(unit_entry.quantity().to_string(), "250 g");
+    assert_eq!(unit_entry.description(), "Sarmale");
+    assert_eq!(
+        unit_entry.nutrition().calories.amount().value(),
+        Decimal::from(500)
+    );
+    let unit_input = unit_entry
+        .input()
+        .ok_or_else(|| std::io::Error::other("food input snapshot was not retained"))?;
+    assert_eq!(unit_input.amount().value(), Decimal::from(250));
+    assert_eq!(unit_input.serving_size().name, "g");
+    assert_eq!(unit_input.serving_size().quantity().to_string(), "1 g");
+    let nutrients = &unit_entry.nutrition().nutrients;
+    assert_eq!(nutrients.fat.total, Some("25 g".parse()?));
+    assert_eq!(nutrients.fat.saturated, Some("< 5 g".parse()?));
+    assert_eq!(nutrients.fat.monounsaturated, Some("<= 7.5 g".parse()?));
+    assert_eq!(nutrients.fat.polyunsaturated, Some("> 10 g".parse()?));
+    assert_eq!(nutrients.fat.trans, Some(">= 12.5 g".parse()?));
+    assert_eq!(
+        nutrients.carbohydrates.including_fibre,
+        Some("2.5 g".parse()?)
+    );
+    assert_eq!(
+        nutrients.carbohydrates.excluding_fibre,
+        Some("5 g".parse()?)
+    );
+    assert_eq!(nutrients.carbohydrates.sugars.total, Some("7.5 g".parse()?));
+    assert_eq!(
+        nutrients.carbohydrates.sugars.added,
+        Some("~ 1.25 g".parse()?)
+    );
+    assert_eq!(
+        nutrients.carbohydrates.sugars.lactose,
+        Some("< 2.5 g".parse()?)
+    );
+    assert_eq!(nutrients.carbohydrates.starch, Some("10 g".parse()?));
+    assert_eq!(nutrients.fibre, Some("2.5 g".parse()?));
+    assert_eq!(nutrients.protein, Some("<= 20 g".parse()?));
+    assert_eq!(nutrients.sodium, Some("12.5 mg".parse()?));
+    assert_eq!(nutrients.salt, Some("15 mg".parse()?));
+    assert_eq!(nutrients.cholesterol, Some("17.5 mg".parse()?));
+    assert_eq!(serde_json::to_value(&unit_log.data)?["type"], "food");
+    assert!(serde_json::to_value(&unit_log.data)?["entry_type"].is_null());
+
+    let named_log = create_food_log(
+        &database,
+        user,
+        profile.id,
+        mass_food,
+        "2024-01-02",
+        "2",
+        "small bowl",
+    )
+    .await?;
+    let ProfileLogData::Food(named_entry) = &named_log.data else {
+        return Err(std::io::Error::other("food input did not create food data").into());
+    };
+    assert_eq!(named_entry.quantity().to_string(), "100 g");
+    assert_eq!(
+        named_entry.nutrition().calories.amount().value(),
+        Decimal::from(200)
+    );
+    let named_snapshot = named_entry
+        .input()
+        .ok_or_else(|| std::io::Error::other("named serving snapshot was not retained"))?;
+    assert_eq!(named_snapshot.serving_size().name, " small bowl ");
+    assert_eq!(named_snapshot.serving_size().quantity().to_string(), "50 g");
+
+    let volume_food = create_common_food(
+        &database,
+        "drink-1",
+        "Drink",
+        serde_json::json!({
+            "nutrition": {
+                "per": "100 ml",
+                "energy": "4.184 kJ",
+                "protein": "2 g"
+            }
+        }),
+    )
+    .await?;
+    let volume_log = create_food_log(
+        &database,
+        user,
+        profile.id,
+        volume_food,
+        "2024-01-03",
+        "1.5",
+        "l",
+    )
+    .await?;
+    let ProfileLogData::Food(volume_entry) = &volume_log.data else {
+        return Err(std::io::Error::other("volume food input did not create food data").into());
+    };
+    assert_eq!(volume_entry.quantity().to_string(), "1.5 l");
+    assert_eq!(
+        volume_entry.nutrition().calories.amount().value(),
+        Decimal::from(15)
+    );
+    assert_eq!(
+        volume_entry
+            .input()
+            .ok_or_else(|| std::io::Error::other("unit snapshot was not retained"))?
+            .serving_size()
+            .quantity()
+            .to_string(),
+        "1 l"
+    );
+    assert_eq!(volume_entry.food_id().map(|id| id.0), Some(volume_food.0));
+    let food_filter = LogFilter::new(None, None, Some(LogEntryType::Food), None, None)?;
+    let page = database
+        .list_profile_logs(user, profile.id, &food_filter)
+        .await?
+        .ok_or_else(|| std::io::Error::other("owned profile was not found"))?;
+    assert_eq!(page.items.len(), 3);
+    database.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn food_logs_validate_sources_calories_dimensions_servings_and_precision()
+-> Result<(), Box<dyn Error>> {
+    let (_directory, database, _) = open_database(1_000).await?;
+    let user = insert_user(&database, 1).await?;
+    let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
+    let no_calories = create_custom_food(
+        &database,
+        "No calories",
+        serde_json::json!({"nutrition":{"per":"100 g","protein":"2 g"}}),
+    )
+    .await?;
+    let missing_request = food_create_request("2024-01-01", no_calories, "100", "g")?;
+    let missing_error = database
+        .create_profile_log(user, profile.id, &missing_request)
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("food without calories was accepted"))?;
+    let ProfileLogError::InvalidInput(message) = missing_error else {
+        return Err(std::io::Error::other("missing calories had the wrong error type").into());
+    };
+    assert!(message.contains("edit the food's nutrition"));
+    assert!(message.contains("create a food with calories"));
+
+    let explicit_zero = create_custom_food(
+        &database,
+        "Zero calories",
+        serde_json::json!({"nutrition":{"per":"100 g","energy":"0 kcal"}}),
+    )
+    .await?;
+    let zero_log = create_food_log(
+        &database,
+        user,
+        profile.id,
+        explicit_zero,
+        "2024-01-02",
+        "100",
+        "g",
+    )
+    .await?;
+    let ProfileLogData::Food(zero_entry) = &zero_log.data else {
+        return Err(std::io::Error::other("zero-calorie entry has the wrong category").into());
+    };
+    assert_eq!(zero_entry.nutrition().calories.to_string(), "0 kcal");
+
+    let mass_food = create_custom_food(
+        &database,
+        "Mass food",
+        serde_json::json!({
+            "nutrition":{"per":"100 g","energy":"100 kcal"},
+            "serving_sizes":[
+                {"name":"portion","quantity":"1 g"},
+                {"name":" portion ","quantity":"2 g"}
+            ]
+        }),
+    )
+    .await?;
+    for serving in ["ml", "unknown serving", "portion"] {
+        let request = food_create_request("2024-01-03", mass_food, "1", serving)?;
+        let result = database
+            .create_profile_log(user, profile.id, &request)
+            .await;
+        assert!(matches!(result, Err(ProfileLogError::InvalidInput(_))));
+    }
+
+    let volume_food = create_custom_food(
+        &database,
+        "Volume food",
+        serde_json::json!({"nutrition":{"per":"100 ml","energy":"100 kcal"}}),
+    )
+    .await?;
+    let wrong_dimension = food_create_request("2024-01-04", volume_food, "1", "g")?;
+    assert!(matches!(
+        database
+            .create_profile_log(user, profile.id, &wrong_dimension)
+            .await,
+        Err(ProfileLogError::InvalidInput(_))
+    ));
+
+    let unknown_food = food_create_request("2024-01-05", FoodId(99_999), "1", "g")?;
+    assert!(matches!(
+        database
+            .create_profile_log(user, profile.id, &unknown_food)
+            .await,
+        Err(ProfileLogError::InvalidInput(_))
+    ));
+
+    let precision_request = food_create_request(
+        "2024-01-06",
+        mass_food,
+        "0.0000000000000000000000000001",
+        "g",
+    )?;
+    let precision_error = database
+        .create_profile_log(user, profile.id, &precision_request)
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("underflowing nutrition scale was accepted"))?;
+    assert!(
+        matches!(precision_error, ProfileLogError::InvalidInput(message) if message.contains("supported fixed-point precision"))
+    );
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM profile_logs WHERE profile_id = ?")
+        .bind(profile.id.get())
+        .fetch_one(&database.pool)
+        .await?;
+    assert_eq!(count, 1);
+    database.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn food_snapshots_survive_source_changes_deletion_and_metadata_patch()
+-> Result<(), Box<dyn Error>> {
+    let (_directory, database, clock) = open_database(1_000).await?;
+    let user = insert_user(&database, 1).await?;
+    let other_user = insert_user(&database, 2).await?;
+    let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
+    let weight = create_weight_log(
+        &database,
+        user,
+        profile.id,
+        "2024-01-01",
+        Some("10:00"),
+        "70 kg",
+    )
+    .await?;
+    let before_food = profile_state(&database, profile.id).await?;
+    let food_id = create_custom_food(
+        &database,
+        "Original label",
+        serde_json::json!({
+            "nutrition":{"per":"100 g","energy":"100 kcal","protein":"10 g"},
+            "serving_sizes":[{"name":"portion","quantity":"50 g"}]
+        }),
+    )
+    .await?;
+    let original = create_food_log(
+        &database,
+        user,
+        profile.id,
+        food_id,
+        "2024-01-02",
+        "2",
+        "portion",
+    )
+    .await?;
+    let original_state = log_state(&database, original.id).await?;
+    assert_eq!(
+        profile_state(&database, profile.id).await?.updated_at,
+        before_food.updated_at
+    );
+    assert_eq!(
+        current_weight(&get_profile(&database, user, profile.id).await?),
+        Some(Decimal::from(70))
+    );
+
+    let changed_food: CustomFoodInput = serde_json::from_value(serde_json::json!({
+        "description":"Fresh label",
+        "parsed_data":{
+            "nutrition":{"per":"100 g","energy":"300 kcal","protein":"20 g"},
+            "serving_sizes":[{"name":"portion","quantity":"50 g"}]
+        }
+    }))?;
+    assert!(
+        database
+            .update_custom_food(food_id, &changed_food)
+            .await?
+            .is_some()
+    );
+    assert_eq!(
+        database
+            .profile_log(user, profile.id, original.id)
+            .await?
+            .ok_or_else(|| std::io::Error::other("food log was not found"))?
+            .data,
+        original.data
+    );
+
+    sqlx::query(
+        "CREATE TRIGGER reject_food_log_refresh
+         BEFORE UPDATE OF data_json ON profile_logs
+         WHEN json_extract(NEW.data_json, '$.type') = 'food'
+         BEGIN SELECT RAISE(ABORT, 'blocked food refresh'); END",
+    )
+    .execute(&database.pool)
+    .await?;
+    clock.store(2_000, Ordering::SeqCst);
+    let amount_patch: PatchLog = serde_json::from_str(r#"{"entry":{"type":"food","amount":"3"}}"#)?;
+    assert!(
+        database
+            .patch_profile_log(user, profile.id, original.id, &amount_patch)
+            .await
+            .is_err()
+    );
+    let failed_refresh_state = log_state(&database, original.id).await?;
+    assert_eq!(failed_refresh_state.data_json, original_state.data_json);
+    assert_eq!(failed_refresh_state.updated_at, original_state.updated_at);
+    sqlx::query("DROP TRIGGER reject_food_log_refresh")
+        .execute(&database.pool)
+        .await?;
+
+    let refreshed = database
+        .patch_profile_log(user, profile.id, original.id, &amount_patch)
+        .await?
+        .ok_or_else(|| std::io::Error::other("food log was not found"))?;
+    let ProfileLogData::Food(refreshed_entry) = &refreshed.data else {
+        return Err(std::io::Error::other("refreshed entry changed category").into());
+    };
+    assert_eq!(refreshed_entry.quantity().to_string(), "150 g");
+    assert_eq!(
+        refreshed_entry.nutrition().calories.amount().value(),
+        Decimal::from(450)
+    );
+    assert_eq!(refreshed_entry.description(), "Fresh label");
+    assert_eq!(
+        log_state(&database, original.id).await?.updated_at,
+        Some(2_000)
+    );
+
+    assert!(database.delete_custom_food(food_id).await?);
+    let source_id: Option<i64> =
+        sqlx::query_scalar("SELECT source_id FROM profile_logs WHERE id = ?")
+            .bind(original.id.get())
+            .fetch_one(&database.pool)
+            .await?;
+    assert_eq!(source_id, Some(food_id.0));
+
+    let retained = database
+        .profile_log(user, profile.id, original.id)
+        .await?
+        .ok_or_else(|| std::io::Error::other("log was removed with its source food"))?;
+    assert_eq!(retained.data, refreshed.data);
+    let metadata_patch: PatchLog = serde_json::from_str(r#"{"day":"2024-02-01","time":"13:30"}"#)?;
+    let metadata_updated = database
+        .patch_profile_log(user, profile.id, original.id, &metadata_patch)
+        .await?
+        .ok_or_else(|| std::io::Error::other("food log was not found"))?;
+    assert_eq!(metadata_updated.data, refreshed.data);
+    let metadata_state = log_state(&database, original.id).await?;
+    clock.store(3_000, Ordering::SeqCst);
+    let empty_food_patch: PatchLog = serde_json::from_str(r#"{"entry":{"type":"food"}}"#)?;
+    assert_eq!(
+        database
+            .patch_profile_log(user, profile.id, original.id, &empty_food_patch)
+            .await?
+            .ok_or_else(|| std::io::Error::other("food log was not found"))?,
+        metadata_updated
+    );
+    assert_eq!(
+        log_state(&database, original.id).await?.updated_at,
+        metadata_state.updated_at
+    );
+
+    let missing_food_patch: PatchLog =
+        serde_json::from_str(r#"{"entry":{"type":"food","amount":"4"}}"#)?;
+    assert!(matches!(
+        database
+            .patch_profile_log(user, profile.id, original.id, &missing_food_patch)
+            .await,
+        Err(ProfileLogError::InvalidInput(_))
+    ));
+    let category_patch: PatchLog = serde_json::from_str(
+        r#"{"entry":{"type":"biometric","measurement":{"type":"weight","value":"71 kg"}}}"#,
+    )?;
+    assert!(matches!(
+        database
+            .patch_profile_log(user, profile.id, original.id, &category_patch)
+            .await,
+        Err(ProfileLogError::InvalidInput(_))
+    ));
+    assert_eq!(
+        database
+            .profile_log(user, profile.id, original.id)
+            .await?
+            .ok_or_else(|| std::io::Error::other("food log was not found"))?
+            .data,
+        refreshed.data
+    );
+    assert_eq!(
+        database
+            .profile_log(other_user, profile.id, original.id)
+            .await?,
+        None
+    );
+    assert!(
+        !database
+            .delete_profile_log(other_user, profile.id, original.id)
+            .await?
+    );
+    assert_eq!(
+        current_weight(&get_profile(&database, user, profile.id).await?),
+        Some(Decimal::from(70))
+    );
+    assert_eq!(
+        profile_state(&database, profile.id).await?.updated_at,
+        before_food.updated_at
+    );
+    assert!(
+        database
+            .profile_log(user, profile.id, weight.id)
+            .await?
+            .is_some()
+    );
+    database.close().await;
     Ok(())
 }
 

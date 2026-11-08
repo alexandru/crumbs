@@ -16,7 +16,7 @@ mod queries {
             crate::nutrition_model::NutritionBasis::Per100Grams,
         );
         nutrition.energy = Some("18 kcal".parse()?);
-        nutrition.protein = Some("0.9 g".parse()?);
+        nutrition.nutrients.protein = Some("0.9 g".parse()?);
         food.parsed_data = crate::nutrition_model::FoodData {
             nutrition: Some(nutrition),
             serving_sizes: Vec::new(),

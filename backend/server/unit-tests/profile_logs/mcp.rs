@@ -7,10 +7,14 @@ use crate::oauth::tests::{
     TEST_MCP_ACCESS_TOKEN, TEST_MCP_WRITE_ACCESS_TOKEN, TEST_REST_WRITE_ACCESS_TOKEN,
 };
 use crate::tests::{
-    TestApplication, http_request, mcp_call_router_with_token, mcp_initialize, protocol_request,
+    TestApplication, http_json_request, http_request, mcp_call_router_with_token, mcp_initialize,
+    protocol_request,
 };
 
-use super::{create_test_profile, seed_other_access_token, seed_profile_owner};
+use super::{
+    assert_calories, assert_mass, create_test_food, create_test_profile, seed_other_access_token,
+    seed_profile_owner,
+};
 
 const OTHER_MCP_TOKEN: &str = "test-other-profile-log-mcp-token";
 const OTHER_MCP_REFRESH: &str = "test-other-profile-log-mcp-refresh";
@@ -67,8 +71,36 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
         false
     );
     assert_eq!(
-        create_tool["inputSchema"]["$defs"]["log_entry"]["properties"]["type"]["const"],
-        "biometric"
+        create_tool["inputSchema"]["$defs"]["log_entry"]["oneOf"][0]["$ref"],
+        "#/$defs/biometric_log_entry"
+    );
+    assert_eq!(
+        create_tool["inputSchema"]["$defs"]["log_entry"]["oneOf"][1]["$ref"],
+        "#/$defs/food_log_entry"
+    );
+    assert_eq!(
+        create_tool["inputSchema"]["$defs"]["food_log_entry"]["required"],
+        json!(["type", "food_id", "amount", "serving_size"])
+    );
+    assert_eq!(
+        create_tool["inputSchema"]["$defs"]["food_log_entry"]["additionalProperties"],
+        false
+    );
+    assert_eq!(
+        create_tool["inputSchema"]["$defs"]["food_log_entry"]["properties"]["type"]["const"],
+        "food"
+    );
+    assert_eq!(
+        create_tool["inputSchema"]["$defs"]["food_log_entry"]["properties"]["food_id"]["minimum"],
+        1
+    );
+    assert!(create_tool["inputSchema"]["$defs"]["food_log_entry"]["properties"]["serving_size"]["description"]
+        .as_str()
+        .is_some_and(|description| description.contains("µg") && description.contains("case-sensitive")));
+    assert!(
+        create_tool["description"].as_str().is_some_and(
+            |description| description.contains("edit the food or create a food with calories")
+        )
     );
     assert_eq!(
         create_tool["inputSchema"]["$defs"]["biometric_entry"]["properties"]["value"]["description"],
@@ -106,6 +138,23 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
         .find(|tool| tool["name"] == "update_profile_log")
         .ok_or("update tool is missing")?;
     assert_eq!(update_tool["annotations"]["destructiveHint"], true);
+    assert_eq!(
+        update_tool["inputSchema"]["$defs"]["log_entry_patch"]["oneOf"][1]["$ref"],
+        "#/$defs/food_log_entry_patch"
+    );
+    assert_eq!(
+        update_tool["inputSchema"]["$defs"]["food_log_entry_patch"]["required"],
+        json!(["type"])
+    );
+    assert_eq!(
+        update_tool["inputSchema"]["$defs"]["food_log_entry_patch"]["additionalProperties"],
+        false
+    );
+    assert!(
+        update_tool["inputSchema"]["$defs"]["food_log_entry_patch"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("preserves the existing snapshot"))
+    );
     let delete_tool = tools
         .iter()
         .find(|tool| tool["name"] == "delete_profile_log")
@@ -323,6 +372,240 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
     assert_eq!(
         profile_after_delete.json["derived"]["bmr"],
         serde_json::Value::Null
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_profile_logs_create_and_patch_food_snapshots() -> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    seed_profile_owner(&app).await?;
+    let (profile_id, _) = create_test_profile(&app, "Amalia", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    let profile_uri = format!("/profiles/{profile_id}");
+    let logs_uri = format!("{profile_uri}/logs");
+    let food_id = create_test_food(
+        &app,
+        "Berry drink",
+        json!({
+            "nutrition": {"per":"100 ml", "energy":"50 kcal", "protein":"2 g"},
+            "serving_sizes": [{"name":"one cup", "quantity":"250 ml"}]
+        }),
+    )
+    .await?;
+    let mass_food_id = create_test_food(
+        &app,
+        "Peanut bar",
+        json!({"nutrition":{"per":"100 g", "energy":"200 kcal", "protein":"10 g"}}),
+    )
+    .await?;
+    let no_calories_id = create_test_food(
+        &app,
+        "Drink without calories",
+        json!({"nutrition":{"per":"100 ml", "protein":"1 g"}}),
+    )
+    .await?;
+    let weight = app
+        .request(http_json_request(
+            "POST",
+            &logs_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({
+                "day":"2025-09-01",
+                "time":"08:00",
+                "entry":{"type":"biometric", "measurement":{"type":"weight", "value":"65 kg"}}
+            }),
+        )?)
+        .await?;
+    assert_eq!(weight.status, StatusCode::CREATED, "{:?}", weight.json);
+
+    mcp_initialize(&app).await?;
+    let created = mcp_call_router_with_token(
+        &app.router,
+        21,
+        "create_profile_log",
+        json!({
+            "profile_id":profile_id,
+            "log": {
+                "day":"2025-09-02",
+                "entry":{"type":"food", "food_id":food_id, "amount":"2", "serving_size":"one cup"}
+            }
+        }),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(created.json["result"]["isError"], false);
+    let log = &created.json["result"]["structuredContent"];
+    let log_id = log["id"].as_i64().ok_or("food log ID is missing")?;
+    assert_eq!(log["data"]["type"], "food");
+    assert_eq!(log["data"]["food_id"], food_id);
+    assert_eq!(log["data"]["quantity"], "500 ml");
+    assert_calories(&log["data"]["nutrition"]["calories"], "250 kcal")?;
+    assert_mass(&log["data"]["nutrition"]["protein"], "10 g")?;
+    assert_eq!(log["data"]["description"], "Berry drink");
+    assert_eq!(log["data"]["input"]["amount"], "2");
+    assert_eq!(log["data"]["input"]["serving_size"]["name"], "one cup");
+    assert_eq!(log["data"]["input"]["serving_size"]["quantity"], "250 ml");
+
+    let grams = mcp_call_router_with_token(
+        &app.router,
+        22,
+        "create_profile_log",
+        json!({
+            "profile_id":profile_id,
+            "log": {
+                "day":"2025-09-02",
+                "entry":{"type":"food", "food_id":mass_food_id, "amount":"250", "serving_size":"g"}
+            }
+        }),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(grams.json["result"]["isError"], false);
+    assert_eq!(
+        grams.json["result"]["structuredContent"]["data"]["quantity"],
+        "250 g"
+    );
+    assert_calories(
+        &grams.json["result"]["structuredContent"]["data"]["nutrition"]["calories"],
+        "500 kcal",
+    )?;
+    assert_mass(
+        &grams.json["result"]["structuredContent"]["data"]["nutrition"]["protein"],
+        "25 g",
+    )?;
+
+    let millilitres = mcp_call_router_with_token(
+        &app.router,
+        23,
+        "create_profile_log",
+        json!({
+            "profile_id":profile_id,
+            "log": {
+                "day":"2025-09-02",
+                "entry":{"type":"food", "food_id":food_id, "amount":"300", "serving_size":"ml"}
+            }
+        }),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(millilitres.json["result"]["isError"], false);
+    assert_eq!(
+        millilitres.json["result"]["structuredContent"]["data"]["quantity"],
+        "300 ml"
+    );
+    assert_calories(
+        &millilitres.json["result"]["structuredContent"]["data"]["nutrition"]["calories"],
+        "150 kcal",
+    )?;
+    assert_mass(
+        &millilitres.json["result"]["structuredContent"]["data"]["nutrition"]["protein"],
+        "6 g",
+    )?;
+
+    let list = mcp_call_router_with_token(
+        &app.router,
+        24,
+        "list_profile_logs",
+        json!({"profile_id":profile_id, "filter":{"entry_type":"food"}}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(list.json["result"]["isError"], false);
+    let items = list.json["result"]["structuredContent"]["items"]
+        .as_array()
+        .ok_or("MCP food list has no items")?;
+    assert_eq!(items.len(), 3);
+
+    let forged = mcp_call_router_with_token(
+        &app.router,
+        25,
+        "create_profile_log",
+        json!({
+            "profile_id":profile_id,
+            "log": {
+                "day":"2025-09-03",
+                "entry":{"type":"food", "food_id":food_id, "amount":"1", "serving_size":"ml", "description":"forged"}
+            }
+        }),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(forged.json["result"]["isError"], true);
+    assert_eq!(
+        forged.json["result"]["structuredContent"]["code"],
+        "invalid_input"
+    );
+
+    let missing_calories = mcp_call_router_with_token(
+        &app.router,
+        26,
+        "create_profile_log",
+        json!({
+            "profile_id":profile_id,
+            "log": {
+                "day":"2025-09-03",
+                "entry":{"type":"food", "food_id":no_calories_id, "amount":"1", "serving_size":"ml"}
+            }
+        }),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(missing_calories.json["result"]["isError"], true);
+    assert_eq!(
+        missing_calories.json["result"]["structuredContent"]["code"],
+        "invalid_input"
+    );
+    let calorie_message = missing_calories.json["result"]["structuredContent"]["error"]
+        .as_str()
+        .ok_or("missing-calorie MCP error has no message")?
+        .to_lowercase();
+    assert!(calorie_message.contains("calor"));
+    assert!(calorie_message.contains("edit") || calorie_message.contains("create"));
+
+    let updated = mcp_call_router_with_token(
+        &app.router,
+        27,
+        "update_profile_log",
+        json!({
+            "profile_id":profile_id,
+            "id":log_id,
+            "patch":{"entry":{"type":"food", "amount":"3"}}
+        }),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(updated.json["result"]["isError"], false);
+    assert_eq!(
+        updated.json["result"]["structuredContent"]["data"]["quantity"],
+        "750 ml"
+    );
+    assert_calories(
+        &updated.json["result"]["structuredContent"]["data"]["nutrition"]["calories"],
+        "375 kcal",
+    )?;
+
+    let null_patch = mcp_call_router_with_token(
+        &app.router,
+        28,
+        "update_profile_log",
+        json!({
+            "profile_id":profile_id,
+            "id":log_id,
+            "patch":{"entry":{"type":"food", "amount":null}}
+        }),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(null_patch.json["result"]["isError"], true);
+    assert_eq!(
+        null_patch.json["result"]["structuredContent"]["code"],
+        "invalid_input"
+    );
+
+    let profile_after_food = app.request(http_request(&profile_uri)?).await?;
+    assert_eq!(
+        profile_after_food.json["data"]["cache"]["current_weight"],
+        "65 kg"
     );
     Ok(())
 }

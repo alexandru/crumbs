@@ -170,7 +170,12 @@ pub(super) fn parse_food_data(raw: &str, kind: FoodKind) -> Result<ParsedFoodDat
                 profile.energy.get_or_insert(amount);
             }
             ParsedNutrient::Sugar(amount) => {
-                profile.carbohydrates.sugars.total.get_or_insert(amount);
+                profile
+                    .nutrients
+                    .carbohydrates
+                    .sugars
+                    .total
+                    .get_or_insert(amount);
             }
             ParsedNutrient::Mass(nutrient, amount) => {
                 assign_nutrient(&mut profile, nutrient, amount)
@@ -673,19 +678,21 @@ fn normalize_mass_unit(unit: &str) -> Option<&'static str> {
 
 fn assign_nutrient(profile: &mut NutritionProfile, nutrient: MassNutrient, amount: Reported<Mass>) {
     let slot = match nutrient {
-        MassNutrient::Protein => &mut profile.protein,
-        MassNutrient::TotalFat => &mut profile.fat.total,
-        MassNutrient::CarbohydrateByDifference => &mut profile.carbohydrates.including_fibre,
-        MassNutrient::Starch => &mut profile.carbohydrates.starch,
-        MassNutrient::Lactose => &mut profile.carbohydrates.sugars.lactose,
-        MassNutrient::Fibre => &mut profile.fibre,
-        MassNutrient::Sodium => &mut profile.sodium,
-        MassNutrient::AddedSugars => &mut profile.carbohydrates.sugars.added,
-        MassNutrient::Cholesterol => &mut profile.cholesterol,
-        MassNutrient::TransFat => &mut profile.fat.trans,
-        MassNutrient::SaturatedFat => &mut profile.fat.saturated,
-        MassNutrient::MonounsaturatedFat => &mut profile.fat.monounsaturated,
-        MassNutrient::PolyunsaturatedFat => &mut profile.fat.polyunsaturated,
+        MassNutrient::Protein => &mut profile.nutrients.protein,
+        MassNutrient::TotalFat => &mut profile.nutrients.fat.total,
+        MassNutrient::CarbohydrateByDifference => {
+            &mut profile.nutrients.carbohydrates.including_fibre
+        }
+        MassNutrient::Starch => &mut profile.nutrients.carbohydrates.starch,
+        MassNutrient::Lactose => &mut profile.nutrients.carbohydrates.sugars.lactose,
+        MassNutrient::Fibre => &mut profile.nutrients.fibre,
+        MassNutrient::Sodium => &mut profile.nutrients.sodium,
+        MassNutrient::AddedSugars => &mut profile.nutrients.carbohydrates.sugars.added,
+        MassNutrient::Cholesterol => &mut profile.nutrients.cholesterol,
+        MassNutrient::TransFat => &mut profile.nutrients.fat.trans,
+        MassNutrient::SaturatedFat => &mut profile.nutrients.fat.saturated,
+        MassNutrient::MonounsaturatedFat => &mut profile.nutrients.fat.monounsaturated,
+        MassNutrient::PolyunsaturatedFat => &mut profile.nutrients.fat.polyunsaturated,
     };
     *slot = Some(amount);
 }

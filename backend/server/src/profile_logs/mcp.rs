@@ -79,16 +79,16 @@ impl ProfileLogTool {
     fn tool(self) -> Tool {
         let description = match self {
             Self::List => {
-                "List a profile's logs by inclusive day range, entry type, biometric subtype, and exclusive last_id cursor. Results are ordered by ID descending in fixed pages of 100. The optional filter object contains from, to, entry_type, subtype, and last_id. Requires crumbs:read."
+                "List a profile's food and biometric logs by inclusive day range, entry type, biometric subtype, and exclusive last_id cursor. Results are ordered by ID descending in fixed pages of 100. The optional filter object contains from, to, entry_type, subtype, and last_id. Requires crumbs:read."
             }
             Self::Get => {
                 "Get one log from a profile owned by the authenticated account. Requires crumbs:read."
             }
             Self::Create => {
-                "Create a weight measurement log for a profile. Supply a local day and a positive kg value. Omit time to use the current local time in the profile timezone. Requires crumbs:write."
+                "Create a food or weight log for a profile. Food entries require an existing FoodId and a positive amount with a mass unit, volume unit, or named serving that matches the food. The server copies calories, available nutrients, and description into an immutable snapshot. If food calories are missing, edit the food or create a food with calories before logging it. Omit time to use the current local time in the profile timezone. Requires crumbs:write."
             }
             Self::Update => {
-                "Patch a log's local day, time, or weight measurement without changing its profile or entry type. Omitted fields remain unchanged. Requires crumbs:write."
+                "Patch a log's day or time, or patch its weight or food input without changing its profile or entry type. Omitted fields remain unchanged. Date/time-only changes preserve a food snapshot; supplied food input fields refresh it from the current food record. Requires crumbs:write."
             }
             Self::Delete => {
                 "Delete one log from a profile owned by the authenticated account. Deleting a weight log recalculates the profile's current weight. Requires crumbs:write."
@@ -329,7 +329,7 @@ fn definitions() -> Value {
             "properties": {
                 "day": {"$ref": "#/$defs/log_day", "description": "Replace the occurrence day. Omission preserves the stored day."},
                 "time": {"$ref": "#/$defs/local_time", "description": "Replace the occurrence time. Null is invalid; omission preserves the stored time."},
-                "entry": {"$ref": "#/$defs/log_entry_patch", "description": "Replace the weight measurement without changing its category."}
+                "entry": {"$ref": "#/$defs/log_entry_patch", "description": "Patch the weight measurement or food input without changing the entry category. Food input fields refresh the snapshot; an empty food patch preserves it."}
             }
         },
         "log_filter": {
@@ -353,6 +353,18 @@ fn definitions() -> Value {
         "log_day": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "Valid calendar day in YYYY-MM-DD form."},
         "local_time": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](\\.[0-9]{1,3})?)?$", "description": "Profile-local time. Input accepts HH:MM, HH:MM:SS, or HH:MM:SS.f through HH:MM:SS.fff; responses serialize as HH:MM:SS.fff."},
         "log_entry": {
+            "oneOf": [
+                {"$ref": "#/$defs/biometric_log_entry"},
+                {"$ref": "#/$defs/food_log_entry"}
+            ]
+        },
+        "log_entry_patch": {
+            "oneOf": [
+                {"$ref": "#/$defs/biometric_log_entry"},
+                {"$ref": "#/$defs/food_log_entry_patch"}
+            ]
+        },
+        "biometric_log_entry": {
             "type": "object",
             "additionalProperties": false,
             "required": ["type", "measurement"],
@@ -361,7 +373,29 @@ fn definitions() -> Value {
                 "measurement": {"$ref": "#/$defs/biometric_entry"}
             }
         },
-        "log_entry_patch": {"$ref": "#/$defs/log_entry"},
+        "food_log_entry": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "food_id", "amount", "serving_size"],
+            "properties": {
+                "type": {"const": "food"},
+                "food_id": {"type": "integer", "minimum": 1, "description": "Existing positive FoodId. The server validates the food and derives the snapshot."},
+                "amount": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$", "description": "Positive fixed-point amount, for example 300 or 1.5."},
+                "serving_size": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "One of kg, g, mg, µg, l, ml, or one nonblank, case-sensitive named serving defined by this food. The dimension must match the food's nutrition basis; surrounding whitespace is ignored."}
+            }
+        },
+        "food_log_entry_patch": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+                "type": {"const": "food"},
+                "food_id": {"type": "integer", "minimum": 1, "description": "Existing positive FoodId. Omit to keep the stored FoodId."},
+                "amount": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$", "description": "Positive fixed-point amount. Omit to keep the stored amount."},
+                "serving_size": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "kg, g, mg, µg, l, ml, or one nonblank, case-sensitive named serving defined by the food. Omit to keep the stored serving. Null is invalid."}
+            },
+            "description": "Fields are optional and null is invalid. An empty food patch preserves the existing snapshot. Supplying any input field rebuilds the snapshot from the current food record after the merged food ID, amount, and serving size validate."
+        },
         "biometric_entry": {
             "type": "object",
             "additionalProperties": false,

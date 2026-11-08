@@ -1,17 +1,24 @@
 use chrono::{DateTime, Timelike, Utc};
+use rust_decimal::Decimal;
 use sqlx::FromRow;
 use sqlx::QueryBuilder;
 use sqlx::sqlite::Sqlite;
 
 use crate::clock::UnixMillis;
+use crate::foods::FoodDescription;
 use crate::identity::UserId;
+use crate::nutrition_model::{
+    ConsumedNutrition, FoodData, Kilocalories, MeasuredQuantity, NutritionBasis, QuantityError,
+    Reported, ServingSize,
+};
 use crate::profiles::{IanaTimezone, ProfileData, ProfileId};
 use crate::runtime::Database;
 
 use super::error::ProfileLogError;
 use super::model::{
-    BiometricEntry, CreateLog, LocalTime, LogDay, LogEntryPatch, LogFilter, LogPage, PatchLog,
-    ProfileLog, ProfileLogData, ProfileLogId,
+    BiometricEntry, CreateLog, FoodInputSnapshot, FoodLogEntry, FoodLogInput, FoodLogPatch,
+    LocalTime, LogDay, LogEntryPatch, LogFilter, LogInput, LogPage, PatchLog, ProfileLog,
+    ProfileLogData, ProfileLogId, ServingSelector,
 };
 use super::store::ProfileLogs;
 
@@ -38,7 +45,7 @@ impl ProfileLogs for Database {
             Some(time) => time,
             None => local_time_at(profile_data.settings.timezone, now)?,
         };
-        let data = input.entry.into_data();
+        let data = resolve_log_input(&mut transaction, &input.entry).await?;
         let data_json = encode_data(&data)?;
         let id = sqlx::query_scalar::<_, i64>(
             "INSERT INTO profile_logs (
@@ -55,8 +62,16 @@ impl ProfileLogs for Database {
         .await
         .map_err(ProfileLogError::storage)?;
         let id = ProfileLogId::new(id).map_err(|_| ProfileLogError::InvalidStoredData)?;
-        update_current_weight_if_changed(&mut transaction, user, profile, &mut profile_data, now)
+        if is_weight(&data) {
+            update_current_weight_if_changed(
+                &mut transaction,
+                user,
+                profile,
+                &mut profile_data,
+                now,
+            )
             .await?;
+        }
         transaction
             .commit()
             .await
@@ -169,6 +184,7 @@ impl ProfileLogs for Database {
             return Ok(None);
         };
         let current = row.into_log()?;
+        let previous_weight = is_weight(&current.data);
         let day = match &patch.day {
             crate::profiles::Patch::Unchanged => current.day,
             crate::profiles::Patch::Set(day) => *day,
@@ -177,11 +193,16 @@ impl ProfileLogs for Database {
             crate::profiles::Patch::Unchanged => current.time,
             crate::profiles::Patch::Set(time) => *time,
         };
-        let data = match &patch.entry {
-            crate::profiles::Patch::Unchanged => current.data,
-            crate::profiles::Patch::Set(entry) => replace_same_variant(current.data, *entry)?,
+        let replacement = match &patch.entry {
+            crate::profiles::Patch::Unchanged => None,
+            crate::profiles::Patch::Set(entry) => {
+                replace_same_variant(&mut transaction, &current.data, entry).await?
+            }
         };
-        let changed = day != current.day || time != current.time || data != current.data;
+        let data_changed = replacement
+            .as_ref()
+            .is_some_and(|data| data != &current.data);
+        let changed = day != current.day || time != current.time || data_changed;
         if !changed {
             transaction
                 .commit()
@@ -189,6 +210,7 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(Some(current));
         }
+        let data = replacement.unwrap_or(current.data);
         let now = self.clock.now().map_err(ProfileLogError::clock)?;
         sqlx::query(
             "UPDATE profile_logs
@@ -204,7 +226,7 @@ impl ProfileLogs for Database {
         .execute(&mut *transaction)
         .await
         .map_err(ProfileLogError::storage)?;
-        if is_weight(&current.data) || is_weight(&data) {
+        if previous_weight || is_weight(&data) {
             update_current_weight_if_changed(
                 &mut transaction,
                 user,
@@ -284,15 +306,217 @@ impl ProfileLogs for Database {
     }
 }
 
-fn replace_same_variant(
-    current: ProfileLogData,
-    patch: LogEntryPatch,
+async fn resolve_log_input(
+    transaction: &mut sqlx::Transaction<'_, Sqlite>,
+    input: &LogInput,
 ) -> Result<ProfileLogData, ProfileLogError> {
+    match input {
+        LogInput::Biometric { measurement } => Ok(ProfileLogData::Biometric {
+            measurement: *measurement,
+        }),
+        LogInput::Food(input) => Ok(ProfileLogData::Food(Box::new(
+            resolve_food_input(transaction, input).await?,
+        ))),
+    }
+}
+
+async fn replace_same_variant(
+    transaction: &mut sqlx::Transaction<'_, Sqlite>,
+    current: &ProfileLogData,
+    patch: &LogEntryPatch,
+) -> Result<Option<ProfileLogData>, ProfileLogError> {
     match (current, patch) {
-        (ProfileLogData::Biometric { .. }, LogEntryPatch::Biometric { .. }) => {
-            Ok(patch.into_data())
+        (ProfileLogData::Biometric { .. }, LogEntryPatch::Biometric { measurement }) => {
+            Ok(Some(ProfileLogData::Biometric {
+                measurement: *measurement,
+            }))
+        }
+        (ProfileLogData::Food(current), LogEntryPatch::Food(patch)) => {
+            if !patch.has_changes() {
+                return Ok(None);
+            }
+            let input = patch_food_input(current, patch)?;
+            Ok(Some(ProfileLogData::Food(Box::new(
+                resolve_food_input(transaction, &input).await?,
+            ))))
+        }
+        (ProfileLogData::Biometric { .. }, LogEntryPatch::Food(_))
+        | (ProfileLogData::Food(_), LogEntryPatch::Biometric { .. }) => {
+            Err(ProfileLogError::InvalidInput(
+                "a log entry cannot change between food and biometric categories".to_owned(),
+            ))
         }
     }
+}
+
+fn patch_food_input(
+    current: &FoodLogEntry,
+    patch: &FoodLogPatch,
+) -> Result<FoodLogInput, ProfileLogError> {
+    let food_id = match patch.food_id() {
+        crate::profiles::Patch::Unchanged => current.food_id(),
+        crate::profiles::Patch::Set(food_id) => Some(*food_id),
+    }
+    .ok_or_else(|| {
+        ProfileLogError::InvalidInput("food_id is required to refresh this food entry".to_owned())
+    })?;
+
+    let amount = match patch.amount() {
+        crate::profiles::Patch::Unchanged => current.input().map(FoodInputSnapshot::amount),
+        crate::profiles::Patch::Set(amount) => Some(*amount),
+    }
+    .ok_or_else(|| {
+        ProfileLogError::InvalidInput("amount is required to refresh this food entry".to_owned())
+    })?;
+
+    let serving_size = match patch.serving_size() {
+        crate::profiles::Patch::Unchanged => current
+            .input()
+            .map(FoodInputSnapshot::serving_size)
+            .map(|serving| ServingSelector::parse(&serving.name))
+            .transpose()?,
+        crate::profiles::Patch::Set(serving_size) => Some(serving_size.clone()),
+    }
+    .ok_or_else(|| {
+        ProfileLogError::InvalidInput(
+            "serving_size is required to refresh this food entry".to_owned(),
+        )
+    })?;
+
+    FoodLogInput::new(food_id, amount, serving_size)
+}
+
+async fn resolve_food_input(
+    transaction: &mut sqlx::Transaction<'_, Sqlite>,
+    input: &FoodLogInput,
+) -> Result<FoodLogEntry, ProfileLogError> {
+    let row = sqlx::query_as::<_, FoodSourceRow>(
+        "SELECT description, parsed_data FROM crumbs_foods WHERE id = ?",
+    )
+    .bind(input.food_id().0)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(ProfileLogError::storage)?
+    .ok_or_else(|| ProfileLogError::InvalidInput("food ID does not exist".to_owned()))?;
+    let food_data = serde_json::from_str::<FoodData>(&row.parsed_data)
+        .map_err(|_| ProfileLogError::InvalidStoredData)?;
+    let nutrition = food_data.nutrition.as_ref().ok_or_else(missing_calories)?;
+    let source_energy = nutrition.energy.ok_or_else(missing_calories)?;
+    let serving = resolve_serving(&food_data, input.serving_size())?;
+    let quantity = serving
+        .quantity()
+        .checked_scale(input.amount().value())
+        .map_err(food_calculation_error)?;
+    if quantity.value().is_zero() {
+        return Err(unsupported_precision("consumed quantity"));
+    }
+    let factor = nutrition_factor(nutrition.per, quantity)?;
+    let scaled_energy = source_energy
+        .checked_scale(factor)
+        .map_err(food_calculation_error)?;
+    let calories = Reported::<Kilocalories>::new(
+        scaled_energy.qualifier(),
+        scaled_energy
+            .amount()
+            .to_kilocalories()
+            .map_err(food_calculation_error)?,
+    )
+    .map_err(food_calculation_error)?;
+    let nutrition = ConsumedNutrition {
+        calories,
+        nutrients: nutrition
+            .nutrients
+            .checked_scale(factor)
+            .map_err(food_calculation_error)?,
+    };
+    let input_snapshot = FoodInputSnapshot::new(input.amount(), serving)?;
+    FoodLogEntry::new(
+        Some(input.food_id()),
+        quantity,
+        nutrition,
+        row.description,
+        Some(input_snapshot),
+    )
+}
+
+fn resolve_serving(
+    food: &FoodData,
+    selector: &ServingSelector,
+) -> Result<ServingSize, ProfileLogError> {
+    match selector {
+        ServingSelector::Unit(unit) => ServingSize::new(
+            unit.as_str().to_owned(),
+            unit.quantity().map_err(food_calculation_error)?,
+        )
+        .map_err(food_calculation_error),
+        ServingSelector::Named(name) => {
+            let mut matches = food
+                .serving_sizes
+                .iter()
+                .filter(|serving| serving.name.trim() == name.as_str());
+            let serving = matches.next().ok_or_else(|| {
+                ProfileLogError::InvalidInput(format!(
+                    "serving '{}' is not available for this food",
+                    name.as_str()
+                ))
+            })?;
+            if matches.next().is_some() {
+                return Err(ProfileLogError::InvalidInput(format!(
+                    "serving '{}' is ambiguous for this food",
+                    name.as_str()
+                )));
+            }
+            Ok(serving.clone())
+        }
+    }
+}
+
+fn nutrition_factor(
+    basis: NutritionBasis,
+    quantity: MeasuredQuantity,
+) -> Result<Decimal, ProfileLogError> {
+    let normalized = match (basis, quantity) {
+        (NutritionBasis::Per100Grams, MeasuredQuantity::Mass(mass)) => {
+            mass.to_grams().map_err(food_calculation_error)?.value()
+        }
+        (NutritionBasis::Per100Millilitres, MeasuredQuantity::Volume(volume)) => volume
+            .to_millilitres()
+            .map_err(food_calculation_error)?
+            .value(),
+        _ => {
+            return Err(ProfileLogError::InvalidInput(
+                "serving unit must match the food nutrition basis".to_owned(),
+            ));
+        }
+    };
+    if normalized.is_zero() {
+        return Err(unsupported_precision("normalized quantity"));
+    }
+    let factor = normalized
+        .checked_div(Decimal::from(100))
+        .ok_or_else(|| unsupported_precision("nutrition scale"))?;
+    if factor.is_zero() {
+        return Err(unsupported_precision("nutrition scale"));
+    }
+    Ok(factor)
+}
+
+fn missing_calories() -> ProfileLogError {
+    ProfileLogError::InvalidInput(
+        "food has no usable calorie data; edit the food's nutrition or create a food with calories, then retry".to_owned(),
+    )
+}
+
+fn unsupported_precision(value: &str) -> ProfileLogError {
+    ProfileLogError::InvalidInput(format!(
+        "{value} is below the supported fixed-point precision"
+    ))
+}
+
+fn food_calculation_error(error: QuantityError) -> ProfileLogError {
+    ProfileLogError::InvalidInput(format!(
+        "food quantity or nutrition cannot be represented at supported fixed-point precision: {error}"
+    ))
 }
 
 fn is_weight(data: &ProfileLogData) -> bool {
@@ -374,6 +598,7 @@ async fn update_current_weight_if_changed(
                 ProfileLogData::Biometric {
                     measurement: BiometricEntry::Weight(measurement),
                 } => Ok(measurement.value),
+                ProfileLogData::Food(_) => Err(ProfileLogError::InvalidStoredData),
             }
         })
         .transpose()?;
@@ -432,6 +657,12 @@ struct ProfileLogRow {
     day: String,
     time: String,
     data_json: String,
+}
+
+#[derive(FromRow)]
+struct FoodSourceRow {
+    description: FoodDescription,
+    parsed_data: String,
 }
 
 impl ProfileLogRow {
