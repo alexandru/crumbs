@@ -179,7 +179,7 @@ impl ProfileLogs for Database {
         };
         let data = match &patch.entry {
             crate::profiles::Patch::Unchanged => current.data,
-            crate::profiles::Patch::Set(entry) => replace_same_variant(current.data, *entry)?,
+            crate::profiles::Patch::Set(entry) => replace_same_variant(current.data, *entry),
         };
         let changed = day != current.day || time != current.time || data != current.data;
         if !changed {
@@ -204,16 +204,8 @@ impl ProfileLogs for Database {
         .execute(&mut *transaction)
         .await
         .map_err(ProfileLogError::storage)?;
-        if is_weight(&current.data) || is_weight(&data) {
-            update_current_weight_if_changed(
-                &mut transaction,
-                user,
-                profile,
-                &mut profile_data,
-                now,
-            )
+        update_current_weight_if_changed(&mut transaction, user, profile, &mut profile_data, now)
             .await?;
-        }
         transaction
             .commit()
             .await
@@ -258,24 +250,16 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(false);
         };
-        let log = row.into_log()?;
+        row.into_log()?;
         sqlx::query("DELETE FROM profile_logs WHERE profile_id = ? AND id = ?")
             .bind(profile.get())
             .bind(id.get())
             .execute(&mut *transaction)
             .await
             .map_err(ProfileLogError::storage)?;
-        if is_weight(&log.data) {
-            let now = self.clock.now().map_err(ProfileLogError::clock)?;
-            update_current_weight_if_changed(
-                &mut transaction,
-                user,
-                profile,
-                &mut profile_data,
-                now,
-            )
+        let now = self.clock.now().map_err(ProfileLogError::clock)?;
+        update_current_weight_if_changed(&mut transaction, user, profile, &mut profile_data, now)
             .await?;
-        }
         transaction
             .commit()
             .await
@@ -284,22 +268,12 @@ impl ProfileLogs for Database {
     }
 }
 
-fn replace_same_variant(
-    current: ProfileLogData,
-    patch: LogEntryPatch,
-) -> Result<ProfileLogData, ProfileLogError> {
+fn replace_same_variant(current: ProfileLogData, patch: LogEntryPatch) -> ProfileLogData {
     match (current, patch) {
-        (ProfileLogData::Biometric(_), LogEntryPatch::Biometric(_)) => Ok(patch.into_data()),
+        (ProfileLogData::Biometric(_), LogEntryPatch::Biometric(entry)) => {
+            ProfileLogData::Biometric(entry)
+        }
     }
-}
-
-fn is_weight(data: &ProfileLogData) -> bool {
-    matches!(
-        data,
-        ProfileLogData::Biometric(BiometricLogEntry {
-            measurement: BiometricEntry::Weight(_)
-        })
-    )
 }
 
 async fn begin_immediate(

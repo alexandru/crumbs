@@ -316,14 +316,6 @@ pub enum LogEntryPatch {
     Biometric(BiometricLogEntry),
 }
 
-impl LogEntryPatch {
-    pub(crate) const fn into_data(self) -> ProfileLogData {
-        match self {
-            Self::Biometric(entry) => ProfileLogData::Biometric(entry),
-        }
-    }
-}
-
 /// A partial patch for a profile log.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
