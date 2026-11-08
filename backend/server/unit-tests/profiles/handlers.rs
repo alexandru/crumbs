@@ -17,7 +17,7 @@ async fn profile_error_responses_preserve_status_json_and_redact_sources()
         let body = std::str::from_utf8(&body)?;
         assert!(!body.contains("private storage source detail"));
         assert!(!body.contains("private clock source detail"));
-        let payload: Value = serde_json::from_str(&body)?;
+        let payload: Value = serde_json::from_str(body)?;
         assert_eq!(payload, json!({"code": case.code, "error": case.message}));
     }
 
