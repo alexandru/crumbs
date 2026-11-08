@@ -14,6 +14,39 @@ All units of measurement MUST use distinct semantic newtypes (e.g. `Grams`, `Mil
 
 Nutrition quantities and arithmetic MUST use fixed-point decimal representations. Parsing, conversion, storage, and serialization MUST NOT pass these quantities through binary floating-point values. Operations that require rounding MUST use an explicit, documented rounding policy.
 
+## Enum payloads
+
+Equivalent payload alternatives in a domain enum MUST use the same constructor style. Stored, create, and patch enums for the same categories MUST follow the same convention. When alternatives wrap category payload types, each variant MUST carry one payload through a tuple constructor; each payload’s named fields belong in its own struct. Unit variants and variants with different semantic roles MAY use different shapes.
+
+Code MUST NOT add `Box` or other heap indirection solely to silence a size lint or without a demonstrated benefit for the expected workload. An enum intentionally stored inline MAY use a narrowly scoped lint allowance.
+
+For example, the payload struct retains the existing `{"type":"biometric","measurement":...}` JSON representation:
+
+```diff
++pub struct BiometricLogEntry {
++    pub measurement: BiometricEntry,
++}
++
+pub enum ProfileLogData {
+-    Biometric { measurement: BiometricEntry },
+-    Food(Box<FoodLogEntry>),
++    Biometric(BiometricLogEntry),
++    Food(FoodLogEntry),
+}
+
+pub enum LogInput {
+-    Biometric { measurement: BiometricEntry },
++    Biometric(BiometricLogEntry),
+    Food(FoodLogInput),
+}
+
+pub enum LogEntryPatch {
+-    Biometric { measurement: BiometricEntry },
++    Biometric(BiometricLogEntry),
+    Food(FoodLogPatch),
+}
+```
+
 ## Panics
 
 Rust code MUST NOT panic. Agents MUST NOT use `unwrap`, `expect`, `panic!`, `todo!`, or `unreachable!`.
