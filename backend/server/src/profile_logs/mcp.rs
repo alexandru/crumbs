@@ -297,14 +297,14 @@ fn serialize<T: Serialize>(value: T) -> Result<Value, ToolFailure> {
 }
 
 fn profile_log_tool_error(error: ProfileLogError) -> CallToolResult {
-    match error {
-        ProfileLogError::InvalidInput(message) => tool_error("invalid_input", message),
-        ProfileLogError::InvalidStoredData => {
-            tool_error("invalid_stored_data", "profile log operation failed")
-        }
-        ProfileLogError::Storage(_) => tool_error("storage", "profile log operation failed"),
-        ProfileLogError::Clock(_) => tool_error("clock", "profile log operation failed"),
-    }
+    let code = error.code();
+    let message = match error {
+        ProfileLogError::InvalidInput(message) => message,
+        ProfileLogError::InvalidStoredData
+        | ProfileLogError::Storage(_)
+        | ProfileLogError::Clock(_) => "profile log operation failed".to_owned(),
+    };
+    tool_error(code, message)
 }
 
 fn tool_error(code: &'static str, message: impl Into<String>) -> CallToolResult {
@@ -373,3 +373,7 @@ fn definitions() -> Value {
         }
     })
 }
+
+#[cfg(test)]
+#[path = "../../unit-tests/profile_logs/mcp.rs"]
+mod tests;

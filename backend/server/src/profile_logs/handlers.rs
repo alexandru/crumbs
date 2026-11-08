@@ -128,8 +128,9 @@ pub(super) async fn delete<S: ProfileLogs + Send + 'static>(
 }
 
 fn profile_log_error(error: ProfileLogError) -> Response {
-    let (status, message) = match &error {
-        ProfileLogError::InvalidInput(message) => (StatusCode::BAD_REQUEST, message.clone()),
+    let code = error.code();
+    let (status, message) = match error {
+        ProfileLogError::InvalidInput(message) => (StatusCode::BAD_REQUEST, message),
         ProfileLogError::InvalidStoredData
         | ProfileLogError::Storage(_)
         | ProfileLogError::Clock(_) => (
@@ -137,7 +138,7 @@ fn profile_log_error(error: ProfileLogError) -> Response {
             "profile log operation failed".to_owned(),
         ),
     };
-    error_response(status, error.code(), message)
+    error_response(status, code, message)
 }
 
 fn not_found() -> Response {
@@ -151,3 +152,7 @@ fn invalid_request(message: String) -> Response {
 fn error_response(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
     (status, Json(json!({"code": code, "error": message.into()}))).into_response()
 }
+
+#[cfg(test)]
+#[path = "../../unit-tests/profile_logs/handlers.rs"]
+mod tests;
