@@ -12,7 +12,7 @@ pub trait Profiles: Sync {
     ///
     /// # Errors
     ///
-    /// Returns a validation, duplicate-name, clock, or storage error.
+    /// Returns a validation, duplicate-name, calculation, clock, or storage error.
     fn create_profile(
         &self,
         user: UserId,
@@ -25,7 +25,7 @@ pub trait Profiles: Sync {
     ///
     /// # Errors
     ///
-    /// Returns a storage or stored-data error.
+    /// Returns a calculation, clock, storage, or stored-data error.
     fn profile(
         &self,
         user: UserId,
@@ -36,7 +36,7 @@ pub trait Profiles: Sync {
     ///
     /// # Errors
     ///
-    /// Returns a storage or stored-data error.
+    /// Returns a calculation, clock, storage, or stored-data error.
     fn list_profiles(
         &self,
         user: UserId,
@@ -50,7 +50,7 @@ pub trait Profiles: Sync {
     ///
     /// # Errors
     ///
-    /// Returns a validation, duplicate-name, clock, storage, or stored-data error.
+    /// Returns a validation, duplicate-name, calculation, clock, storage, or stored-data error.
     fn patch_profile(
         &self,
         user: UserId,

@@ -396,7 +396,7 @@ impl<'de> Deserialize<'de> for CustomBmr {
 }
 
 /// Whether BMR is calculated from profile inputs or supplied explicitly.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BmrSetting {
     /// Calculate BMR from the profile's weight, height, age, and sex.
@@ -404,6 +404,15 @@ pub enum BmrSetting {
     Calculated,
     /// Use a supplied kcal/day value.
     Custom { value: CustomBmr },
+}
+
+impl<'de> Deserialize<'de> for BmrSetting {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match BmrSettingInput::deserialize(deserializer)? {
+            BmrSettingInput::Calculated {} => Ok(Self::Calculated),
+            BmrSettingInput::Custom { value } => Ok(Self::Custom { value }),
+        }
+    }
 }
 
 /// A preset used for baseline activity outside separately recorded activity.
@@ -473,6 +482,10 @@ pub struct ProfileData {
 }
 
 /// Calorie values calculated from settings and cache at read time.
+///
+/// Calculations use checked fixed-point decimal arithmetic. Precision
+/// reduction uses midpoint rounding to nearest-even, and overflow is reported
+/// as [ProfileError::Calculation].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileDerived {
@@ -704,6 +717,13 @@ pub struct ProfileList {
     pub items: Vec<Profile>,
     /// Exclusive cursor for the next page.
     pub last_id: Option<ProfileId>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+enum BmrSettingInput {
+    Calculated {},
+    Custom { value: CustomBmr },
 }
 
 fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>

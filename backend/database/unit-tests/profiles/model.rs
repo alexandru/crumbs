@@ -83,6 +83,52 @@ fn create_and_patch_inputs_reject_unknown_fields_and_keep_null_semantics()
 }
 
 #[test]
+fn calculated_bmr_rejects_extra_fields_directly_and_in_create_or_patch()
+-> Result<(), Box<dyn Error>> {
+    let calculated = serde_json::json!({"mode": "calculated"});
+    assert_eq!(
+        serde_json::from_value::<BmrSetting>(calculated.clone())?,
+        BmrSetting::Calculated
+    );
+    assert_eq!(serde_json::to_value(BmrSetting::Calculated)?, calculated);
+    assert_eq!(
+        serde_json::from_value::<CreateProfile>(serde_json::json!({
+            "name": "Alex",
+            "settings": {"bmr": calculated}
+        }))?
+        .settings
+        .and_then(|settings| settings.bmr),
+        Some(BmrSetting::Calculated)
+    );
+    assert_eq!(
+        serde_json::from_value::<PatchProfile>(serde_json::json!({"bmr": calculated}))?.bmr,
+        BmrPatch::Set(BmrSetting::Calculated)
+    );
+
+    for bmr in [
+        serde_json::json!({"mode": "calculated", "value": "100 kcal"}),
+        serde_json::json!({"mode": "calculated", "current_weight": "70 kg"}),
+        serde_json::json!({"mode": "calculated", "unexpected": true}),
+    ] {
+        assert!(serde_json::from_value::<BmrSetting>(bmr.clone()).is_err());
+        assert!(
+            serde_json::from_value::<CreateProfile>(serde_json::json!({
+                "name": "Alex",
+                "settings": {"bmr": bmr}
+            }))
+            .is_err()
+        );
+        assert!(serde_json::from_value::<PatchProfile>(serde_json::json!({"bmr": bmr})).is_err());
+    }
+
+    let custom_json = serde_json::json!({"mode": "custom", "value": "1200 kcal"});
+    let custom: BmrSetting = serde_json::from_value(custom_json.clone())?;
+    assert!(matches!(custom, BmrSetting::Custom { .. }));
+    assert_eq!(serde_json::to_value(custom)?, custom_json);
+    Ok(())
+}
+
+#[test]
 fn calorie_values_keep_fractional_results_and_custom_baseline_is_independent()
 -> Result<(), Box<dyn Error>> {
     let current_weight = BodyWeight::new(Kilograms::from_str("70 kg")?)?;
@@ -150,6 +196,28 @@ fn calorie_values_keep_fractional_results_and_custom_baseline_is_independent()
     assert_eq!(
         custom.maintenance_calories.map(|value| value.value()),
         Some(Decimal::from_str("1050.75")?)
+    );
+    Ok(())
+}
+
+#[test]
+fn baseline_multiplication_uses_decimal_precision_rounding() -> Result<(), Box<dyn Error>> {
+    let settings = ProfileSettings {
+        bmr: BmrSetting::Custom {
+            value: CustomBmr::new(Kilocalories::from_str(
+                "1000.0000000000000000000000001 kcal",
+            )?)?,
+        },
+        baseline_activity: Some(BaselineActivity::Preset {
+            level: ActivityLevel::LightlyActive,
+        }),
+        ..ProfileSettings::default()
+    };
+
+    let derived = derive_profile(&settings, &ProfileCache::default(), 1_000)?;
+    assert_eq!(
+        derived.baseline_activity.map(|value| value.to_string()),
+        Some("375.00000000000000000000000004 kcal".to_owned())
     );
     Ok(())
 }
