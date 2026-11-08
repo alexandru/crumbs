@@ -7,7 +7,7 @@ use super::{CreateLog, LogFilter, LogPage, PatchLog, ProfileLog, ProfileLogError
 
 /// Reads and manages profile logs owned by an authenticated account.
 pub trait ProfileLogs: Sync {
-    /// Creates a weight log for a profile owned by user.
+    /// Creates a food or biometric log for a profile owned by user.
     ///
     /// Returns None when the profile is absent or belongs to another user.
     ///

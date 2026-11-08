@@ -488,7 +488,8 @@ impl<'de> Deserialize<'de> for ServingSelector {
 }
 
 /// A positive serving count and serving selector entered by the person.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename = "Fields")]
 pub struct FoodLogInput {
     food_id: FoodId,
     amount: Amount,
@@ -527,24 +528,6 @@ impl FoodLogInput {
     /// Returns the selected unit or named serving.
     pub fn serving_size(&self) -> &ServingSelector {
         &self.serving_size
-    }
-}
-
-impl Serialize for FoodLogInput {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        #[derive(Serialize)]
-        struct Fields<'a> {
-            food_id: FoodId,
-            amount: Amount,
-            serving_size: &'a ServingSelector,
-        }
-
-        Fields {
-            food_id: self.food_id,
-            amount: self.amount,
-            serving_size: &self.serving_size,
-        }
-        .serialize(serializer)
     }
 }
 
@@ -897,7 +880,7 @@ pub struct PatchLog {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogEntryType {
-    /// Food consumption, supported in a later slice.
+    /// Food consumption.
     Food,
     /// Biometric measurements.
     Biometric,

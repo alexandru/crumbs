@@ -184,7 +184,7 @@ impl ProfileLogs for Database {
             return Ok(None);
         };
         let current = row.into_log()?;
-        let previous_weight = is_weight(&current.data);
+        let updates_weight = is_weight(&current.data);
         let day = match &patch.day {
             crate::profiles::Patch::Unchanged => current.day,
             crate::profiles::Patch::Set(day) => *day,
@@ -226,7 +226,7 @@ impl ProfileLogs for Database {
         .execute(&mut *transaction)
         .await
         .map_err(ProfileLogError::storage)?;
-        if previous_weight || is_weight(&data) {
+        if updates_weight {
             update_current_weight_if_changed(
                 &mut transaction,
                 user,
@@ -398,7 +398,7 @@ async fn resolve_food_input(
         .map_err(|_| ProfileLogError::InvalidStoredData)?;
     let nutrition = food_data.nutrition.as_ref().ok_or_else(missing_calories)?;
     let source_energy = nutrition.energy.ok_or_else(missing_calories)?;
-    let serving = resolve_serving(&food_data, input.serving_size())?;
+    let serving = resolve_serving(food_data.serving_sizes, input.serving_size())?;
     let quantity = serving
         .quantity()
         .checked_scale(input.amount().value())
@@ -436,7 +436,7 @@ async fn resolve_food_input(
 }
 
 fn resolve_serving(
-    food: &FoodData,
+    servings: Vec<ServingSize>,
     selector: &ServingSelector,
 ) -> Result<ServingSize, ProfileLogError> {
     match selector {
@@ -446,9 +446,8 @@ fn resolve_serving(
         )
         .map_err(food_calculation_error),
         ServingSelector::Named(name) => {
-            let mut matches = food
-                .serving_sizes
-                .iter()
+            let mut matches = servings
+                .into_iter()
                 .filter(|serving| serving.name.trim() == name.as_str());
             let serving = matches.next().ok_or_else(|| {
                 ProfileLogError::InvalidInput(format!(
@@ -462,7 +461,7 @@ fn resolve_serving(
                     name.as_str()
                 )));
             }
-            Ok(serving.clone())
+            Ok(serving)
         }
     }
 }
