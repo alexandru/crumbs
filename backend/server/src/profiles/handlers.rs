@@ -84,27 +84,17 @@ pub(super) async fn patch<S: Profiles + Send + 'static>(
 }
 
 fn profile_error(error: ProfileError) -> Response {
-    let (status, code, message) = match error {
-        ProfileError::InvalidInput(message) => (StatusCode::BAD_REQUEST, "invalid_input", message),
-        ProfileError::Calculation(message) => (StatusCode::BAD_REQUEST, "calculation", message),
+    let code = error.code();
+    let (status, message) = match error {
+        ProfileError::InvalidInput(message) | ProfileError::Calculation(message) => {
+            (StatusCode::BAD_REQUEST, message)
+        }
         ProfileError::DuplicateName => (
             StatusCode::CONFLICT,
-            "duplicate_name",
             "profile name already exists for this account".to_owned(),
         ),
-        ProfileError::InvalidStoredData => (
+        ProfileError::InvalidStoredData | ProfileError::Storage(_) | ProfileError::Clock(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "invalid_stored_data",
-            "profile operation failed".to_owned(),
-        ),
-        ProfileError::Storage(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "storage",
-            "profile operation failed".to_owned(),
-        ),
-        ProfileError::Clock(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "clock",
             "profile operation failed".to_owned(),
         ),
     };
@@ -122,3 +112,7 @@ fn invalid_request(message: String) -> Response {
 fn error_response(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
     (status, Json(json!({"code": code, "error": message.into()}))).into_response()
 }
+
+#[cfg(test)]
+#[path = "../../unit-tests/profiles/handlers.rs"]
+mod tests;

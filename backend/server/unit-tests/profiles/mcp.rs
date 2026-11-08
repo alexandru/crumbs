@@ -4,9 +4,31 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 use crate::oauth::tests::{TEST_MCP_ACCESS_TOKEN, TEST_MCP_WRITE_ACCESS_TOKEN};
+use crate::profiles::tests::profile_error_cases;
 use crate::tests::{TestApplication, mcp_call_router_with_token, mcp_initialize, protocol_request};
 
-use super::routes::{seed_other_mcp_user_access, seed_profile_account};
+use crate::profiles::tests::routes::{seed_other_mcp_user_access, seed_profile_account};
+
+use super::profile_tool_error;
+
+#[test]
+fn profile_tool_errors_preserve_structured_json_and_redact_sources() -> Result<(), Box<dyn Error>> {
+    for case in profile_error_cases() {
+        let result = profile_tool_error(case.error);
+        let serialized = serde_json::to_value(result)?;
+
+        assert_eq!(serialized["isError"], true);
+        assert_eq!(
+            serialized["structuredContent"],
+            json!({"code": case.code, "error": case.message})
+        );
+        let serialized = serialized.to_string();
+        assert!(!serialized.contains("private storage source detail"));
+        assert!(!serialized.contains("private clock source detail"));
+    }
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity()
