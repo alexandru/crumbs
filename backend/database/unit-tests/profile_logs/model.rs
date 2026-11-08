@@ -156,11 +156,21 @@ fn patch_fields_preserve_omission_and_reject_nulls() -> Result<(), Box<dyn Error
         r#"{"type":"biometric","measurement":{"type":"weight","value":"75 kg"}}"#,
     )?;
     assert!(matches!(
-        patch_entry,
+        &patch_entry,
         LogEntryPatch::Biometric(BiometricLogEntry {
             measurement: BiometricEntry::Weight(_)
         })
     ));
+    let patch_data = match patch_entry {
+        LogEntryPatch::Biometric(entry) => ProfileLogData::Biometric(entry),
+        LogEntryPatch::Food(_) => {
+            return Err(std::io::Error::other("expected biometric patch entry").into());
+        }
+    };
+    assert_eq!(
+        serde_json::to_value(patch_data)?,
+        serde_json::json!({"type":"biometric","measurement":{"type":"weight","value":"75 kg"}})
+    );
     for invalid in [
         r#"{"day":null}"#,
         r#"{"time":null}"#,

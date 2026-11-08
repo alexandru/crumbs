@@ -83,16 +83,15 @@ impl Profiles for Database {
         user: UserId,
         query: &ProfileListQuery,
     ) -> Result<ProfileList, ProfileError> {
-        let last_id = query.last_id.map(ProfileId::get);
+        let last_id = query.last_id.map_or(0, ProfileId::get);
         let rows = sqlx::query_as::<_, ProfileRow>(
             "SELECT id, name, name_key, data_json
              FROM profiles
-             WHERE user_id = ? AND (? IS NULL OR id > ?)
+             WHERE user_id = ? AND id > ?
              ORDER BY id ASC
              LIMIT ?",
         )
         .bind(user.get())
-        .bind(last_id)
         .bind(last_id)
         .bind(query.effective_limit())
         .fetch_all(&self.pool)
@@ -139,7 +138,7 @@ impl Profiles for Database {
             return Ok(None);
         };
         let (stored_id, stored_name, data) = row.into_parts()?;
-        let (name, data, changed) = apply_patch(&stored_name, &data, patch);
+        let (name, data, changed) = apply_patch(stored_name, data, patch);
         let now = self.clock.now().map_err(ProfileError::clock)?;
         if changed {
             let data_json = serde_json::to_string(&data).map_err(ProfileError::storage)?;

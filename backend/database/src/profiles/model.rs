@@ -782,6 +782,85 @@ pub struct ProfileList {
     pub last_id: Option<ProfileId>,
 }
 
+impl From<QuantityError> for ProfileError {
+    fn from(error: QuantityError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+/// Builds public calculated values from profile settings and current weight.
+pub(crate) fn derive_profile(
+    settings: &ProfileSettings,
+    cache: &ProfileCache,
+    timestamp: UnixMillis,
+) -> Result<ProfileDerived, ProfileError> {
+    let current_day = local_day(settings.timezone, timestamp)?;
+    let bmr = match settings.bmr {
+        BmrSetting::Calculated => match (
+            cache.current_weight,
+            settings.height,
+            settings.birth_date,
+            settings.sex,
+        ) {
+            (Some(weight), Some(height), Some(birth_date), Some(sex)) => {
+                age_on(birth_date, current_day)
+                    .map(|age| calculate_bmr(weight, height, age, sex))
+                    .transpose()?
+            }
+            _ => None,
+        },
+        BmrSetting::Custom { value } => Some(value.value()),
+    };
+    let baseline_activity = baseline_value(settings.baseline_activity, bmr)?;
+    let maintenance_calories = match (bmr, baseline_activity) {
+        (Some(bmr), Some(addition)) => Some(add_kilocalories(bmr, addition)?),
+        _ => None,
+    };
+    Ok(ProfileDerived {
+        bmr,
+        baseline_activity,
+        maintenance_calories,
+    })
+}
+
+/// Applies a patch while preserving cache and reporting whether writable state changed.
+pub(crate) fn apply_patch(
+    current_name: ProfileName,
+    current: ProfileData,
+    patch: &PatchProfile,
+) -> (ProfileName, ProfileData, bool) {
+    let (name, name_changed) = match &patch.name {
+        Patch::Set(replacement) if replacement.as_str() != current_name.as_str() => {
+            (replacement.clone(), true)
+        }
+        Patch::Unchanged | Patch::Set(_) => (current_name, false),
+    };
+    let mut settings = current.settings.clone();
+    settings.birth_date = patched_optional(settings.birth_date, &patch.birth_date);
+    settings.sex = patched_optional(settings.sex, &patch.sex);
+    settings.height = patched_optional(settings.height, &patch.height);
+    if let Patch::Set(value) = patch.timezone {
+        settings.timezone = value;
+    }
+    settings.weight_goal = patched_optional(settings.weight_goal, &patch.weight_goal);
+    match patch.bmr {
+        BmrPatch::Unchanged => {}
+        BmrPatch::Set(value) => settings.bmr = value,
+        BmrPatch::ResetToCalculated => settings.bmr = BmrSetting::Calculated,
+    }
+    settings.baseline_activity =
+        patched_optional(settings.baseline_activity, &patch.baseline_activity);
+    let changed = name_changed || settings != current.settings;
+    (
+        name,
+        ProfileData {
+            settings,
+            cache: current.cache,
+        },
+        changed,
+    )
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 enum BmrSettingInput {
@@ -803,46 +882,6 @@ fn nullable_patch<T>(value: Option<Option<T>>) -> NullablePatch<T> {
         Some(None) => NullablePatch::Clear,
         Some(Some(value)) => NullablePatch::Set(value),
     }
-}
-
-/// Builds public calculated values from profile settings and current weight.
-pub(crate) fn derive_profile(
-    settings: &ProfileSettings,
-    cache: &ProfileCache,
-    timestamp: UnixMillis,
-) -> Result<ProfileDerived, ProfileError> {
-    let current_day = local_day(settings.timezone, timestamp)?;
-    let bmr = match settings.bmr {
-        BmrSetting::Calculated => match (
-            cache.current_weight,
-            settings.height,
-            settings.birth_date,
-            settings.sex,
-        ) {
-            (Some(weight), Some(height), Some(birth_date), Some(sex)) => {
-                let Some(age) = age_on(birth_date, current_day) else {
-                    return Ok(ProfileDerived {
-                        bmr: None,
-                        baseline_activity: baseline_value(settings.baseline_activity, None)?,
-                        maintenance_calories: None,
-                    });
-                };
-                Some(calculate_bmr(weight, height, age, sex)?)
-            }
-            _ => None,
-        },
-        BmrSetting::Custom { value } => Some(value.value()),
-    };
-    let baseline_activity = baseline_value(settings.baseline_activity, bmr)?;
-    let maintenance_calories = match (bmr, baseline_activity) {
-        (Some(bmr), Some(addition)) => Some(add_kilocalories(bmr, addition)?),
-        _ => None,
-    };
-    Ok(ProfileDerived {
-        bmr,
-        baseline_activity,
-        maintenance_calories,
-    })
 }
 
 fn local_day(timezone: IanaTimezone, timestamp: UnixMillis) -> Result<NaiveDate, ProfileError> {
@@ -941,63 +980,10 @@ fn calculation_overflow() -> ProfileError {
     ProfileError::Calculation("calculated value is outside the supported range".to_owned())
 }
 
-impl From<QuantityError> for ProfileError {
-    fn from(error: QuantityError) -> Self {
-        Self::InvalidInput(error.to_string())
+fn patched_optional<T: Copy>(current: Option<T>, patch: &NullablePatch<T>) -> Option<T> {
+    match patch {
+        NullablePatch::Unchanged => current,
+        NullablePatch::Set(value) => Some(*value),
+        NullablePatch::Clear => None,
     }
-}
-
-/// Applies a patch while preserving cache and reporting whether writable state changed.
-pub(crate) fn apply_patch(
-    current_name: &ProfileName,
-    current: &ProfileData,
-    patch: &PatchProfile,
-) -> (ProfileName, ProfileData, bool) {
-    let mut name = current_name.clone();
-    let mut settings = current.settings.clone();
-    if let Patch::Set(replacement) = &patch.name {
-        name = replacement.clone();
-    }
-    if let NullablePatch::Set(value) = &patch.birth_date {
-        settings.birth_date = Some(*value);
-    } else if patch.birth_date == NullablePatch::Clear {
-        settings.birth_date = None;
-    }
-    if let NullablePatch::Set(value) = &patch.sex {
-        settings.sex = Some(*value);
-    } else if patch.sex == NullablePatch::Clear {
-        settings.sex = None;
-    }
-    if let NullablePatch::Set(value) = &patch.height {
-        settings.height = Some(*value);
-    } else if patch.height == NullablePatch::Clear {
-        settings.height = None;
-    }
-    if let Patch::Set(value) = patch.timezone {
-        settings.timezone = value;
-    }
-    if let NullablePatch::Set(value) = &patch.weight_goal {
-        settings.weight_goal = Some(*value);
-    } else if patch.weight_goal == NullablePatch::Clear {
-        settings.weight_goal = None;
-    }
-    match patch.bmr {
-        BmrPatch::Unchanged => {}
-        BmrPatch::Set(value) => settings.bmr = value,
-        BmrPatch::ResetToCalculated => settings.bmr = BmrSetting::Calculated,
-    }
-    if let NullablePatch::Set(value) = patch.baseline_activity {
-        settings.baseline_activity = Some(value);
-    } else if patch.baseline_activity == NullablePatch::Clear {
-        settings.baseline_activity = None;
-    }
-    let changed = name.as_str() != current_name.as_str() || settings != current.settings;
-    (
-        name,
-        ProfileData {
-            settings,
-            cache: current.cache.clone(),
-        },
-        changed,
-    )
 }
