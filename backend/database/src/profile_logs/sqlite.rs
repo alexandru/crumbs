@@ -10,8 +10,8 @@ use crate::runtime::Database;
 
 use super::error::ProfileLogError;
 use super::model::{
-    BiometricEntry, CreateLog, LocalTime, LogDay, LogEntryPatch, LogFilter, LogPage, PatchLog,
-    ProfileLog, ProfileLogData, ProfileLogId,
+    BiometricEntry, BiometricLogEntry, CreateLog, LocalTime, LogDay, LogEntryPatch, LogFilter,
+    LogPage, PatchLog, ProfileLog, ProfileLogData, ProfileLogId,
 };
 use super::store::ProfileLogs;
 
@@ -289,18 +289,16 @@ fn replace_same_variant(
     patch: LogEntryPatch,
 ) -> Result<ProfileLogData, ProfileLogError> {
     match (current, patch) {
-        (ProfileLogData::Biometric { .. }, LogEntryPatch::Biometric { .. }) => {
-            Ok(patch.into_data())
-        }
+        (ProfileLogData::Biometric(_), LogEntryPatch::Biometric(_)) => Ok(patch.into_data()),
     }
 }
 
 fn is_weight(data: &ProfileLogData) -> bool {
     matches!(
         data,
-        ProfileLogData::Biometric {
+        ProfileLogData::Biometric(BiometricLogEntry {
             measurement: BiometricEntry::Weight(_)
-        }
+        })
     )
 }
 
@@ -371,9 +369,9 @@ async fn update_current_weight_if_changed(
         .map(|json| {
             let data = decode_data(&json)?;
             match data {
-                ProfileLogData::Biometric {
+                ProfileLogData::Biometric(BiometricLogEntry {
                     measurement: BiometricEntry::Weight(measurement),
-                } => Ok(measurement.value),
+                }) => Ok(measurement.value),
             }
         })
         .transpose()?;

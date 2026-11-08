@@ -7,8 +7,8 @@ mod store;
 
 pub use error::ProfileLogError;
 pub use model::{
-    BiometricEntry, BiometricType, CreateLog, LocalTime, LogDay, LogEntryPatch, LogEntryType,
-    LogFilter, LogInput, LogPage, PatchLog, ProfileLog, ProfileLogData, ProfileLogId,
+    BiometricEntry, BiometricLogEntry, BiometricType, CreateLog, LocalTime, LogDay, LogEntryPatch,
+    LogEntryType, LogFilter, LogInput, LogPage, PatchLog, ProfileLog, ProfileLogData, ProfileLogId,
     WeightMeasurement,
 };
 pub use store::ProfileLogs;

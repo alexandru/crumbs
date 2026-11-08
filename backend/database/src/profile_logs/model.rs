@@ -264,12 +264,20 @@ pub enum BiometricEntry {
     Weight(WeightMeasurement),
 }
 
+/// The measurement payload for a biometric log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BiometricLogEntry {
+    /// The biometric measurement.
+    pub measurement: BiometricEntry,
+}
+
 /// The standalone JSON payload for a profile log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProfileLogData {
     /// A biometric entry.
-    Biometric { measurement: BiometricEntry },
+    Biometric(BiometricLogEntry),
 }
 
 /// A log entry accepted on create.
@@ -277,13 +285,13 @@ pub enum ProfileLogData {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LogInput {
     /// A biometric measurement.
-    Biometric { measurement: BiometricEntry },
+    Biometric(BiometricLogEntry),
 }
 
 impl LogInput {
     pub(crate) const fn into_data(self) -> ProfileLogData {
         match self {
-            Self::Biometric { measurement } => ProfileLogData::Biometric { measurement },
+            Self::Biometric(entry) => ProfileLogData::Biometric(entry),
         }
     }
 }
@@ -305,13 +313,13 @@ pub struct CreateLog {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LogEntryPatch {
     /// Replace the biometric measurement.
-    Biometric { measurement: BiometricEntry },
+    Biometric(BiometricLogEntry),
 }
 
 impl LogEntryPatch {
     pub(crate) const fn into_data(self) -> ProfileLogData {
         match self {
-            Self::Biometric { measurement } => ProfileLogData::Biometric { measurement },
+            Self::Biometric(entry) => ProfileLogData::Biometric(entry),
         }
     }
 }

@@ -80,9 +80,14 @@ fn ids_payload_union_and_create_input_validate_strictly() -> Result<(), Box<dyn 
     let input: LogInput = serde_json::from_str(
         r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg"}}"#,
     )?;
+    assert_eq!(serde_json::to_string(&input.into_data())?, expected);
     assert_eq!(
-        serde_json::to_value(input.into_data())?,
-        serde_json::to_value(data)?
+        serde_json::to_value(data)?,
+        serde_json::to_value(ProfileLogData::Biometric(BiometricLogEntry {
+            measurement: BiometricEntry::Weight(WeightMeasurement {
+                value: BodyWeight::new("70 kg".parse()?)?,
+            }),
+        }))?
     );
 
     for invalid in [
@@ -110,6 +115,18 @@ fn ids_payload_union_and_create_input_validate_strictly() -> Result<(), Box<dyn 
         r#"{"day":"2024-01-01","entry":{"type":"biometric","measurement":{"type":"weight","value":"70 kg"}},"profile_id":2}"#
     )
     .is_err());
+    assert!(
+        serde_json::from_str::<LogInput>(
+            r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg"},"extra":true}"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<BiometricLogEntry>(
+            r#"{"measurement":{"type":"weight","value":"70 kg"},"extra":true}"#
+        )
+        .is_err()
+    );
 
     let measurement = BodyWeight::new("70 kg".parse()?)?;
     assert_eq!(serde_json::to_string(&measurement)?, "\"70 kg\"");
@@ -127,8 +144,15 @@ fn patch_fields_preserve_omission_and_reject_nulls() -> Result<(), Box<dyn Error
     assert_eq!(patch.time, Patch::Set(LocalTime::parse("12:13")?));
     assert!(matches!(
         patch.entry,
-        Patch::Set(LogEntryPatch::Biometric { .. })
+        Patch::Set(LogEntryPatch::Biometric(_))
     ));
+    let patch_entry: LogEntryPatch = serde_json::from_str(
+        r#"{"type":"biometric","measurement":{"type":"weight","value":"75 kg"}}"#,
+    )?;
+    assert_eq!(
+        serde_json::to_value(patch_entry.into_data())?,
+        serde_json::json!({"type":"biometric","measurement":{"type":"weight","value":"75 kg"}})
+    );
     for invalid in [
         r#"{"day":null}"#,
         r#"{"time":null}"#,
