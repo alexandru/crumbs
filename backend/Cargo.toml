@@ -11,6 +11,8 @@ publish = false
 axum = { version = "0.8.9", default-features = false, features = ["form", "http1", "json", "query", "tokio"] }
 base64 = "0.22"
 bcrypt = "0.19.3"
+chrono = { version = "0.4.45", default-features = false, features = ["std", "serde"] }
+chrono-tz = { version = "0.10.4", default-features = false, features = ["std", "serde"] }
 getrandom = "0.3"
 maud = { version = "0.27", features = ["axum"] }
 rpassword = "7"

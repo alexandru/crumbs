@@ -9,6 +9,7 @@ mod custom_foods;
 mod home;
 mod mcp;
 mod oauth;
+mod profiles;
 mod routes;
 mod runtime;
 mod search;

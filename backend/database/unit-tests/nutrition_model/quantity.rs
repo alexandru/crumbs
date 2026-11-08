@@ -144,6 +144,20 @@ fn concrete_measurement_types_serialize_and_deserialize_with_their_own_units()
 }
 
 #[test]
+fn profile_mass_and_height_units_use_fixed_point_values() -> Result<(), Box<dyn Error>> {
+    let weight = Kilograms::from_str("70.25 kg")?;
+    let height = Centimetres::from_str("172.5 cm")?;
+    assert_eq!(weight.to_string(), "70.25 kg");
+    assert_eq!(height.to_string(), "172.5 cm");
+    assert_eq!(serde_json::to_string(&weight)?, "\"70.25 kg\"");
+    assert_eq!(serde_json::to_string(&height)?, "\"172.5 cm\"");
+    assert!(Kilograms::from_str("70 lb").is_err());
+    assert!(Centimetres::from_str("172 mm").is_err());
+    assert!(Kilograms::from_str("-1 kg").is_err());
+    Ok(())
+}
+
+#[test]
 fn canonicalizes_inclusive_unicode_qualifiers() -> Result<(), Box<dyn Error>> {
     for (input, expected) in [("≤ 0.5 g", "<= 0.5 g"), ("≥ 15 mg", ">= 15 mg")] {
         let parsed = Reported::<Mass>::from_str(input)?;

@@ -8,6 +8,6 @@ pub use model::{
     Sugars,
 };
 pub use quantity::{
-    Energy, Grams, Kilocalories, Kilojoules, Mass, MeasuredQuantity, Measurement, Micrograms,
-    Milligrams, Millilitres, Qualifier, QuantityError, Reported,
+    Centimetres, Energy, Grams, Kilocalories, Kilograms, Kilojoules, Mass, MeasuredQuantity,
+    Measurement, Micrograms, Milligrams, Millilitres, Qualifier, QuantityError, Reported,
 };

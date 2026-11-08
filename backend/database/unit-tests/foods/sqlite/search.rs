@@ -296,6 +296,7 @@ mod fts {
 
     const MIGRATION_0001: &str = include_str!("../../../migrations/0001_create_crumbs_sources.sql");
     const MIGRATION_0002: &str = include_str!("../../../migrations/0002_create_crumbs_foods.sql");
+    static CURRENT_MIGRATOR: Migrator = sqlx::migrate!("./migrations");
     type FoodId = i64;
     type TagId = i64;
     type FoodCount = i64;
@@ -1021,6 +1022,7 @@ mod fts {
 
     #[tokio::test]
     async fn backfill_populates_index_and_repeated_open_is_safe() -> Result<(), Box<dyn StdError>> {
+        let expected_migration_count = MigrationCount::try_from(CURRENT_MIGRATOR.iter().count())?;
         let directory = tempfile::tempdir()?;
         let migrations = directory.path().join("migrations");
         fs::create_dir(&migrations)?;
@@ -1074,7 +1076,7 @@ mod fts {
             path: database_path.clone(),
         })
         .await?;
-        assert_eq!(migration_count(&database).await?, 6);
+        assert_eq!(migration_count(&database).await?, expected_migration_count);
         assert_matches(&database, "rosii", &[1]).await?;
         assert_matches(&database, "cheddar", &[2]).await?;
         assert_matches(&database, "dairy", &[2]).await?;
@@ -1099,7 +1101,7 @@ mod fts {
             path: database_path,
         })
         .await?;
-        assert_eq!(migration_count(&reopened).await?, 6);
+        assert_eq!(migration_count(&reopened).await?, expected_migration_count);
         assert_matches(&reopened, "rosii", &[1]).await?;
         assert_matches(&reopened, "cheddar", &[2]).await?;
         assert_search_matches(&reopened, "dataset:common", &[1, 2, 3, 4]).await?;

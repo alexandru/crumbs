@@ -186,6 +186,8 @@ measurement!(Micrograms, "µg");
 measurement!(Millilitres, "ml");
 measurement!(Kilocalories, "kcal");
 measurement!(Kilojoules, "kJ");
+measurement!(Centimetres, "cm");
+measurement!(Kilograms, "kg");
 
 /// A mass amount retaining the supplied supported unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
