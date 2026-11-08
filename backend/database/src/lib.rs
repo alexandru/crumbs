@@ -9,6 +9,7 @@ mod config;
 pub mod foods;
 pub mod identity;
 pub mod nutrition_model;
+pub mod profile_logs;
 pub mod profiles;
 mod runtime;
 

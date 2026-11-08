@@ -619,6 +619,12 @@ pub enum Patch<T> {
     Set(T),
 }
 
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Patch<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        T::deserialize(deserializer).map(Self::Set)
+    }
+}
+
 /// An unchanged, replacement, or clear operation for a nullable value.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum NullablePatch<T> {

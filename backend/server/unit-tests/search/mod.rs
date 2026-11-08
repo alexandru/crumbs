@@ -10,6 +10,9 @@ use crumbs_database::foods::{
 };
 use crumbs_database::identity::UserId;
 use crumbs_database::nutrition_model::FoodData;
+use crumbs_database::profile_logs::{
+    CreateLog, LogFilter, LogPage, PatchLog, ProfileLog, ProfileLogError, ProfileLogId, ProfileLogs,
+};
 use crumbs_database::profiles::{
     CreateProfile, PatchProfile, Profile, ProfileError, ProfileId, ProfileList, ProfileListQuery,
     Profiles,
@@ -457,6 +460,60 @@ impl Profiles for RecordingFoodReader {
 fn profile_storage_error() -> ProfileError {
     ProfileError::Storage(Box::new(io::Error::other(
         "profile management unavailable in recording reader",
+    )))
+}
+
+impl ProfileLogs for RecordingFoodReader {
+    async fn create_profile_log(
+        &self,
+        _user: UserId,
+        _profile_id: ProfileId,
+        _input: &CreateLog,
+    ) -> Result<Option<ProfileLog>, ProfileLogError> {
+        Err(profile_log_storage_error())
+    }
+
+    async fn profile_log(
+        &self,
+        _user: UserId,
+        _profile_id: ProfileId,
+        _log_id: ProfileLogId,
+    ) -> Result<Option<ProfileLog>, ProfileLogError> {
+        Err(profile_log_storage_error())
+    }
+
+    async fn list_profile_logs(
+        &self,
+        _user: UserId,
+        _profile_id: ProfileId,
+        _filter: &LogFilter,
+    ) -> Result<Option<LogPage>, ProfileLogError> {
+        Err(profile_log_storage_error())
+    }
+
+    async fn patch_profile_log(
+        &self,
+        _user: UserId,
+        _profile_id: ProfileId,
+        _log_id: ProfileLogId,
+        _patch: &PatchLog,
+    ) -> Result<Option<ProfileLog>, ProfileLogError> {
+        Err(profile_log_storage_error())
+    }
+
+    async fn delete_profile_log(
+        &self,
+        _user: UserId,
+        _profile_id: ProfileId,
+        _log_id: ProfileLogId,
+    ) -> Result<bool, ProfileLogError> {
+        Err(profile_log_storage_error())
+    }
+}
+
+fn profile_log_storage_error() -> ProfileLogError {
+    ProfileLogError::Storage(Box::new(io::Error::other(
+        "profile log management unavailable in recording reader",
     )))
 }
 #[tokio::test]
