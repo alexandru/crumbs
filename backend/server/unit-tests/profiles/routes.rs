@@ -266,7 +266,7 @@ async fn rest_profiles_are_account_scoped_and_require_write_scope_for_changes()
     Ok(())
 }
 
-pub(super) async fn seed_other_mcp_user_access(
+pub(in crate::profiles) async fn seed_other_mcp_user_access(
     app: &TestApplication,
 ) -> Result<String, Box<dyn Error>> {
     seed_other_user_access(
@@ -279,7 +279,9 @@ pub(super) async fn seed_other_mcp_user_access(
     .await
 }
 
-pub(super) async fn seed_profile_account(app: &TestApplication) -> Result<(), Box<dyn Error>> {
+pub(in crate::profiles) async fn seed_profile_account(
+    app: &TestApplication,
+) -> Result<(), Box<dyn Error>> {
     let username = Username::new("alice")?;
     let credentials = app
         ._authorization_database

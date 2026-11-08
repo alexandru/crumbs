@@ -251,19 +251,15 @@ fn serialize<T: Serialize>(value: T) -> Result<Value, ToolFailure> {
 }
 
 fn profile_tool_error(error: ProfileError) -> CallToolResult {
-    match error {
-        ProfileError::InvalidInput(message) => tool_error("invalid_input", message),
-        ProfileError::Calculation(message) => tool_error("calculation", message),
-        ProfileError::DuplicateName => tool_error(
-            "duplicate_name",
-            "profile name already exists for this account",
-        ),
-        ProfileError::InvalidStoredData => {
-            tool_error("invalid_stored_data", "profile operation failed")
+    let code = error.code();
+    let message = match error {
+        ProfileError::InvalidInput(message) | ProfileError::Calculation(message) => message,
+        ProfileError::DuplicateName => "profile name already exists for this account".to_owned(),
+        ProfileError::InvalidStoredData | ProfileError::Storage(_) | ProfileError::Clock(_) => {
+            "profile operation failed".to_owned()
         }
-        ProfileError::Storage(_) => tool_error("storage", "profile operation failed"),
-        ProfileError::Clock(_) => tool_error("clock", "profile operation failed"),
-    }
+    };
+    tool_error(code, message)
 }
 
 fn tool_error(code: &'static str, message: impl Into<String>) -> CallToolResult {
@@ -326,3 +322,7 @@ fn definitions() -> Value {
         }
     })
 }
+
+#[cfg(test)]
+#[path = "../../unit-tests/profiles/mcp.rs"]
+mod tests;
