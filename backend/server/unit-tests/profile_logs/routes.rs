@@ -208,7 +208,11 @@ async fn rest_profile_logs_update_current_weight_and_support_date_filters_and_cu
         .iter()
         .map(|item| item["id"].as_i64().ok_or("log ID is missing"))
         .collect::<Result<Vec<_>, _>>()?;
-    assert!(ids.windows(2).all(|pair| pair[0] > pair[1]));
+    assert!(
+        ids.iter()
+            .zip(ids.iter().skip(1))
+            .all(|(first, second)| first > second)
+    );
     let cursor = first_page.json["last_id"]
         .as_i64()
         .ok_or("first page has no cursor")?;

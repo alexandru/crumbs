@@ -92,10 +92,11 @@ pub(super) async fn seed_other_access_token(
     } else {
         TEST_REST_RESOURCE
     };
+    let redirect_uri = "https://client.example/callback".to_owned();
     let client = OAuthClient {
         id: client_id.to_owned(),
         name: "Profile log test client".to_owned(),
-        redirect_uris: vec!["https://client.example/callback".to_owned()],
+        redirect_uris: vec![redirect_uri.clone()],
         authentication: ClientAuthentication::Public,
         allow_refresh: true,
     };
@@ -107,7 +108,7 @@ pub(super) async fn seed_other_access_token(
                 csrf_hash,
                 grant: AuthorizationGrant {
                     client_id: client.id.clone(),
-                    redirect_uri: client.redirect_uris[0].clone(),
+                    redirect_uri: redirect_uri.clone(),
                     resource: resource.to_owned(),
                     scope: OAuthScope::ReadWrite,
                     state: None,
@@ -136,7 +137,7 @@ pub(super) async fn seed_other_access_token(
             &CodeRedemption {
                 code_hash,
                 client_id: client.id,
-                redirect_uri: client.redirect_uris[0].clone(),
+                redirect_uri,
                 resource: resource.to_owned(),
                 code_challenge: challenge,
             },
