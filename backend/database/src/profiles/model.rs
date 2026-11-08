@@ -21,6 +21,10 @@ pub struct ProfileId(i64);
 
 impl ProfileId {
     /// Creates a profile identifier from a positive integer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [ProfileError::InvalidInput] if value is not positive.
     pub fn new(value: i64) -> Result<Self, ProfileError> {
         if value > 0 {
             Ok(Self(value))
@@ -53,6 +57,10 @@ pub struct ProfileName {
 
 impl ProfileName {
     /// Creates a profile name and its account-scoped uniqueness key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [ProfileError::InvalidInput] if trimming leaves the name blank.
     pub fn new(value: impl AsRef<str>) -> Result<Self, ProfileError> {
         let display = value.as_ref().trim();
         if display.is_empty() {
@@ -124,21 +132,49 @@ pub struct BirthDate {
 
 impl BirthDate {
     /// Creates a birth date with year precision.
+    ///
+    /// Supported years are 1..=9999.
+    ///
+    /// # Errors
+    ///
+    /// Returns [ProfileError::InvalidInput] if the year is outside that range.
     pub fn year(year: i32) -> Result<Self, ProfileError> {
         Self::from_parts(year, 1, 1, BirthDatePrecision::Year)
     }
 
     /// Creates a birth date with year-month precision.
+    ///
+    /// Supported years are 1..=9999.
+    ///
+    /// # Errors
+    ///
+    /// Returns [ProfileError::InvalidInput] if the year is outside that range
+    /// or the month is invalid.
     pub fn year_month(year: i32, month: u32) -> Result<Self, ProfileError> {
         Self::from_parts(year, month, 1, BirthDatePrecision::YearMonth)
     }
 
     /// Creates a birth date with full-date precision.
+    ///
+    /// Supported years are 1..=9999.
+    ///
+    /// # Errors
+    ///
+    /// Returns [ProfileError::InvalidInput] if the year is outside that range
+    /// or the month or day is invalid.
     pub fn full_date(year: i32, month: u32, day: u32) -> Result<Self, ProfileError> {
         Self::from_parts(year, month, day, BirthDatePrecision::FullDate)
     }
 
     /// Parses a year, year-month, or full ISO date.
+    ///
+    /// Supported years are 1..=9999. Accepted forms are YYYY, YYYY-MM, and
+    /// YYYY-MM-DD.
+    ///
+    /// # Errors
+    ///
+    /// Returns [ProfileError::InvalidInput] for an unsupported year, an
+    /// invalid format, or invalid calendar components.
     pub fn parse(value: &str) -> Result<Self, ProfileError> {
         let invalid = || ProfileError::InvalidInput("invalid birth date".to_owned());
         match value.len() {
@@ -262,6 +298,11 @@ pub struct IanaTimezone(Tz);
 
 impl IanaTimezone {
     /// Parses an IANA timezone identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [ProfileError::InvalidInput] if value is not a supported IANA
+    /// timezone identifier.
     pub fn new(value: impl AsRef<str>) -> Result<Self, ProfileError> {
         Tz::from_str(value.as_ref())
             .map(Self)
@@ -302,6 +343,10 @@ pub struct BodyHeight(Centimetres);
 
 impl BodyHeight {
     /// Creates a positive body height.
+    ///
+    /// # Errors
+    ///
+    /// Returns [ProfileError::InvalidInput] if value is zero.
     pub fn new(value: Centimetres) -> Result<Self, ProfileError> {
         if value.value().is_zero() {
             return Err(ProfileError::InvalidInput(
@@ -335,6 +380,10 @@ pub struct BodyWeight(Kilograms);
 
 impl BodyWeight {
     /// Creates a positive body weight.
+    ///
+    /// # Errors
+    ///
+    /// Returns [ProfileError::InvalidInput] if value is zero.
     pub fn new(value: Kilograms) -> Result<Self, ProfileError> {
         if value.value().is_zero() {
             return Err(ProfileError::InvalidInput(
@@ -368,6 +417,10 @@ pub struct CustomBmr(Kilocalories);
 
 impl CustomBmr {
     /// Creates a positive custom BMR value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [ProfileError::InvalidInput] if value is zero.
     pub fn new(value: Kilocalories) -> Result<Self, ProfileError> {
         if value.value().is_zero() {
             return Err(ProfileError::InvalidInput(
@@ -668,6 +721,10 @@ pub struct ProfileLimit(i64);
 
 impl ProfileLimit {
     /// Creates a page size in the range 1..=100.
+    ///
+    /// # Errors
+    ///
+    /// Returns [ProfileError::InvalidInput] if value is outside that range.
     pub fn new(value: i64) -> Result<Self, ProfileError> {
         if (1..=100).contains(&value) {
             Ok(Self(value))
