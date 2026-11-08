@@ -1,20 +1,67 @@
-mod mcp;
 mod routes;
 
 use std::error::Error;
+use std::io;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use axum::http::StatusCode;
 use crumbs_database::identity::{
     Approval, AuthorizationGrant, ClientAuthentication, CodeRedemption, CredentialHash,
     OAuthClient, OAuthScope, OAuthStore, PasswordHash, PendingAuthorization, TokenPair, Username,
     Users,
 };
 use crumbs_database::nutrition_model::{Kilocalories, Mass, Reported};
+use crumbs_database::profile_logs::ProfileLogError;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::oauth::tests::{TEST_MCP_RESOURCE, TEST_REST_RESOURCE, TEST_REST_WRITE_ACCESS_TOKEN};
 use crate::tests::{TestApplication, http_json_request};
+
+pub(super) struct ProfileLogErrorCase {
+    pub(super) name: &'static str,
+    pub(super) error: ProfileLogError,
+    pub(super) status: StatusCode,
+    pub(super) code: &'static str,
+    pub(super) message: &'static str,
+}
+
+pub(super) fn profile_log_error_cases() -> [ProfileLogErrorCase; 4] {
+    [
+        ProfileLogErrorCase {
+            name: "invalid input",
+            error: ProfileLogError::InvalidInput("weight must be positive".to_owned()),
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_input",
+            message: "weight must be positive",
+        },
+        ProfileLogErrorCase {
+            name: "invalid stored data",
+            error: ProfileLogError::InvalidStoredData,
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "invalid_stored_data",
+            message: "profile log operation failed",
+        },
+        ProfileLogErrorCase {
+            name: "storage failure",
+            error: ProfileLogError::Storage(Box::new(io::Error::other(
+                "private storage source detail",
+            ))),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "storage",
+            message: "profile log operation failed",
+        },
+        ProfileLogErrorCase {
+            name: "clock failure",
+            error: ProfileLogError::Clock(Box::new(io::Error::other(
+                "private clock source detail",
+            ))),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "clock",
+            message: "profile log operation failed",
+        },
+    ]
+}
 
 pub(super) async fn seed_profile_owner(app: &TestApplication) -> Result<(), Box<dyn Error>> {
     let username = Username::new("alice")?;

@@ -6,15 +6,31 @@ use serde_json::json;
 use crate::oauth::tests::{
     TEST_MCP_ACCESS_TOKEN, TEST_MCP_WRITE_ACCESS_TOKEN, TEST_REST_WRITE_ACCESS_TOKEN,
 };
+use crate::profile_logs::tests::{
+    assert_calories, assert_mass, create_test_food, create_test_profile, profile_log_error_cases,
+    seed_other_access_token, seed_profile_owner,
+};
 use crate::tests::{
     TestApplication, http_json_request, http_request, mcp_call_router_with_token, mcp_initialize,
     protocol_request,
 };
 
-use super::{
-    assert_calories, assert_mass, create_test_food, create_test_profile, seed_other_access_token,
-    seed_profile_owner,
-};
+use super::profile_log_tool_error;
+
+#[tokio::test]
+async fn mcp_profile_log_error_adapter_preserves_codes_and_redacts_internal_details() {
+    for case in profile_log_error_cases() {
+        let result = profile_log_tool_error(case.error);
+
+        assert_eq!(result.is_error, Some(true), "{}", case.name);
+        assert_eq!(
+            result.structured_content,
+            Some(json!({"code": case.code, "error": case.message})),
+            "{}",
+            case.name
+        );
+    }
+}
 
 const OTHER_MCP_TOKEN: &str = "test-other-profile-log-mcp-token";
 const OTHER_MCP_REFRESH: &str = "test-other-profile-log-mcp-refresh";
