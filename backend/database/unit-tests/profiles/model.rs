@@ -270,6 +270,77 @@ fn presets_use_selected_baseline_coefficients_and_timezone_local_age() -> Result
 }
 
 #[test]
+fn future_birth_dates_keep_baseline_and_clock_semantics() -> Result<(), Box<dyn Error>> {
+    let current_weight = BodyWeight::new(Kilograms::from_str("70 kg")?)?;
+    let height = BodyHeight::new(crate::nutrition_model::Centimetres::from_str("170 cm")?)?;
+    let future_birth_date = BirthDate::full_date(2027, 1, 1)?;
+    let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T12:00:00Z")?.timestamp_millis();
+    let cache = ProfileCache {
+        current_weight: Some(current_weight),
+    };
+    let mut settings = ProfileSettings {
+        birth_date: Some(future_birth_date),
+        sex: Some(Sex::Male),
+        height: Some(height),
+        ..ProfileSettings::default()
+    };
+
+    for (baseline_activity, expected_baseline) in [
+        (None, None),
+        (
+            Some(BaselineActivity::Preset {
+                level: ActivityLevel::LightlyActive,
+            }),
+            None,
+        ),
+        (
+            Some(BaselineActivity::Custom {
+                value: Kilocalories::from_str("0 kcal")?,
+            }),
+            Some(Decimal::ZERO),
+        ),
+    ] {
+        settings.baseline_activity = baseline_activity;
+        let derived = derive_profile(&settings, &cache, now)?;
+        assert_eq!(derived.bmr, None);
+        assert_eq!(
+            derived.baseline_activity.map(|value| value.value()),
+            expected_baseline
+        );
+        assert_eq!(derived.maintenance_calories, None);
+    }
+
+    settings.birth_date = None;
+    settings.sex = None;
+    settings.height = None;
+    settings.bmr = BmrSetting::Custom {
+        value: CustomBmr::new(Kilocalories::from_str("1200 kcal")?)?,
+    };
+    settings.baseline_activity = Some(BaselineActivity::Preset {
+        level: ActivityLevel::Sedentary,
+    });
+    let custom_bmr = derive_profile(&settings, &ProfileCache::default(), now)?;
+    assert_eq!(
+        custom_bmr.bmr.map(|value| value.value()),
+        Some(Decimal::from(1200))
+    );
+    assert_eq!(
+        custom_bmr.baseline_activity.map(|value| value.value()),
+        Some(Decimal::from(240))
+    );
+    assert_eq!(
+        custom_bmr.maintenance_calories.map(|value| value.value()),
+        Some(Decimal::from(1440))
+    );
+
+    assert!(matches!(
+        derive_profile(&ProfileSettings::default(), &ProfileCache::default(), i64::MAX),
+        Err(ProfileError::Calculation(message)) if message == "clock timestamp is out of range"
+    ));
+    Ok(())
+}
+
+#[test]
 fn profile_data_response_cannot_be_used_as_a_create_payload() -> Result<(), Box<dyn Error>> {
     let response = ProfileData {
         settings: ProfileSettings::default(),
