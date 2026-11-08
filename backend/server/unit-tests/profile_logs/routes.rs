@@ -66,6 +66,23 @@ async fn rest_profile_logs_update_current_weight_and_support_date_filters_and_cu
         .await?;
     assert_eq!(zero_weight.status, StatusCode::BAD_REQUEST);
     assert_eq!(zero_weight.json["code"], "invalid_input");
+    let extra_entry_field = app
+        .request(http_json_request(
+            "POST",
+            &logs_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({
+                "day": "2025-06-01",
+                "entry": {
+                    "type": "biometric",
+                    "measurement": {"type": "weight", "value": "80 kg"},
+                    "extra": true
+                }
+            }),
+        )?)
+        .await?;
+    assert_eq!(extra_entry_field.status, StatusCode::BAD_REQUEST);
+    assert_eq!(extra_entry_field.json["code"], "invalid_input");
 
     let after_first = app.request(http_request(&profile_uri)?).await?;
     assert_eq!(after_first.json["data"]["cache"]["current_weight"], "80 kg");

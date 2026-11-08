@@ -16,9 +16,9 @@ use crate::runtime::Database;
 
 use super::error::ProfileLogError;
 use super::model::{
-    BiometricEntry, CreateLog, FoodInputSnapshot, FoodLogEntry, FoodLogInput, FoodLogPatch,
-    LocalTime, LogDay, LogEntryPatch, LogFilter, LogInput, LogPage, PatchLog, ProfileLog,
-    ProfileLogData, ProfileLogId, ServingSelector,
+    BiometricEntry, BiometricLogEntry, CreateLog, FoodInputSnapshot, FoodLogEntry, FoodLogInput,
+    FoodLogPatch, LocalTime, LogDay, LogEntryPatch, LogFilter, LogInput, LogPage, PatchLog,
+    ProfileLog, ProfileLogData, ProfileLogId, ServingSelector,
 };
 use super::store::ProfileLogs;
 
@@ -311,12 +311,10 @@ async fn resolve_log_input(
     input: &LogInput,
 ) -> Result<ProfileLogData, ProfileLogError> {
     match input {
-        LogInput::Biometric { measurement } => Ok(ProfileLogData::Biometric {
-            measurement: *measurement,
-        }),
-        LogInput::Food(input) => Ok(ProfileLogData::Food(Box::new(
+        LogInput::Biometric(entry) => Ok(ProfileLogData::Biometric(*entry)),
+        LogInput::Food(input) => Ok(ProfileLogData::Food(
             resolve_food_input(transaction, input).await?,
-        ))),
+        )),
     }
 }
 
@@ -326,22 +324,20 @@ async fn replace_same_variant(
     patch: &LogEntryPatch,
 ) -> Result<Option<ProfileLogData>, ProfileLogError> {
     match (current, patch) {
-        (ProfileLogData::Biometric { .. }, LogEntryPatch::Biometric { measurement }) => {
-            Ok(Some(ProfileLogData::Biometric {
-                measurement: *measurement,
-            }))
+        (ProfileLogData::Biometric(_), LogEntryPatch::Biometric(entry)) => {
+            Ok(Some(ProfileLogData::Biometric(*entry)))
         }
         (ProfileLogData::Food(current), LogEntryPatch::Food(patch)) => {
             if !patch.has_changes() {
                 return Ok(None);
             }
             let input = patch_food_input(current, patch)?;
-            Ok(Some(ProfileLogData::Food(Box::new(
+            Ok(Some(ProfileLogData::Food(
                 resolve_food_input(transaction, &input).await?,
-            ))))
+            )))
         }
-        (ProfileLogData::Biometric { .. }, LogEntryPatch::Food(_))
-        | (ProfileLogData::Food(_), LogEntryPatch::Biometric { .. }) => {
+        (ProfileLogData::Biometric(_), LogEntryPatch::Food(_))
+        | (ProfileLogData::Food(_), LogEntryPatch::Biometric(_)) => {
             Err(ProfileLogError::InvalidInput(
                 "a log entry cannot change between food and biometric categories".to_owned(),
             ))
@@ -522,9 +518,9 @@ fn food_calculation_error(error: QuantityError) -> ProfileLogError {
 fn is_weight(data: &ProfileLogData) -> bool {
     matches!(
         data,
-        ProfileLogData::Biometric {
+        ProfileLogData::Biometric(BiometricLogEntry {
             measurement: BiometricEntry::Weight(_)
-        }
+        })
     )
 }
 
@@ -595,9 +591,9 @@ async fn update_current_weight_if_changed(
         .map(|json| {
             let data = decode_data(&json)?;
             match data {
-                ProfileLogData::Biometric {
+                ProfileLogData::Biometric(BiometricLogEntry {
                     measurement: BiometricEntry::Weight(measurement),
-                } => Ok(measurement.value),
+                }) => Ok(measurement.value),
                 ProfileLogData::Food(_) => Err(ProfileLogError::InvalidStoredData),
             }
         })

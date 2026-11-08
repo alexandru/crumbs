@@ -824,14 +824,26 @@ pub enum BiometricEntry {
     Weight(WeightMeasurement),
 }
 
+/// The measurement payload for a biometric log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BiometricLogEntry {
+    /// The biometric measurement.
+    pub measurement: BiometricEntry,
+}
+
 /// The standalone JSON payload for a profile log.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Log payloads remain inline; log pages are bounded to 100 entries."
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProfileLogData {
     /// A biometric entry.
-    Biometric { measurement: BiometricEntry },
+    Biometric(BiometricLogEntry),
     /// A self-contained food-consumption entry.
-    Food(Box<FoodLogEntry>),
+    Food(FoodLogEntry),
 }
 
 /// A log entry accepted on create.
@@ -839,7 +851,7 @@ pub enum ProfileLogData {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LogInput {
     /// A biometric measurement.
-    Biometric { measurement: BiometricEntry },
+    Biometric(BiometricLogEntry),
     /// A food serving input resolved against the current food source.
     Food(FoodLogInput),
 }
@@ -861,7 +873,7 @@ pub struct CreateLog {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LogEntryPatch {
     /// Replace the biometric measurement.
-    Biometric { measurement: BiometricEntry },
+    Biometric(BiometricLogEntry),
     /// Rebuild a food snapshot from the supplied food input changes.
     Food(FoodLogPatch),
 }
