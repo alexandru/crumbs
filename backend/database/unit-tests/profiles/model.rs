@@ -5,7 +5,7 @@ use chrono::{NaiveDate, TimeZone, Utc};
 use rust_decimal::Decimal;
 
 use crate::nutrition_model::{Kilocalories, Kilograms};
-use crate::profiles::model::{ProfileData, derive_profile};
+use crate::profiles::model::ProfileData;
 use crate::profiles::*;
 
 #[test]
@@ -156,7 +156,7 @@ fn calorie_values_keep_fractional_results_and_custom_baseline_is_independent()
         current_weight: Some(current_weight),
     };
 
-    let derived = derive_profile(&settings, &cache, now)?;
+    let derived = ProfileDerived::calculate(&settings, &cache, now)?;
     assert_eq!(
         derived.bmr.map(|value| value.value()),
         Some(Decimal::from_str("1617.5")?)
@@ -177,7 +177,7 @@ fn calorie_values_keep_fractional_results_and_custom_baseline_is_independent()
     settings.baseline_activity = Some(BaselineActivity::Custom {
         value: Kilocalories::from_str("50.25 kcal")?,
     });
-    let custom_baseline = derive_profile(&settings, &ProfileCache::default(), now)?;
+    let custom_baseline = ProfileDerived::calculate(&settings, &ProfileCache::default(), now)?;
     assert_eq!(custom_baseline.bmr, None);
     assert_eq!(
         custom_baseline.baseline_activity.map(|value| value.value()),
@@ -188,7 +188,7 @@ fn calorie_values_keep_fractional_results_and_custom_baseline_is_independent()
     settings.bmr = BmrSetting::Custom {
         value: CustomBmr::new(Kilocalories::from_str("1000.5 kcal")?)?,
     };
-    let custom = derive_profile(&settings, &ProfileCache::default(), now)?;
+    let custom = ProfileDerived::calculate(&settings, &ProfileCache::default(), now)?;
     assert_eq!(
         custom.bmr.map(|value| value.value()),
         Some(Decimal::from_str("1000.5")?)
@@ -214,7 +214,7 @@ fn baseline_multiplication_uses_decimal_precision_rounding() -> Result<(), Box<d
         ..ProfileSettings::default()
     };
 
-    let derived = derive_profile(&settings, &ProfileCache::default(), 1_000)?;
+    let derived = ProfileDerived::calculate(&settings, &ProfileCache::default(), 1_000)?;
     assert_eq!(
         derived.baseline_activity.map(|value| value.to_string()),
         Some("375.00000000000000000000000004 kcal".to_owned())
@@ -243,7 +243,7 @@ fn presets_use_selected_baseline_coefficients_and_timezone_local_age() -> Result
     settings.baseline_activity = Some(BaselineActivity::Preset {
         level: ActivityLevel::NoActivity,
     });
-    let no_activity = derive_profile(&settings, &cache, instant)?;
+    let no_activity = ProfileDerived::calculate(&settings, &cache, instant)?;
     assert_eq!(
         no_activity.bmr.map(|value| value.value()),
         Some(Decimal::from_str("1622.5")?)
@@ -260,7 +260,7 @@ fn presets_use_selected_baseline_coefficients_and_timezone_local_age() -> Result
         (ActivityLevel::VeryActive, "1460.25"),
     ] {
         settings.baseline_activity = Some(BaselineActivity::Preset { level });
-        let derived = derive_profile(&settings, &cache, instant)?;
+        let derived = ProfileDerived::calculate(&settings, &cache, instant)?;
         assert_eq!(
             derived.baseline_activity.map(|value| value.value()),
             Some(Decimal::from_str(expected)?)
@@ -301,7 +301,7 @@ fn future_birth_dates_keep_baseline_and_clock_semantics() -> Result<(), Box<dyn 
         ),
     ] {
         settings.baseline_activity = baseline_activity;
-        let derived = derive_profile(&settings, &cache, now)?;
+        let derived = ProfileDerived::calculate(&settings, &cache, now)?;
         assert_eq!(derived.bmr, None);
         assert_eq!(
             derived.baseline_activity.map(|value| value.value()),
@@ -319,7 +319,7 @@ fn future_birth_dates_keep_baseline_and_clock_semantics() -> Result<(), Box<dyn 
     settings.baseline_activity = Some(BaselineActivity::Preset {
         level: ActivityLevel::Sedentary,
     });
-    let custom_bmr = derive_profile(&settings, &ProfileCache::default(), now)?;
+    let custom_bmr = ProfileDerived::calculate(&settings, &ProfileCache::default(), now)?;
     assert_eq!(
         custom_bmr.bmr.map(|value| value.value()),
         Some(Decimal::from(1200))
@@ -334,7 +334,7 @@ fn future_birth_dates_keep_baseline_and_clock_semantics() -> Result<(), Box<dyn 
     );
 
     assert!(matches!(
-        derive_profile(&ProfileSettings::default(), &ProfileCache::default(), i64::MAX),
+        ProfileDerived::calculate(&ProfileSettings::default(), &ProfileCache::default(), i64::MAX),
         Err(ProfileError::Calculation(message)) if message == "clock timestamp is out of range"
     ));
     Ok(())

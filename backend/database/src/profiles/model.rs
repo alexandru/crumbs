@@ -550,6 +550,50 @@ pub struct ProfileDerived {
     pub maintenance_calories: Option<Kilocalories>,
 }
 
+impl ProfileDerived {
+    /// Calculates profile values from settings and cached weight at `timestamp`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProfileError::Calculation`] when the timestamp or a calculated
+    /// value is outside the supported range.
+    pub(crate) fn calculate(
+        settings: &ProfileSettings,
+        cache: &ProfileCache,
+        timestamp: UnixMillis,
+    ) -> Result<Self, ProfileError> {
+        let current_day = local_day(settings.timezone, timestamp)?;
+        let bmr = match settings.bmr {
+            BmrSetting::Calculated => match (
+                cache.current_weight,
+                settings.height,
+                settings.birth_date,
+                settings.sex,
+            ) {
+                (Some(weight), Some(height), Some(birth_date), Some(sex)) => {
+                    age_on(birth_date, current_day)
+                        .map(|age| calculate_bmr(weight, height, age, sex))
+                        .transpose()?
+                }
+                _ => None,
+            },
+            BmrSetting::Custom { value } => Some(value.value()),
+        };
+
+        let baseline_activity = baseline_value(settings.baseline_activity, bmr)?;
+        let maintenance_calories = match (bmr, baseline_activity) {
+            (Some(bmr), Some(addition)) => Some(add_kilocalories(bmr, addition)?),
+            _ => None,
+        };
+
+        Ok(Self {
+            bmr,
+            baseline_activity,
+            maintenance_calories,
+        })
+    }
+}
+
 /// A profile and its derived calorie values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -782,41 +826,6 @@ impl From<QuantityError> for ProfileError {
     }
 }
 
-/// Builds public calculated values from profile settings and current weight.
-pub(crate) fn derive_profile(
-    settings: &ProfileSettings,
-    cache: &ProfileCache,
-    timestamp: UnixMillis,
-) -> Result<ProfileDerived, ProfileError> {
-    let current_day = local_day(settings.timezone, timestamp)?;
-    let bmr = match settings.bmr {
-        BmrSetting::Calculated => match (
-            cache.current_weight,
-            settings.height,
-            settings.birth_date,
-            settings.sex,
-        ) {
-            (Some(weight), Some(height), Some(birth_date), Some(sex)) => {
-                age_on(birth_date, current_day)
-                    .map(|age| calculate_bmr(weight, height, age, sex))
-                    .transpose()?
-            }
-            _ => None,
-        },
-        BmrSetting::Custom { value } => Some(value.value()),
-    };
-    let baseline_activity = baseline_value(settings.baseline_activity, bmr)?;
-    let maintenance_calories = match (bmr, baseline_activity) {
-        (Some(bmr), Some(addition)) => Some(add_kilocalories(bmr, addition)?),
-        _ => None,
-    };
-    Ok(ProfileDerived {
-        bmr,
-        baseline_activity,
-        maintenance_calories,
-    })
-}
-
 /// Applies a patch while preserving cache and reporting whether writable state changed.
 pub(crate) fn apply_patch(
     current_name: ProfileName,
@@ -829,6 +838,7 @@ pub(crate) fn apply_patch(
         }
         Patch::Unchanged | Patch::Set(_) => (current_name, false),
     };
+
     let mut settings = current.settings.clone();
     settings.birth_date = patched_optional(settings.birth_date, &patch.birth_date);
     settings.sex = patched_optional(settings.sex, &patch.sex);
@@ -844,6 +854,7 @@ pub(crate) fn apply_patch(
     }
     settings.baseline_activity =
         patched_optional(settings.baseline_activity, &patch.baseline_activity);
+
     let changed = name_changed || settings != current.settings;
     (
         name,
