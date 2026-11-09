@@ -7,8 +7,8 @@ use crate::runtime::Database;
 
 use super::error::ProfileError;
 use super::model::{
-    CreateProfile, PatchProfile, Profile, ProfileData, ProfileId, ProfileList, ProfileListQuery,
-    ProfileName, apply_patch, derive_profile,
+    CreateProfile, PatchProfile, Profile, ProfileData, ProfileDerived, ProfileId, ProfileList,
+    ProfileListQuery, ProfileName, apply_patch,
 };
 use super::store::Profiles;
 
@@ -24,7 +24,7 @@ impl Profiles for Database {
             settings: input.settings.clone().unwrap_or_default().into_settings(),
             cache: Default::default(),
         };
-        let derived = derive_profile(&data.settings, &data.cache, created_at)?;
+        let derived = ProfileDerived::calculate(&data.settings, &data.cache, created_at)?;
         let data_json = serde_json::to_string(&data).map_err(ProfileError::storage)?;
         let result = sqlx::query_scalar::<_, i64>(
             "INSERT INTO profiles (user_id, name, name_key, data_json, created_at, updated_at)
@@ -123,6 +123,7 @@ impl Profiles for Database {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(ProfileError::storage)?;
+
         let row = sqlx::query_as::<_, ProfileRow>(
             "SELECT id, name, name_key, data_json
              FROM profiles
@@ -137,9 +138,11 @@ impl Profiles for Database {
             transaction.commit().await.map_err(ProfileError::storage)?;
             return Ok(None);
         };
+
         let (stored_id, stored_name, data) = row.into_parts()?;
         let (name, data, changed) = apply_patch(stored_name, data, patch);
         let now = self.clock.now().map_err(ProfileError::clock)?;
+
         if changed {
             let data_json = serde_json::to_string(&data).map_err(ProfileError::storage)?;
             let update = sqlx::query(
@@ -165,7 +168,9 @@ impl Profiles for Database {
                 return Err(ProfileError::storage(error));
             }
         }
+
         let result = profile(stored_id, name, data, now)?;
+
         transaction.commit().await.map_err(ProfileError::storage)?;
         Ok(Some(result))
     }
@@ -177,7 +182,7 @@ fn profile(
     data: ProfileData,
     now: UnixMillis,
 ) -> Result<Profile, ProfileError> {
-    let derived = derive_profile(&data.settings, &data.cache, now)?;
+    let derived = ProfileDerived::calculate(&data.settings, &data.cache, now)?;
     Ok(Profile {
         id,
         name,
