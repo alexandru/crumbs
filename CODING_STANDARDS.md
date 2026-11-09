@@ -77,6 +77,34 @@ fn parse(input: &str) -> Result<Vec<u8>, FromHexError> {
 
 Files MUST start with the most important definitions: public types, their impls, and public functions. Private items follow, so the file reads from most important to least important.
 
+## Keep related data and behavior together
+
+Type-specific construction and calculation SHOULD live in an inherent `impl` on the owning type. Keep those implementations adjacent to the type definition. Free functions MAY handle orchestration or operations with no clear type owner.
+
+Schematic excerpt:
+
+```diff
+-pub(crate) fn derive_profile(...) -> Result<ProfileDerived, ProfileError> {
+-    ...
+-}
++impl ProfileDerived {
++    pub(crate) fn calculate(...) -> Result<Self, ProfileError> {
++        ...
++    }
++}
+```
+
+## Code paragraphs
+
+Function bodies MUST use blank lines to separate main ideas.
+
+```diff
+ let result = profile(stored_id, name, data, now)?;
++
+ transaction.commit().await.map_err(ProfileError::storage)?;
+ Ok(Some(result))
+```
+
 ## Test compilation
 
 Rust production code under crate-local `src/` MUST NOT use `#[cfg(not(test))]`. `#[cfg(test)]` is permitted under `src/` ONLY on module declarations that load mirrored crate-local `unit-tests/` modules through the required relative `#[path]`.
