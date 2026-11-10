@@ -79,9 +79,11 @@ Files MUST start with the most important definitions: public types, their impls,
 
 ## Keep related data and behavior together
 
-Type-specific construction and calculation SHOULD live in an inherent `impl` on the owning type. Keep those implementations adjacent to the type definition. Free functions MAY handle orchestration or operations with no clear type owner.
+A function SHOULD live in a type’s inherent `impl` when that type is its natural receiver or the function builds values of that type. After refactoring, the function MUST refer to `Self` in its input parameters or return type, directly or as a type parameter. Keep these implementations adjacent to the type definition.
 
-Schematic excerpt:
+These examples show signatures only. Function bodies are omitted.
+
+A builder returns the type it constructs:
 
 ```diff
 -pub(crate) fn derive_profile(...) -> Result<ProfileDerived, ProfileError> {
@@ -89,6 +91,19 @@ Schematic excerpt:
 -}
 +impl ProfileDerived {
 +    pub(crate) fn calculate(...) -> Result<Self, ProfileError> {
++        ...
++    }
++}
+```
+
+A method calculates age from a birth date:
+
+```diff
+-fn age_on(birth_date: BirthDate, current_day: NaiveDate) -> Option<i32> {
+-    ...
+-}
++impl BirthDate {
++    fn age_on(&self, current_day: NaiveDate) -> Option<i32> {
 +        ...
 +    }
 +}
