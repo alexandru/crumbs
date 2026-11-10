@@ -4,7 +4,7 @@ use std::str::FromStr;
 use chrono::{NaiveDate, TimeZone, Utc};
 use rust_decimal::Decimal;
 
-use crate::nutrition_model::{Kilocalories, Kilograms};
+use crate::nutrition_model::Kilograms;
 use crate::profiles::model::ProfileData;
 use crate::profiles::*;
 
@@ -158,15 +158,15 @@ fn calorie_values_keep_fractional_results_and_custom_baseline_is_independent()
 
     let derived = ProfileDerived::calculate(&settings, &cache, now)?;
     assert_eq!(
-        derived.bmr.map(|value| value.value()),
+        derived.bmr().map(|value| value.value()),
         Some(Decimal::from_str("1617.5")?)
     );
     assert_eq!(
-        derived.baseline_activity.map(|value| value.value()),
+        derived.baseline_activity().map(|value| value.value()),
         Some(Decimal::from_str("606.5625")?)
     );
     assert_eq!(
-        derived.maintenance_calories.map(|value| value.value()),
+        derived.maintenance_calories().map(|value| value.value()),
         Some(Decimal::from_str("2224.0625")?)
     );
 
@@ -175,26 +175,28 @@ fn calorie_values_keep_fractional_results_and_custom_baseline_is_independent()
     settings.height = None;
     settings.bmr = BmrSetting::Calculated;
     settings.baseline_activity = Some(BaselineActivity::Custom {
-        value: Kilocalories::from_str("50.25 kcal")?,
+        value: KilocaloriesPerDay::from_str("50.25 kcal")?,
     });
     let custom_baseline = ProfileDerived::calculate(&settings, &ProfileCache::default(), now)?;
-    assert_eq!(custom_baseline.bmr, None);
+    assert_eq!(custom_baseline.bmr(), None);
     assert_eq!(
-        custom_baseline.baseline_activity.map(|value| value.value()),
+        custom_baseline
+            .baseline_activity()
+            .map(|value| value.value()),
         Some(Decimal::from_str("50.25")?)
     );
-    assert_eq!(custom_baseline.maintenance_calories, None);
+    assert_eq!(custom_baseline.maintenance_calories(), None);
 
     settings.bmr = BmrSetting::Custom {
-        value: CustomBmr::new(Kilocalories::from_str("1000.5 kcal")?)?,
+        value: CustomBmr::new(KilocaloriesPerDay::from_str("1000.5 kcal")?)?,
     };
     let custom = ProfileDerived::calculate(&settings, &ProfileCache::default(), now)?;
     assert_eq!(
-        custom.bmr.map(|value| value.value()),
+        custom.bmr().map(|value| value.value()),
         Some(Decimal::from_str("1000.5")?)
     );
     assert_eq!(
-        custom.maintenance_calories.map(|value| value.value()),
+        custom.maintenance_calories().map(|value| value.value()),
         Some(Decimal::from_str("1050.75")?)
     );
     Ok(())
@@ -204,7 +206,7 @@ fn calorie_values_keep_fractional_results_and_custom_baseline_is_independent()
 fn baseline_multiplication_uses_decimal_precision_rounding() -> Result<(), Box<dyn Error>> {
     let settings = ProfileSettings {
         bmr: BmrSetting::Custom {
-            value: CustomBmr::new(Kilocalories::from_str(
+            value: CustomBmr::new(KilocaloriesPerDay::from_str(
                 "1000.0000000000000000000000001 kcal",
             )?)?,
         },
@@ -216,7 +218,7 @@ fn baseline_multiplication_uses_decimal_precision_rounding() -> Result<(), Box<d
 
     let derived = ProfileDerived::calculate(&settings, &ProfileCache::default(), 1_000)?;
     assert_eq!(
-        derived.baseline_activity.map(|value| value.to_string()),
+        derived.baseline_activity().map(|value| value.to_string()),
         Some("375.00000000000000000000000004 kcal".to_owned())
     );
     Ok(())
@@ -245,11 +247,11 @@ fn presets_use_selected_baseline_coefficients_and_timezone_local_age() -> Result
     });
     let no_activity = ProfileDerived::calculate(&settings, &cache, instant)?;
     assert_eq!(
-        no_activity.bmr.map(|value| value.value()),
+        no_activity.bmr().map(|value| value.value()),
         Some(Decimal::from_str("1622.5")?)
     );
     assert_eq!(
-        no_activity.baseline_activity.map(|value| value.value()),
+        no_activity.baseline_activity().map(|value| value.value()),
         Some(Decimal::ZERO)
     );
 
@@ -262,7 +264,7 @@ fn presets_use_selected_baseline_coefficients_and_timezone_local_age() -> Result
         settings.baseline_activity = Some(BaselineActivity::Preset { level });
         let derived = ProfileDerived::calculate(&settings, &cache, instant)?;
         assert_eq!(
-            derived.baseline_activity.map(|value| value.value()),
+            derived.baseline_activity().map(|value| value.value()),
             Some(Decimal::from_str(expected)?)
         );
     }
@@ -295,41 +297,41 @@ fn future_birth_dates_keep_baseline_and_clock_semantics() -> Result<(), Box<dyn 
         ),
         (
             Some(BaselineActivity::Custom {
-                value: Kilocalories::from_str("0 kcal")?,
+                value: KilocaloriesPerDay::from_str("0 kcal")?,
             }),
             Some(Decimal::ZERO),
         ),
     ] {
         settings.baseline_activity = baseline_activity;
         let derived = ProfileDerived::calculate(&settings, &cache, now)?;
-        assert_eq!(derived.bmr, None);
+        assert_eq!(derived.bmr(), None);
         assert_eq!(
-            derived.baseline_activity.map(|value| value.value()),
+            derived.baseline_activity().map(|value| value.value()),
             expected_baseline
         );
-        assert_eq!(derived.maintenance_calories, None);
+        assert_eq!(derived.maintenance_calories(), None);
     }
 
     settings.birth_date = None;
     settings.sex = None;
     settings.height = None;
     settings.bmr = BmrSetting::Custom {
-        value: CustomBmr::new(Kilocalories::from_str("1200 kcal")?)?,
+        value: CustomBmr::new(KilocaloriesPerDay::from_str("1200 kcal")?)?,
     };
     settings.baseline_activity = Some(BaselineActivity::Preset {
         level: ActivityLevel::Sedentary,
     });
     let custom_bmr = ProfileDerived::calculate(&settings, &ProfileCache::default(), now)?;
     assert_eq!(
-        custom_bmr.bmr.map(|value| value.value()),
+        custom_bmr.bmr().map(|value| value.value()),
         Some(Decimal::from(1200))
     );
     assert_eq!(
-        custom_bmr.baseline_activity.map(|value| value.value()),
+        custom_bmr.baseline_activity().map(|value| value.value()),
         Some(Decimal::from(240))
     );
     assert_eq!(
-        custom_bmr.maintenance_calories.map(|value| value.value()),
+        custom_bmr.maintenance_calories().map(|value| value.value()),
         Some(Decimal::from(1440))
     );
 
@@ -354,5 +356,43 @@ fn profile_data_response_cannot_be_used_as_a_create_payload() -> Result<(), Box<
         ))
         .is_err()
     );
+    Ok(())
+}
+
+#[test]
+fn derived_values_validate_components_and_deserialization() -> Result<(), Box<dyn Error>> {
+    let bmr = KilocaloriesPerDay::from_str("1200 kcal")?;
+    let activity = KilocaloriesPerDay::from_str("300 kcal")?;
+    let derived = ProfileDerived::from_components(Some(bmr), Some(activity))?;
+    assert_eq!(
+        derived
+            .maintenance_calories()
+            .map(|value| value.to_string()),
+        Some("1500 kcal".to_owned())
+    );
+    let encoded = serde_json::to_string(&derived)?;
+    assert_eq!(serde_json::from_str::<ProfileDerived>(&encoded)?, derived);
+
+    let incomplete = ProfileDerived::from_components(None, Some(activity))?;
+    assert_eq!(incomplete.maintenance_calories(), None);
+    assert_eq!(
+        serde_json::from_str::<ProfileDerived>(&serde_json::to_string(&incomplete)?)?,
+        incomplete
+    );
+
+    for input in [
+        r#"{"bmr":null,"baseline_activity":null,"maintenance_calories":"1 kcal"}"#,
+        r#"{"bmr":"1200 kcal","baseline_activity":"300 kcal","maintenance_calories":null}"#,
+        r#"{"bmr":"1200 kcal","baseline_activity":"300 kcal","maintenance_calories":"1499 kcal"}"#,
+        r#"{"bmr":"1200 kcal","baseline_activity":"300 kcal"}"#,
+    ] {
+        assert!(serde_json::from_str::<ProfileDerived>(input).is_err());
+    }
+
+    let maximum = KilocaloriesPerDay::from_str("79228162514264337593543950335 kcal")?;
+    assert!(matches!(
+        ProfileDerived::from_components(Some(maximum), Some(activity)),
+        Err(ProfileError::Calculation(_))
+    ));
     Ok(())
 }

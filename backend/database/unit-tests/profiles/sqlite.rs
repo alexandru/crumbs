@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 use sqlx::FromRow;
 
 use super::open_database;
+use crate::clock::UnixMillis;
 use crate::identity::UserId;
 use crate::profiles::*;
 use crate::runtime::Database;
@@ -26,8 +27,8 @@ fn create_input(value: &str) -> Result<CreateProfile, Box<dyn Error>> {
 
 #[derive(FromRow)]
 struct Timestamps {
-    created_at: i64,
-    updated_at: Option<i64>,
+    created_at: UnixMillis,
+    updated_at: Option<UnixMillis>,
 }
 
 async fn timestamps(database: &Database, id: ProfileId) -> Result<Timestamps, sqlx::Error> {
@@ -120,9 +121,9 @@ async fn create_applies_defaults_and_patch_preserves_cache_and_timestamp_semanti
     assert_eq!(created.data.settings.bmr, BmrSetting::Calculated);
     assert_eq!(created.data.settings.baseline_activity, None);
     assert_eq!(created.data.cache.current_weight, None);
-    assert_eq!(created.derived.bmr, None);
-    assert_eq!(created.derived.baseline_activity, None);
-    assert_eq!(created.derived.maintenance_calories, None);
+    assert_eq!(created.derived.bmr(), None);
+    assert_eq!(created.derived.baseline_activity(), None);
+    assert_eq!(created.derived.maintenance_calories(), None);
     assert_eq!(timestamps(&database, created.id).await?.created_at, 1_000);
     assert_eq!(timestamps(&database, created.id).await?.updated_at, None);
 
@@ -220,20 +221,20 @@ async fn patch_nulls_and_mode_replacement_persist_independently() -> Result<(), 
     ));
     assert_eq!(updated.data.settings.weight_goal, None);
     assert_eq!(
-        updated.derived.bmr.map(|value| value.to_string()),
+        updated.derived.bmr().map(|value| value.to_string()),
         Some("1200 kcal".to_owned())
     );
     assert_eq!(
         updated
             .derived
-            .baseline_activity
+            .baseline_activity()
             .map(|value| value.to_string()),
         Some("0 kcal".to_owned())
     );
     assert_eq!(
         updated
             .derived
-            .maintenance_calories
+            .maintenance_calories()
             .map(|value| value.to_string()),
         Some("1200 kcal".to_owned())
     );
@@ -245,12 +246,12 @@ async fn patch_nulls_and_mode_replacement_persist_independently() -> Result<(), 
         .ok_or_else(|| std::io::Error::other("created profile was not found"))?;
     assert_eq!(reset_profile.data.settings.bmr, BmrSetting::Calculated);
     assert_eq!(reset_profile.data.settings.birth_date, None);
-    assert_eq!(reset_profile.derived.bmr, None);
+    assert_eq!(reset_profile.derived.bmr(), None);
     assert_eq!(
-        reset_profile.derived.baseline_activity,
+        reset_profile.derived.baseline_activity(),
         Some("0 kcal".parse()?)
     );
-    assert_eq!(reset_profile.derived.maintenance_calories, None);
+    assert_eq!(reset_profile.derived.maintenance_calories(), None);
     database.close().await;
     Ok(())
 }

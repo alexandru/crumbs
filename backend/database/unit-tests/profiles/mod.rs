@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime};
 use crate::clock::Clock;
 use crate::{Database, DatabaseConfig};
 
+mod energy;
 mod model;
 mod sqlite;
 
