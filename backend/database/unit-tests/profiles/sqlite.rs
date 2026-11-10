@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 use sqlx::FromRow;
 
 use super::open_database;
+use crate::clock::UnixMillis;
 use crate::identity::UserId;
 use crate::profiles::*;
 use crate::runtime::Database;
@@ -26,8 +27,8 @@ fn create_input(value: &str) -> Result<CreateProfile, Box<dyn Error>> {
 
 #[derive(FromRow)]
 struct Timestamps {
-    created_at: i64,
-    updated_at: Option<i64>,
+    created_at: UnixMillis,
+    updated_at: Option<UnixMillis>,
 }
 
 async fn timestamps(database: &Database, id: ProfileId) -> Result<Timestamps, sqlx::Error> {

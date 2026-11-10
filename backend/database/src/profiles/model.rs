@@ -68,6 +68,7 @@ impl ProfileName {
                 "profile name must not be blank".to_owned(),
             ));
         }
+
         let decomposed = display.nfd().collect::<String>();
         let key = UniCase::new(decomposed).to_folded_case().nfd().collect();
         Ok(Self {
@@ -241,9 +242,22 @@ impl BirthDate {
         if !(1..=9999).contains(&year) {
             return Err(ProfileError::InvalidInput("invalid birth date".to_owned()));
         }
+
         let date = NaiveDate::from_ymd_opt(year, month, day)
             .ok_or_else(|| ProfileError::InvalidInput("invalid birth date".to_owned()))?;
         Ok(Self { date, precision })
+    }
+
+    fn age_on(self, current_day: NaiveDate) -> Option<AgeYears> {
+        let birthday = self.effective_date();
+        if birthday > current_day {
+            return None;
+        }
+        let mut age = current_day.year().checked_sub(birthday.year())?;
+        if (current_day.month(), current_day.day()) < (birthday.month(), birthday.day()) {
+            age = age.checked_sub(1)?;
+        }
+        Some(AgeYears(age))
     }
 }
 
@@ -314,8 +328,12 @@ impl IanaTimezone {
         self.0.name()
     }
 
-    pub(crate) const fn timezone(self) -> Tz {
-        self.0
+    fn local_day(self, timestamp: UnixMillis) -> Result<NaiveDate, ProfileError> {
+        let utc =
+            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp).ok_or_else(|| {
+                ProfileError::Calculation("clock timestamp is out of range".to_owned())
+            })?;
+        Ok(utc.with_timezone(&self.0).date_naive())
     }
 }
 
@@ -494,6 +512,38 @@ pub enum BaselineActivity {
     Custom { value: Kilocalories },
 }
 
+impl BaselineActivity {
+    fn baseline_value(
+        self,
+        bmr: Option<Kilocalories>,
+    ) -> Result<Option<Kilocalories>, ProfileError> {
+        match self {
+            BaselineActivity::Custom { value } => Ok(Some(value)),
+            BaselineActivity::Preset { level } => {
+                let Some(bmr) = bmr else {
+                    return Ok(None);
+                };
+                let coefficient = match level {
+                    ActivityLevel::NoActivity => Decimal::ZERO,
+                    ActivityLevel::Sedentary => Decimal::new(2, 1),
+                    ActivityLevel::LightlyActive => Decimal::new(375, 3),
+                    ActivityLevel::ModeratelyActive => Decimal::new(5, 1),
+                    ActivityLevel::VeryActive => Decimal::new(9, 1),
+                };
+                let value = bmr
+                    .value()
+                    .checked_mul(coefficient)
+                    .ok_or_else(calculation_overflow)?;
+                Ok(Some(Kilocalories::try_new(value).map_err(|_| {
+                    ProfileError::Calculation(
+                        "baseline activity is outside the supported range".to_owned(),
+                    )
+                })?))
+            }
+        }
+    }
+}
+
 /// A profile's writable settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -562,7 +612,7 @@ impl ProfileDerived {
         cache: &ProfileCache,
         timestamp: UnixMillis,
     ) -> Result<Self, ProfileError> {
-        let current_day = local_day(settings.timezone, timestamp)?;
+        let current_day = settings.timezone.local_day(timestamp)?;
         let bmr = match settings.bmr {
             BmrSetting::Calculated => match (
                 cache.current_weight,
@@ -570,17 +620,19 @@ impl ProfileDerived {
                 settings.birth_date,
                 settings.sex,
             ) {
-                (Some(weight), Some(height), Some(birth_date), Some(sex)) => {
-                    age_on(birth_date, current_day)
-                        .map(|age| calculate_bmr(weight, height, age, sex))
-                        .transpose()?
-                }
+                (Some(weight), Some(height), Some(birth_date), Some(sex)) => birth_date
+                    .age_on(current_day)
+                    .map(|age| Self::calculate_bmr(weight, height, age, sex))
+                    .transpose()?,
                 _ => None,
             },
             BmrSetting::Custom { value } => Some(value.value()),
         };
 
-        let baseline_activity = baseline_value(settings.baseline_activity, bmr)?;
+        let baseline_activity = match settings.baseline_activity {
+            Some(setting) => setting.baseline_value(bmr)?,
+            None => None,
+        };
         let maintenance_calories = match (bmr, baseline_activity) {
             (Some(bmr), Some(addition)) => Some(add_kilocalories(bmr, addition)?),
             _ => None,
@@ -590,6 +642,41 @@ impl ProfileDerived {
             bmr,
             baseline_activity,
             maintenance_calories,
+        })
+    }
+
+    fn calculate_bmr(
+        weight: BodyWeight,
+        height: BodyHeight,
+        age: AgeYears,
+        sex: Sex,
+    ) -> Result<Kilocalories, ProfileError> {
+        let mass = weight
+            .value()
+            .value()
+            .checked_mul(Decimal::from(10))
+            .ok_or_else(calculation_overflow)?;
+        let height_component = height
+            .value()
+            .value()
+            .checked_mul(Decimal::new(625, 2))
+            .ok_or_else(calculation_overflow)?;
+        let age_component = Decimal::from(age.0)
+            .checked_mul(Decimal::from(5))
+            .ok_or_else(calculation_overflow)?;
+        let constant = match sex {
+            Sex::Male => Decimal::from(5),
+            Sex::Female => Decimal::from(-161),
+        };
+
+        let value = mass
+            .checked_add(height_component)
+            .and_then(|sum| sum.checked_sub(age_component))
+            .and_then(|sum| sum.checked_add(constant))
+            .ok_or_else(calculation_overflow)?;
+
+        Kilocalories::try_new(value).map_err(|_| {
+            ProfileError::Calculation("calculated BMR is outside the supported range".to_owned())
         })
     }
 }
@@ -606,6 +693,29 @@ pub struct Profile {
     pub data: ProfileData,
     /// Values calculated from current settings and cache.
     pub derived: ProfileDerived,
+}
+
+impl Profile {
+    /// Constructs a profile with values calculated at `now`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a calculation error if the timestamp or a value is out of range.
+    pub(crate) fn from_data(
+        id: ProfileId,
+        name: ProfileName,
+        data: ProfileData,
+        now: UnixMillis,
+    ) -> Result<Self, ProfileError> {
+        let derived = ProfileDerived::calculate(&data.settings, &data.cache, now)?;
+
+        Ok(Self {
+            id,
+            name,
+            data,
+            derived,
+        })
+    }
 }
 
 /// Settings accepted when creating a profile.
@@ -705,6 +815,48 @@ pub struct PatchProfile {
     pub bmr: BmrPatch,
     /// Optional baseline activity update.
     pub baseline_activity: NullablePatch<BaselineActivity>,
+}
+
+impl PatchProfile {
+    /// Applies a patch while preserving cache and reporting whether writable state changed.
+    pub(crate) fn apply(
+        &self,
+        current_name: ProfileName,
+        current: ProfileData,
+    ) -> (ProfileName, ProfileData, bool) {
+        let (name, name_changed) = match &self.name {
+            Patch::Set(replacement) if replacement.as_str() != current_name.as_str() => {
+                (replacement.clone(), true)
+            }
+            Patch::Unchanged | Patch::Set(_) => (current_name, false),
+        };
+
+        let mut settings = current.settings.clone();
+        settings.birth_date = patched_optional(settings.birth_date, &self.birth_date);
+        settings.sex = patched_optional(settings.sex, &self.sex);
+        settings.height = patched_optional(settings.height, &self.height);
+        if let Patch::Set(value) = self.timezone {
+            settings.timezone = value;
+        }
+        settings.weight_goal = patched_optional(settings.weight_goal, &self.weight_goal);
+        match self.bmr {
+            BmrPatch::Unchanged => {}
+            BmrPatch::Set(value) => settings.bmr = value,
+            BmrPatch::ResetToCalculated => settings.bmr = BmrSetting::Calculated,
+        }
+        settings.baseline_activity =
+            patched_optional(settings.baseline_activity, &self.baseline_activity);
+
+        let changed = name_changed || settings != current.settings;
+        (
+            name,
+            ProfileData {
+                settings,
+                cache: current.cache,
+            },
+            changed,
+        )
+    }
 }
 
 impl<'de> Deserialize<'de> for PatchProfile {
@@ -826,45 +978,7 @@ impl From<QuantityError> for ProfileError {
     }
 }
 
-/// Applies a patch while preserving cache and reporting whether writable state changed.
-pub(crate) fn apply_patch(
-    current_name: ProfileName,
-    current: ProfileData,
-    patch: &PatchProfile,
-) -> (ProfileName, ProfileData, bool) {
-    let (name, name_changed) = match &patch.name {
-        Patch::Set(replacement) if replacement.as_str() != current_name.as_str() => {
-            (replacement.clone(), true)
-        }
-        Patch::Unchanged | Patch::Set(_) => (current_name, false),
-    };
-
-    let mut settings = current.settings.clone();
-    settings.birth_date = patched_optional(settings.birth_date, &patch.birth_date);
-    settings.sex = patched_optional(settings.sex, &patch.sex);
-    settings.height = patched_optional(settings.height, &patch.height);
-    if let Patch::Set(value) = patch.timezone {
-        settings.timezone = value;
-    }
-    settings.weight_goal = patched_optional(settings.weight_goal, &patch.weight_goal);
-    match patch.bmr {
-        BmrPatch::Unchanged => {}
-        BmrPatch::Set(value) => settings.bmr = value,
-        BmrPatch::ResetToCalculated => settings.bmr = BmrSetting::Calculated,
-    }
-    settings.baseline_activity =
-        patched_optional(settings.baseline_activity, &patch.baseline_activity);
-
-    let changed = name_changed || settings != current.settings;
-    (
-        name,
-        ProfileData {
-            settings,
-            cache: current.cache,
-        },
-        changed,
-    )
-}
+struct AgeYears(i32);
 
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
@@ -886,88 +1000,6 @@ fn nullable_patch<T>(value: Option<Option<T>>) -> NullablePatch<T> {
         None => NullablePatch::Unchanged,
         Some(None) => NullablePatch::Clear,
         Some(Some(value)) => NullablePatch::Set(value),
-    }
-}
-
-fn local_day(timezone: IanaTimezone, timestamp: UnixMillis) -> Result<NaiveDate, ProfileError> {
-    let utc = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp)
-        .ok_or_else(|| ProfileError::Calculation("clock timestamp is out of range".to_owned()))?;
-    Ok(utc.with_timezone(&timezone.timezone()).date_naive())
-}
-
-fn age_on(birth_date: BirthDate, current_day: NaiveDate) -> Option<i32> {
-    let birthday = birth_date.effective_date();
-    if birthday > current_day {
-        return None;
-    }
-    let mut age = current_day.year().checked_sub(birthday.year())?;
-    if (current_day.month(), current_day.day()) < (birthday.month(), birthday.day()) {
-        age = age.checked_sub(1)?;
-    }
-    Some(age)
-}
-
-fn calculate_bmr(
-    weight: BodyWeight,
-    height: BodyHeight,
-    age: i32,
-    sex: Sex,
-) -> Result<Kilocalories, ProfileError> {
-    let mass = weight
-        .value()
-        .value()
-        .checked_mul(Decimal::from(10))
-        .ok_or_else(calculation_overflow)?;
-    let height_component = height
-        .value()
-        .value()
-        .checked_mul(Decimal::new(625, 2))
-        .ok_or_else(calculation_overflow)?;
-    let age_component = Decimal::from(age)
-        .checked_mul(Decimal::from(5))
-        .ok_or_else(calculation_overflow)?;
-    let constant = match sex {
-        Sex::Male => Decimal::from(5),
-        Sex::Female => Decimal::from(-161),
-    };
-    let value = mass
-        .checked_add(height_component)
-        .and_then(|sum| sum.checked_sub(age_component))
-        .and_then(|sum| sum.checked_add(constant))
-        .ok_or_else(calculation_overflow)?;
-    Kilocalories::try_new(value).map_err(|_| {
-        ProfileError::Calculation("calculated BMR is outside the supported range".to_owned())
-    })
-}
-
-fn baseline_value(
-    setting: Option<BaselineActivity>,
-    bmr: Option<Kilocalories>,
-) -> Result<Option<Kilocalories>, ProfileError> {
-    match setting {
-        None => Ok(None),
-        Some(BaselineActivity::Custom { value }) => Ok(Some(value)),
-        Some(BaselineActivity::Preset { level }) => {
-            let Some(bmr) = bmr else {
-                return Ok(None);
-            };
-            let coefficient = match level {
-                ActivityLevel::NoActivity => Decimal::ZERO,
-                ActivityLevel::Sedentary => Decimal::new(2, 1),
-                ActivityLevel::LightlyActive => Decimal::new(375, 3),
-                ActivityLevel::ModeratelyActive => Decimal::new(5, 1),
-                ActivityLevel::VeryActive => Decimal::new(9, 1),
-            };
-            let value = bmr
-                .value()
-                .checked_mul(coefficient)
-                .ok_or_else(calculation_overflow)?;
-            Ok(Some(Kilocalories::try_new(value).map_err(|_| {
-                ProfileError::Calculation(
-                    "baseline activity is outside the supported range".to_owned(),
-                )
-            })?))
-        }
     }
 }
 
