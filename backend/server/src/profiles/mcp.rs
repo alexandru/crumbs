@@ -43,7 +43,6 @@ where
                         .get::<Parts>()
                         .and_then(|parts| parts.extensions.get::<UserSession>())
                         .map(|session| session.user_id);
-
                     match user {
                         Some(user) => {
                             tool.call(context.service.as_ref(), user, context.arguments)
@@ -89,7 +88,6 @@ impl ProfileTool {
                 "Patch supported settings for a profile owned by the authenticated account. Omitted fields remain unchanged; null clears nullable settings and resets BMR to calculated. Requires crumbs:write."
             }
         };
-
         Tool::new_with_raw(self.name(), Some(description.into()), self.schema()).with_annotations(
             ToolAnnotations::new()
                 .read_only(!self.requires_write())
@@ -113,7 +111,6 @@ impl ProfileTool {
             ("additionalProperties".to_owned(), json!(false)),
         ]);
         let id = json!({"type": "integer", "minimum": 1, "description": "Positive profile ID."});
-
         match self {
             Self::List => {
                 schema.insert(
@@ -148,7 +145,6 @@ impl ProfileTool {
                 schema.insert("$defs".to_owned(), definitions());
             }
         }
-
         schema
     }
 
@@ -184,44 +180,36 @@ impl ProfileTool {
         match self {
             Self::List => {
                 let query: ProfileListQuery = parse(arguments)?;
-
                 let profiles = store
                     .list_profiles(user, &query)
                     .await
                     .map_err(ToolFailure::Profile)?;
-
                 serialize(profiles)
             }
             Self::Get => {
                 let request: IdRequest = parse(arguments)?;
-
                 let profile = store
                     .profile(user, request.id)
                     .await
                     .map_err(ToolFailure::Profile)?
                     .ok_or(ToolFailure::NotFound)?;
-
                 serialize(profile)
             }
             Self::Create => {
                 let request: CreateRequest = parse(arguments)?;
-
                 let profile = store
                     .create_profile(user, &request.profile)
                     .await
                     .map_err(ToolFailure::Profile)?;
-
                 serialize(profile)
             }
             Self::Update => {
                 let request: UpdateRequest = parse(arguments)?;
-
                 let profile = store
                     .patch_profile(user, request.id, &request.patch)
                     .await
                     .map_err(ToolFailure::Profile)?
                     .ok_or(ToolFailure::NotFound)?;
-
                 serialize(profile)
             }
         }
@@ -271,7 +259,6 @@ fn profile_tool_error(error: ProfileError) -> CallToolResult {
             "profile operation failed".to_owned()
         }
     };
-
     tool_error(code, message)
 }
 

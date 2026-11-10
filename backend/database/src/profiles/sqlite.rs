@@ -8,7 +8,7 @@ use crate::runtime::Database;
 use super::error::ProfileError;
 use super::model::{
     CreateProfile, PatchProfile, Profile, ProfileData, ProfileDerived, ProfileId, ProfileList,
-    ProfileListQuery, ProfileName,
+    ProfileListQuery, ProfileName, apply_patch,
 };
 use super::store::Profiles;
 
@@ -24,9 +24,7 @@ impl Profiles for Database {
             settings: input.settings.clone().unwrap_or_default().into_settings(),
             cache: Default::default(),
         };
-
         let derived = ProfileDerived::calculate(&data.settings, &data.cache, created_at)?;
-
         let data_json = serde_json::to_string(&data).map_err(ProfileError::storage)?;
         let result = sqlx::query_scalar::<_, i64>(
             "INSERT INTO profiles (user_id, name, name_key, data_json, created_at, updated_at)
@@ -40,7 +38,6 @@ impl Profiles for Database {
         .bind(created_at)
         .fetch_one(&self.pool)
         .await;
-
         let id = match result {
             Ok(id) => id,
             Err(error)
@@ -53,7 +50,6 @@ impl Profiles for Database {
             Err(error) => return Err(ProfileError::storage(error)),
         };
         let id = ProfileId::new(id).map_err(|_| ProfileError::InvalidStoredData)?;
-
         Ok(Profile {
             id,
             name: name.clone(),
@@ -73,7 +69,6 @@ impl Profiles for Database {
         .fetch_optional(&self.pool)
         .await
         .map_err(ProfileError::storage)?;
-
         match row {
             Some(row) => {
                 let now = self.clock.now().map_err(ProfileError::clock)?;
@@ -102,21 +97,18 @@ impl Profiles for Database {
         .fetch_all(&self.pool)
         .await
         .map_err(ProfileError::storage)?;
-
         if rows.is_empty() {
             return Ok(ProfileList {
                 items: Vec::new(),
                 last_id: None,
             });
         }
-
         let now = self.clock.now().map_err(ProfileError::clock)?;
         let items = rows
             .into_iter()
             .map(|row| row.into_profile(now))
             .collect::<Result<Vec<_>, _>>()?;
         let last_id = items.last().map(|item| item.id);
-
         Ok(ProfileList { items, last_id })
     }
 
@@ -148,7 +140,7 @@ impl Profiles for Database {
         };
 
         let (stored_id, stored_name, data) = row.into_parts()?;
-        let (name, data, changed) = patch.apply(stored_name, data);
+        let (name, data, changed) = apply_patch(stored_name, data, patch);
         let now = self.clock.now().map_err(ProfileError::clock)?;
 
         if changed {
@@ -177,11 +169,26 @@ impl Profiles for Database {
             }
         }
 
-        let result = Profile::from_data(stored_id, name, data, now)?;
+        let result = profile(stored_id, name, data, now)?;
 
         transaction.commit().await.map_err(ProfileError::storage)?;
         Ok(Some(result))
     }
+}
+
+fn profile(
+    id: ProfileId,
+    name: ProfileName,
+    data: ProfileData,
+    now: UnixMillis,
+) -> Result<Profile, ProfileError> {
+    let derived = ProfileDerived::calculate(&data.settings, &data.cache, now)?;
+    Ok(Profile {
+        id,
+        name,
+        data,
+        derived,
+    })
 }
 
 #[derive(FromRow)]
@@ -206,6 +213,6 @@ impl ProfileRow {
 
     fn into_profile(self, now: UnixMillis) -> Result<Profile, ProfileError> {
         let (id, name, data) = self.into_parts()?;
-        Profile::from_data(id, name, data, now)
+        profile(id, name, data, now)
     }
 }
