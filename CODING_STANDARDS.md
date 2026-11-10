@@ -10,9 +10,13 @@ Configuration fields and other domain values MUST use semantic types (e.g. `Http
 
 Domain types MUST make illegal states unrepresentable. Code MUST parse external values into semantic types that preserve their invariants ("parse, don't validate"). Public constructors and deserialization MUST enforce those invariants so callers cannot construct invalid values. Once parsed, downstream code MUST rely on the type rather than repeat validation.
 
-All units of measurement MUST use distinct semantic newtypes (e.g. `Grams`, `Milligrams`, `Kilocalories`, `Kilojoules`), not bare primitives or type aliases. Measurement types MUST keep their representation private so callers cannot construct invalid quantities or mix units implicitly. Unit conversions MUST be explicit and typed.
+All units of measurement MUST use distinct semantic newtypes (e.g. `Grams`, `Milligrams`, `Kcal`, `Kilojoules`), not bare primitives or type aliases. Measurement types MUST keep their representation private so callers cannot construct invalid quantities or mix units implicitly. Unit conversions MUST be explicit and typed.
 
 Nutrition quantities and arithmetic MUST use fixed-point decimal representations. Parsing, conversion, storage, and serialization MUST NOT pass these quantities through binary floating-point values.
+
+## Construction
+
+Numeric newtypes SHOULD implement `From` for common inputs that convert without loss or validation. Call sites SHOULD use these conversions directly, such as `KcalPerKg::from(10)`.
 
 ## Enum payloads
 
@@ -58,6 +62,10 @@ Fallible operations MUST return `Result` and use `?` to propagate errors.
 ## Async runtime
 
 Async subsystems SHOULD share the application's runtime. The composition root MUST enable the drivers required by its subsystems and propagate runtime-creation failures as typed `Result` errors. Subsystem APIs MAY assume this configured application context. Supporting arbitrary externally configured runtimes requires a separate explicit requirement.
+
+## Dependencies
+
+Third-party dependencies SHOULD be widely used and actively maintained.
 
 ## Imports
 

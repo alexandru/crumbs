@@ -69,8 +69,8 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
                 "name": " Alex ",
                 "settings": {
                     "weight_goal": "60 kg",
-                    "bmr": {"mode": "custom", "value": "1700 kcal"},
-                    "baseline_activity": {"mode": "custom", "value": "400 kcal"}
+                    "bmr": {"mode": "custom", "value": "1700 kcal/day"},
+                    "baseline_activity": {"mode": "custom", "value": "400 kcal/day"}
                 }
             }),
         )?)
@@ -82,16 +82,19 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
     assert_eq!(created.json["data"]["settings"]["weight_goal"], "60 kg");
     assert_eq!(
         created.json["data"]["settings"]["bmr"],
-        json!({"mode": "custom", "value": "1700 kcal"})
+        json!({"mode": "custom", "value": "1700 kcal/day"})
     );
     assert_eq!(
         created.json["data"]["settings"]["baseline_activity"],
-        json!({"mode": "custom", "value": "400 kcal"})
+        json!({"mode": "custom", "value": "400 kcal/day"})
     );
     assert_eq!(created.json["data"]["cache"]["current_weight"], Value::Null);
-    assert_eq!(created.json["derived"]["bmr"], "1700 kcal");
-    assert_eq!(created.json["derived"]["baseline_activity"], "400 kcal");
-    assert_eq!(created.json["derived"]["maintenance_calories"], "2100 kcal");
+    assert_eq!(created.json["derived"]["bmr"], "1700 kcal/day");
+    assert_eq!(created.json["derived"]["baseline_activity"], "400 kcal/day");
+    assert_eq!(
+        created.json["derived"]["maintenance_calories"],
+        "2100 kcal/day"
+    );
     assert_eq!(
         created
             .headers
@@ -137,11 +140,11 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
     );
     assert_eq!(
         omitted_patch.json["data"]["settings"]["bmr"],
-        json!({"mode": "custom", "value": "1700 kcal"})
+        json!({"mode": "custom", "value": "1700 kcal/day"})
     );
     assert_eq!(
         omitted_patch.json["derived"]["maintenance_calories"],
-        "2100 kcal"
+        "2100 kcal/day"
     );
 
     let reset_bmr = app

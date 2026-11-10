@@ -4,7 +4,7 @@ use std::str::FromStr;
 use chrono::{NaiveDate, TimeZone, Utc};
 use rust_decimal::Decimal;
 
-use crate::nutrition_model::Kilograms;
+use crate::nutrition_model::{Kcal, Kilograms, PerDay};
 use crate::profiles::model::ProfileData;
 use crate::profiles::*;
 
@@ -72,12 +72,17 @@ fn create_and_patch_inputs_reject_unknown_fields_and_keep_null_semantics()
     assert!(serde_json::from_str::<PatchProfile>(r#"{"timezone":null}"#).is_err());
     assert!(serde_json::from_str::<PatchProfile>(r#"{"derived":{}}"#).is_err());
 
-    let custom_bmr: BmrSetting = serde_json::from_str(r#"{"mode":"custom","value":"1200 kcal"}"#)?;
+    let custom_bmr: BmrSetting =
+        serde_json::from_str(r#"{"mode":"custom","value":"1200 kcal/day"}"#)?;
     assert!(matches!(custom_bmr, BmrSetting::Custom { .. }));
-    assert!(serde_json::from_str::<BmrSetting>(r#"{"mode":"custom","value":"0 kcal"}"#).is_err());
     assert!(
-        serde_json::from_str::<BmrSetting>(r#"{"mode":"custom","value":"1200 kcal","cache":null}"#)
-            .is_err()
+        serde_json::from_str::<BmrSetting>(r#"{"mode":"custom","value":"0 kcal/day"}"#).is_err()
+    );
+    assert!(
+        serde_json::from_str::<BmrSetting>(
+            r#"{"mode":"custom","value":"1200 kcal/day","cache":null}"#
+        )
+        .is_err()
     );
     Ok(())
 }
@@ -106,7 +111,7 @@ fn calculated_bmr_rejects_extra_fields_directly_and_in_create_or_patch()
     );
 
     for bmr in [
-        serde_json::json!({"mode": "calculated", "value": "100 kcal"}),
+        serde_json::json!({"mode": "calculated", "value": "100 kcal/day"}),
         serde_json::json!({"mode": "calculated", "current_weight": "70 kg"}),
         serde_json::json!({"mode": "calculated", "unexpected": true}),
     ] {
@@ -121,7 +126,7 @@ fn calculated_bmr_rejects_extra_fields_directly_and_in_create_or_patch()
         assert!(serde_json::from_value::<PatchProfile>(serde_json::json!({"bmr": bmr})).is_err());
     }
 
-    let custom_json = serde_json::json!({"mode": "custom", "value": "1200 kcal"});
+    let custom_json = serde_json::json!({"mode": "custom", "value": "1200 kcal/day"});
     let custom: BmrSetting = serde_json::from_value(custom_json.clone())?;
     assert!(matches!(custom, BmrSetting::Custom { .. }));
     assert_eq!(serde_json::to_value(custom)?, custom_json);
@@ -158,15 +163,19 @@ fn calorie_values_keep_fractional_results_and_custom_baseline_is_independent()
 
     let derived = ProfileDerived::calculate(&settings, &cache, now)?;
     assert_eq!(
-        derived.bmr().map(|value| value.value()),
+        derived.bmr().map(|value| value.amount().value()),
         Some(Decimal::from_str("1617.5")?)
     );
     assert_eq!(
-        derived.baseline_activity().map(|value| value.value()),
+        derived
+            .baseline_activity()
+            .map(|value| value.amount().value()),
         Some(Decimal::from_str("606.5625")?)
     );
     assert_eq!(
-        derived.maintenance_calories().map(|value| value.value()),
+        derived
+            .maintenance_calories()
+            .map(|value| value.amount().value()),
         Some(Decimal::from_str("2224.0625")?)
     );
 
@@ -175,28 +184,30 @@ fn calorie_values_keep_fractional_results_and_custom_baseline_is_independent()
     settings.height = None;
     settings.bmr = BmrSetting::Calculated;
     settings.baseline_activity = Some(BaselineActivity::Custom {
-        value: KilocaloriesPerDay::from_str("50.25 kcal")?,
+        value: PerDay::<Kcal>::from_str("50.25 kcal/day")?,
     });
     let custom_baseline = ProfileDerived::calculate(&settings, &ProfileCache::default(), now)?;
     assert_eq!(custom_baseline.bmr(), None);
     assert_eq!(
         custom_baseline
             .baseline_activity()
-            .map(|value| value.value()),
+            .map(|value| value.amount().value()),
         Some(Decimal::from_str("50.25")?)
     );
     assert_eq!(custom_baseline.maintenance_calories(), None);
 
     settings.bmr = BmrSetting::Custom {
-        value: CustomBmr::new(KilocaloriesPerDay::from_str("1000.5 kcal")?)?,
+        value: CustomBmr::new(PerDay::<Kcal>::from_str("1000.5 kcal/day")?)?,
     };
     let custom = ProfileDerived::calculate(&settings, &ProfileCache::default(), now)?;
     assert_eq!(
-        custom.bmr().map(|value| value.value()),
+        custom.bmr().map(|value| value.amount().value()),
         Some(Decimal::from_str("1000.5")?)
     );
     assert_eq!(
-        custom.maintenance_calories().map(|value| value.value()),
+        custom
+            .maintenance_calories()
+            .map(|value| value.amount().value()),
         Some(Decimal::from_str("1050.75")?)
     );
     Ok(())
@@ -206,8 +217,8 @@ fn calorie_values_keep_fractional_results_and_custom_baseline_is_independent()
 fn baseline_multiplication_uses_decimal_precision_rounding() -> Result<(), Box<dyn Error>> {
     let settings = ProfileSettings {
         bmr: BmrSetting::Custom {
-            value: CustomBmr::new(KilocaloriesPerDay::from_str(
-                "1000.0000000000000000000000001 kcal",
+            value: CustomBmr::new(PerDay::<Kcal>::from_str(
+                "1000.0000000000000000000000001 kcal/day",
             )?)?,
         },
         baseline_activity: Some(BaselineActivity::Preset {
@@ -219,7 +230,7 @@ fn baseline_multiplication_uses_decimal_precision_rounding() -> Result<(), Box<d
     let derived = ProfileDerived::calculate(&settings, &ProfileCache::default(), 1_000)?;
     assert_eq!(
         derived.baseline_activity().map(|value| value.to_string()),
-        Some("375.00000000000000000000000004 kcal".to_owned())
+        Some("375.00000000000000000000000004 kcal/day".to_owned())
     );
     Ok(())
 }
@@ -247,11 +258,13 @@ fn presets_use_selected_baseline_coefficients_and_timezone_local_age() -> Result
     });
     let no_activity = ProfileDerived::calculate(&settings, &cache, instant)?;
     assert_eq!(
-        no_activity.bmr().map(|value| value.value()),
+        no_activity.bmr().map(|value| value.amount().value()),
         Some(Decimal::from_str("1622.5")?)
     );
     assert_eq!(
-        no_activity.baseline_activity().map(|value| value.value()),
+        no_activity
+            .baseline_activity()
+            .map(|value| value.amount().value()),
         Some(Decimal::ZERO)
     );
 
@@ -264,7 +277,9 @@ fn presets_use_selected_baseline_coefficients_and_timezone_local_age() -> Result
         settings.baseline_activity = Some(BaselineActivity::Preset { level });
         let derived = ProfileDerived::calculate(&settings, &cache, instant)?;
         assert_eq!(
-            derived.baseline_activity().map(|value| value.value()),
+            derived
+                .baseline_activity()
+                .map(|value| value.amount().value()),
             Some(Decimal::from_str(expected)?)
         );
     }
@@ -297,7 +312,7 @@ fn future_birth_dates_keep_baseline_and_clock_semantics() -> Result<(), Box<dyn 
         ),
         (
             Some(BaselineActivity::Custom {
-                value: KilocaloriesPerDay::from_str("0 kcal")?,
+                value: PerDay::<Kcal>::from_str("0 kcal/day")?,
             }),
             Some(Decimal::ZERO),
         ),
@@ -306,7 +321,9 @@ fn future_birth_dates_keep_baseline_and_clock_semantics() -> Result<(), Box<dyn 
         let derived = ProfileDerived::calculate(&settings, &cache, now)?;
         assert_eq!(derived.bmr(), None);
         assert_eq!(
-            derived.baseline_activity().map(|value| value.value()),
+            derived
+                .baseline_activity()
+                .map(|value| value.amount().value()),
             expected_baseline
         );
         assert_eq!(derived.maintenance_calories(), None);
@@ -316,22 +333,26 @@ fn future_birth_dates_keep_baseline_and_clock_semantics() -> Result<(), Box<dyn 
     settings.sex = None;
     settings.height = None;
     settings.bmr = BmrSetting::Custom {
-        value: CustomBmr::new(KilocaloriesPerDay::from_str("1200 kcal")?)?,
+        value: CustomBmr::new(PerDay::<Kcal>::from_str("1200 kcal/day")?)?,
     };
     settings.baseline_activity = Some(BaselineActivity::Preset {
         level: ActivityLevel::Sedentary,
     });
     let custom_bmr = ProfileDerived::calculate(&settings, &ProfileCache::default(), now)?;
     assert_eq!(
-        custom_bmr.bmr().map(|value| value.value()),
+        custom_bmr.bmr().map(|value| value.amount().value()),
         Some(Decimal::from(1200))
     );
     assert_eq!(
-        custom_bmr.baseline_activity().map(|value| value.value()),
+        custom_bmr
+            .baseline_activity()
+            .map(|value| value.amount().value()),
         Some(Decimal::from(240))
     );
     assert_eq!(
-        custom_bmr.maintenance_calories().map(|value| value.value()),
+        custom_bmr
+            .maintenance_calories()
+            .map(|value| value.amount().value()),
         Some(Decimal::from(1440))
     );
 
@@ -361,19 +382,19 @@ fn profile_data_response_cannot_be_used_as_a_create_payload() -> Result<(), Box<
 
 #[test]
 fn derived_values_validate_components_and_deserialization() -> Result<(), Box<dyn Error>> {
-    let bmr = KilocaloriesPerDay::from_str("1200 kcal")?;
-    let activity = KilocaloriesPerDay::from_str("300 kcal")?;
-    let derived = ProfileDerived::from_components(Some(bmr), Some(activity))?;
+    let bmr = PerDay::<Kcal>::from_str("1200 kcal/day")?;
+    let activity = PerDay::<Kcal>::from_str("300 kcal/day")?;
+    let derived = ProfileDerived::from_components(Some(bmr), Some(activity));
     assert_eq!(
         derived
             .maintenance_calories()
             .map(|value| value.to_string()),
-        Some("1500 kcal".to_owned())
+        Some("1500 kcal/day".to_owned())
     );
     let encoded = serde_json::to_string(&derived)?;
     assert_eq!(serde_json::from_str::<ProfileDerived>(&encoded)?, derived);
 
-    let incomplete = ProfileDerived::from_components(None, Some(activity))?;
+    let incomplete = ProfileDerived::from_components(None, Some(activity));
     assert_eq!(incomplete.maintenance_calories(), None);
     assert_eq!(
         serde_json::from_str::<ProfileDerived>(&serde_json::to_string(&incomplete)?)?,
@@ -381,18 +402,70 @@ fn derived_values_validate_components_and_deserialization() -> Result<(), Box<dy
     );
 
     for input in [
-        r#"{"bmr":null,"baseline_activity":null,"maintenance_calories":"1 kcal"}"#,
-        r#"{"bmr":"1200 kcal","baseline_activity":"300 kcal","maintenance_calories":null}"#,
-        r#"{"bmr":"1200 kcal","baseline_activity":"300 kcal","maintenance_calories":"1499 kcal"}"#,
-        r#"{"bmr":"1200 kcal","baseline_activity":"300 kcal"}"#,
+        r#"{"bmr":null,"baseline_activity":null,"maintenance_calories":"1 kcal/day"}"#,
+        r#"{"bmr":"1200 kcal/day","baseline_activity":"300 kcal/day","maintenance_calories":null}"#,
+        r#"{"bmr":"1200 kcal/day","baseline_activity":"300 kcal/day","maintenance_calories":"1499 kcal/day"}"#,
+        r#"{"bmr":"1200 kcal/day","baseline_activity":"300 kcal/day"}"#,
     ] {
         assert!(serde_json::from_str::<ProfileDerived>(input).is_err());
     }
 
-    let maximum = KilocaloriesPerDay::from_str("79228162514264337593543950335 kcal")?;
-    assert!(matches!(
-        ProfileDerived::from_components(Some(maximum), Some(activity)),
-        Err(ProfileError::Calculation(_))
-    ));
     Ok(())
+}
+
+#[test]
+fn custom_rates_validate_domain_invariants() -> Result<(), Box<dyn Error>> {
+    let negative = PerDay::<Kcal>::from_str("-1 kcal/day")?;
+    let zero = PerDay::<Kcal>::from_str("0 kcal/day")?;
+    assert!(CustomBmr::new(negative).is_err());
+    assert!(CustomBmr::new(zero).is_err());
+    assert!(
+        serde_json::from_str::<BaselineActivity>(r#"{"mode":"custom","value":"-1 kcal/day"}"#)
+            .is_ok()
+    );
+    assert!(
+        serde_json::from_str::<BmrSetting>(r#"{"mode":"custom","value":"-1 kcal/day"}"#).is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn derived_values_preserve_signed_arithmetic() -> Result<(), Box<dyn Error>> {
+    let bmr = PerDay::<Kcal>::from_str("-20 kcal/day")?;
+    let activity = PerDay::<Kcal>::from_str("5 kcal/day")?;
+    let result = ProfileDerived::from_components(Some(bmr), Some(activity));
+    assert_eq!(
+        result.maintenance_calories().map(|value| value.to_string()),
+        Some("-15 kcal/day".to_owned())
+    );
+    Ok(())
+}
+
+#[test]
+fn body_measurements_reject_zero_and_negative_quantities() -> Result<(), Box<dyn Error>> {
+    use crate::nutrition_model::Centimetres;
+
+    for quantity in ["0 cm", "-1 cm"] {
+        let height = Centimetres::from_str(quantity)?;
+        assert!(BodyHeight::new(height).is_err());
+        assert!(serde_json::from_value::<BodyHeight>(serde_json::json!(quantity)).is_err());
+    }
+    for quantity in ["0 kg", "-1 kg"] {
+        let weight = Kilograms::from_str(quantity)?;
+        assert!(BodyWeight::new(weight).is_err());
+        assert!(serde_json::from_value::<BodyWeight>(serde_json::json!(quantity)).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn create_and_patch_reject_bare_energy_for_daily_rates() {
+    for settings in [
+        serde_json::json!({"bmr": {"mode": "custom", "value": "1200 kcal"}}),
+        serde_json::json!({"baseline_activity": {"mode": "custom", "value": "300 kcal"}}),
+    ] {
+        let create = serde_json::json!({"name": "Alex", "settings": settings.clone()});
+        assert!(serde_json::from_value::<CreateProfile>(create).is_err());
+        assert!(serde_json::from_value::<PatchProfile>(settings).is_err());
+    }
 }

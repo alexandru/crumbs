@@ -118,7 +118,7 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
             "profile": {
                 "name": "Amalia",
                 "settings": {
-                    "bmr": {"mode":"custom", "value":"1650 kcal"},
+                    "bmr": {"mode":"custom", "value":"1650 kcal/day"},
                     "baseline_activity": {"mode":"preset", "level":"sedentary"}
                 }
             }
@@ -131,9 +131,12 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
     let profile = &created.json["result"]["structuredContent"];
     let profile_id = profile["id"].as_i64().ok_or("profile has no ID")?;
     assert_eq!(profile["data"]["settings"]["bmr"]["mode"], "custom");
-    assert_eq!(profile["derived"]["bmr"], "1650 kcal");
-    assert_eq!(profile["derived"]["baseline_activity"], "330.0 kcal");
-    assert_eq!(profile["derived"]["maintenance_calories"], "1980.0 kcal");
+    assert_eq!(profile["derived"]["bmr"], "1650 kcal/day");
+    assert_eq!(profile["derived"]["baseline_activity"], "330.0 kcal/day");
+    assert_eq!(
+        profile["derived"]["maintenance_calories"],
+        "1980.0 kcal/day"
+    );
 
     let fetched = mcp_call_router_with_token(
         &app.router,

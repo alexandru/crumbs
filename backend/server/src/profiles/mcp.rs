@@ -324,13 +324,13 @@ fn definitions() -> Value {
         "bmr": {
             "oneOf": [
                 {"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "calculated"}}},
-                {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "custom"}, "value": {"type": "string", "description": "Positive BMR in kcal/day, serialized with the kcal unit, for example 1700 kcal."}}}
+                {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "custom"}, "value": {"type": "string", "description": "Positive BMR in kcal/day, for example 1700 kcal/day."}}}
             ]
         },
         "baseline_activity": {
             "oneOf": [
                 {"type": "object", "additionalProperties": false, "required": ["mode", "level"], "properties": {"mode": {"const": "preset"}, "level": {"type": "string", "enum": ["no_activity", "sedentary", "lightly_active", "moderately_active", "very_active"]}}},
-                {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "custom"}, "value": {"type": "string", "description": "Nonnegative fixed baseline activity in kcal/day, serialized with the kcal unit, for example 400 kcal."}}}
+                {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "custom"}, "value": {"type": "string", "description": "Fixed baseline activity in kcal/day, for example 400 kcal/day."}}}
             ]
         }
     })

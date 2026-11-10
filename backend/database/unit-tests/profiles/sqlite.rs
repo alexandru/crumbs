@@ -184,7 +184,7 @@ async fn patch_nulls_and_mode_replacement_persist_independently() -> Result<(), 
         .create_profile(
             user,
             &create_input(
-                r#"{"name":"Amalia","settings":{"birth_date":"1982-09","weight_goal":"70 kg","baseline_activity":{"mode":"custom","value":"0 kcal"}}}"#,
+                r#"{"name":"Amalia","settings":{"birth_date":"1982-09","weight_goal":"70 kg","baseline_activity":{"mode":"custom","value":"0 kcal/day"}}}"#,
             )?,
         )
         .await?;
@@ -203,13 +203,13 @@ async fn patch_nulls_and_mode_replacement_persist_independently() -> Result<(), 
     assert_eq!(
         created.data.settings.baseline_activity,
         Some(BaselineActivity::Custom {
-            value: "0 kcal".parse()?,
+            value: "0 kcal/day".parse()?,
         })
     );
 
     clock.store(11_000, Ordering::SeqCst);
     let custom_bmr = serde_json::from_str::<PatchProfile>(
-        r#"{"bmr":{"mode":"custom","value":"1200 kcal"},"weight_goal":null}"#,
+        r#"{"bmr":{"mode":"custom","value":"1200 kcal/day"},"weight_goal":null}"#,
     )?;
     let updated = database
         .patch_profile(user, created.id, &custom_bmr)
@@ -222,21 +222,21 @@ async fn patch_nulls_and_mode_replacement_persist_independently() -> Result<(), 
     assert_eq!(updated.data.settings.weight_goal, None);
     assert_eq!(
         updated.derived.bmr().map(|value| value.to_string()),
-        Some("1200 kcal".to_owned())
+        Some("1200 kcal/day".to_owned())
     );
     assert_eq!(
         updated
             .derived
             .baseline_activity()
             .map(|value| value.to_string()),
-        Some("0 kcal".to_owned())
+        Some("0 kcal/day".to_owned())
     );
     assert_eq!(
         updated
             .derived
             .maintenance_calories()
             .map(|value| value.to_string()),
-        Some("1200 kcal".to_owned())
+        Some("1200 kcal/day".to_owned())
     );
 
     let reset: PatchProfile = serde_json::from_str(r#"{"bmr":null,"birth_date":null}"#)?;
@@ -249,7 +249,7 @@ async fn patch_nulls_and_mode_replacement_persist_independently() -> Result<(), 
     assert_eq!(reset_profile.derived.bmr(), None);
     assert_eq!(
         reset_profile.derived.baseline_activity(),
-        Some("0 kcal".parse()?)
+        Some("0 kcal/day".parse()?)
     );
     assert_eq!(reset_profile.derived.maintenance_calories(), None);
     database.close().await;
@@ -257,13 +257,12 @@ async fn patch_nulls_and_mode_replacement_persist_independently() -> Result<(), 
 }
 
 #[tokio::test]
-async fn invalid_calculated_values_do_not_reserve_profile_names() -> Result<(), Box<dyn Error>> {
-    let (_directory, database, _) = open_database(1_000).await?;
+async fn invalid_calculation_timestamps_do_not_reserve_profile_names() -> Result<(), Box<dyn Error>>
+{
+    let (_directory, database, clock) = open_database(1_000).await?;
     let user = insert_user(&database, 1).await?;
-    let maximum = "79228162514264337593543950335 kcal";
-    let input = create_input(&format!(
-        "{{\"name\":\"Overflow\",\"settings\":{{\"bmr\":{{\"mode\":\"custom\",\"value\":\"{maximum}\"}},\"baseline_activity\":{{\"mode\":\"custom\",\"value\":\"{maximum}\"}}}}}}"
-    ))?;
+    let input = create_input(r#"{"name":"Overflow"}"#)?;
+    clock.store(u64::try_from(i64::MAX)?, Ordering::SeqCst);
     assert!(matches!(
         database.create_profile(user, &input).await,
         Err(ProfileError::Calculation(_))
@@ -273,9 +272,8 @@ async fn invalid_calculated_values_do_not_reserve_profile_names() -> Result<(), 
         .fetch_one(&database.pool)
         .await?;
     assert_eq!(rows, 0);
-    database
-        .create_profile(user, &create_input(r#"{"name":"Overflow"}"#)?)
-        .await?;
+    clock.store(1_000, Ordering::SeqCst);
+    database.create_profile(user, &input).await?;
     database.close().await;
     Ok(())
 }

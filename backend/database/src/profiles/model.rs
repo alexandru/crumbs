@@ -10,9 +10,11 @@ use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::clock::UnixMillis;
-use crate::nutrition_model::{Centimetres, Kilograms, QuantityError};
+use crate::nutrition_model::{
+    Centimetres, Kcal, KcalPerCm, KcalPerKg, Kilograms, PerDay, QuantityError,
+};
 
-use super::{KilocaloriesPerDay, ProfileError};
+use super::ProfileError;
 
 /// A positive, stable profile identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -363,9 +365,9 @@ impl BodyHeight {
     ///
     /// # Errors
     ///
-    /// Returns [ProfileError::InvalidInput] if value is zero.
+    /// Returns [ProfileError::InvalidInput] if value is zero or negative.
     pub fn new(value: Centimetres) -> Result<Self, ProfileError> {
-        if value.value().is_zero() {
+        if !value.is_positive() {
             return Err(ProfileError::InvalidInput(
                 "height must be greater than zero".to_owned(),
             ));
@@ -400,9 +402,9 @@ impl BodyWeight {
     ///
     /// # Errors
     ///
-    /// Returns [ProfileError::InvalidInput] if value is zero.
+    /// Returns [ProfileError::InvalidInput] if value is zero or negative.
     pub fn new(value: Kilograms) -> Result<Self, ProfileError> {
-        if value.value().is_zero() {
+        if !value.is_positive() {
             return Err(ProfileError::InvalidInput(
                 "weight must be greater than zero".to_owned(),
             ));
@@ -430,16 +432,16 @@ impl<'de> Deserialize<'de> for BodyWeight {
 
 /// A positive custom BMR value, stored as kcal/day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CustomBmr(KilocaloriesPerDay);
+pub struct CustomBmr(PerDay<Kcal>);
 
 impl CustomBmr {
     /// Creates a positive custom BMR value.
     ///
     /// # Errors
     ///
-    /// Returns [ProfileError::InvalidInput] if value is zero.
-    pub fn new(value: KilocaloriesPerDay) -> Result<Self, ProfileError> {
-        if value.value().is_zero() {
+    /// Returns [ProfileError::InvalidInput] if value is zero or negative.
+    pub fn new(value: PerDay<Kcal>) -> Result<Self, ProfileError> {
+        if !value.is_positive() {
             return Err(ProfileError::InvalidInput(
                 "custom BMR must be greater than zero".to_owned(),
             ));
@@ -448,7 +450,7 @@ impl CustomBmr {
     }
 
     /// Returns the custom BMR value in kcal/day.
-    pub const fn value(self) -> KilocaloriesPerDay {
+    pub const fn value(self) -> PerDay<Kcal> {
         self.0
     }
 }
@@ -461,7 +463,7 @@ impl Serialize for CustomBmr {
 
 impl<'de> Deserialize<'de> for CustomBmr {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::new(KilocaloriesPerDay::deserialize(deserializer)?).map_err(D::Error::custom)
+        Self::new(PerDay::<Kcal>::deserialize(deserializer)?).map_err(D::Error::custom)
     }
 }
 
@@ -507,21 +509,16 @@ pub enum ActivityLevel {
 pub enum BaselineActivity {
     /// Calculate the addition from a preset level.
     Preset { level: ActivityLevel },
-    /// Use a fixed nonnegative kcal/day addition.
-    Custom { value: KilocaloriesPerDay },
+    /// Use a fixed kcal/day addition.
+    Custom { value: PerDay<Kcal> },
 }
 
 impl BaselineActivity {
-    fn baseline_value(
-        &self,
-        bmr: Option<KilocaloriesPerDay>,
-    ) -> Result<Option<KilocaloriesPerDay>, ProfileError> {
+    fn baseline_value(&self, bmr: Option<PerDay<Kcal>>) -> Option<PerDay<Kcal>> {
         match *self {
-            BaselineActivity::Custom { value } => Ok(Some(value)),
-            BaselineActivity::Preset { level } => {
-                let Some(bmr) = bmr else {
-                    return Ok(None);
-                };
+            Self::Custom { value } => Some(value),
+            Self::Preset { level } => {
+                let bmr = bmr?;
                 let coefficient = match level {
                     ActivityLevel::NoActivity => Decimal::ZERO,
                     ActivityLevel::Sedentary => Decimal::new(2, 1),
@@ -529,15 +526,7 @@ impl BaselineActivity {
                     ActivityLevel::ModeratelyActive => Decimal::new(5, 1),
                     ActivityLevel::VeryActive => Decimal::new(9, 1),
                 };
-                let value = bmr
-                    .value()
-                    .checked_mul(coefficient)
-                    .ok_or_else(calculation_overflow)?;
-                Ok(Some(KilocaloriesPerDay::try_new(value).map_err(|_| {
-                    ProfileError::Calculation(
-                        "baseline activity is outside the supported range".to_owned(),
-                    )
-                })?))
+                Some(bmr * coefficient)
             }
         }
     }
@@ -588,47 +577,41 @@ pub struct ProfileData {
 #[serde(deny_unknown_fields)]
 pub struct ProfileDerived {
     /// Effective BMR, or None when required inputs are absent.
-    bmr: Option<KilocaloriesPerDay>,
+    bmr: Option<PerDay<Kcal>>,
     /// Baseline activity addition, or None when it cannot be calculated.
-    baseline_activity: Option<KilocaloriesPerDay>,
+    baseline_activity: Option<PerDay<Kcal>>,
     /// Effective BMR plus baseline activity, or None if either is absent.
-    maintenance_calories: Option<KilocaloriesPerDay>,
+    maintenance_calories: Option<PerDay<Kcal>>,
 }
 
 impl ProfileDerived {
     /// Creates derived values from the effective BMR and activity addition.
-    ///
-    /// # Errors
-    ///
-    /// Returns a calculation error if the sum cannot be represented.
     pub fn from_components(
-        bmr: Option<KilocaloriesPerDay>,
-        baseline_activity: Option<KilocaloriesPerDay>,
-    ) -> Result<Self, ProfileError> {
+        bmr: Option<PerDay<Kcal>>,
+        baseline_activity: Option<PerDay<Kcal>>,
+    ) -> Self {
         let maintenance_calories = match (bmr, baseline_activity) {
-            (Some(bmr), Some(activity)) => {
-                Some(bmr.checked_add(activity).ok_or_else(calculation_overflow)?)
-            }
+            (Some(bmr), Some(activity)) => Some(bmr + activity),
             _ => None,
         };
 
-        Ok(Self {
+        Self {
             bmr,
             baseline_activity,
             maintenance_calories,
-        })
+        }
     }
 
     /// Returns the effective BMR, or None when required inputs are absent.
-    pub const fn bmr(&self) -> Option<KilocaloriesPerDay> {
+    pub const fn bmr(&self) -> Option<PerDay<Kcal>> {
         self.bmr
     }
     /// Returns the baseline activity addition, or None when it cannot be calculated.
-    pub const fn baseline_activity(&self) -> Option<KilocaloriesPerDay> {
+    pub const fn baseline_activity(&self) -> Option<PerDay<Kcal>> {
         self.baseline_activity
     }
     /// Returns the sum of BMR and activity, or None when either is absent.
-    pub const fn maintenance_calories(&self) -> Option<KilocaloriesPerDay> {
+    pub const fn maintenance_calories(&self) -> Option<PerDay<Kcal>> {
         self.maintenance_calories
     }
 
@@ -636,8 +619,8 @@ impl ProfileDerived {
     ///
     /// # Errors
     ///
-    /// Returns [`ProfileError::Calculation`] when the timestamp or a calculated
-    /// value is outside the supported range.
+    /// Returns [`ProfileError::Calculation`] if the timestamp is out of range
+    /// or the calculated BMR is negative.
     pub(crate) fn calculate(
         settings: &ProfileSettings,
         cache: &ProfileCache,
@@ -661,10 +644,10 @@ impl ProfileDerived {
         };
 
         let baseline_activity = match settings.baseline_activity {
-            Some(activity) => activity.baseline_value(bmr)?,
+            Some(activity) => activity.baseline_value(bmr),
             None => None,
         };
-        Self::from_components(bmr, baseline_activity)
+        Ok(Self::from_components(bmr, baseline_activity))
     }
 }
 
@@ -673,14 +656,13 @@ impl<'de> Deserialize<'de> for ProfileDerived {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Fields {
-            bmr: Option<KilocaloriesPerDay>,
-            baseline_activity: Option<KilocaloriesPerDay>,
-            maintenance_calories: Option<KilocaloriesPerDay>,
+            bmr: Option<PerDay<Kcal>>,
+            baseline_activity: Option<PerDay<Kcal>>,
+            maintenance_calories: Option<PerDay<Kcal>>,
         }
         let fields = Fields::deserialize(deserializer)?;
 
-        let derived = Self::from_components(fields.bmr, fields.baseline_activity)
-            .map_err(D::Error::custom)?;
+        let derived = Self::from_components(fields.bmr, fields.baseline_activity);
         if derived.maintenance_calories != fields.maintenance_calories {
             return Err(D::Error::custom(
                 "maintenance calories do not match their components",
@@ -710,7 +692,8 @@ impl Profile {
     ///
     /// # Errors
     ///
-    /// Returns a calculation error if the timestamp or a value is out of range.
+    /// Returns a calculation error if the timestamp is out of range
+    /// or the calculated BMR is negative.
     pub(crate) fn from_data(
         id: ProfileId,
         name: ProfileName,
@@ -1016,36 +999,21 @@ fn calculate_bmr(
     height: BodyHeight,
     age: AgeYears,
     sex: Sex,
-) -> Result<KilocaloriesPerDay, ProfileError> {
-    let mass = weight
-        .value()
-        .value()
-        .checked_mul(Decimal::from(10))
-        .ok_or_else(calculation_overflow)?;
-    let height_component = height
-        .value()
-        .value()
-        .checked_mul(Decimal::new(625, 2))
-        .ok_or_else(calculation_overflow)?;
-    let age_component = Decimal::from(age.0)
-        .checked_mul(Decimal::from(5))
-        .ok_or_else(calculation_overflow)?;
+) -> Result<PerDay<Kcal>, ProfileError> {
+    let mass = KcalPerKg::from(10) * weight.value();
+    let height_component = KcalPerCm::from(Decimal::new(625, 2)) * height.value();
+    let age_component = Kcal::from(5) * Decimal::from(age.0);
     let constant = match sex {
-        Sex::Male => Decimal::from(5),
-        Sex::Female => Decimal::from(-161),
+        Sex::Male => Kcal::from(5),
+        Sex::Female => Kcal::from(-161),
     };
-    let value = mass
-        .checked_add(height_component)
-        .and_then(|sum| sum.checked_sub(age_component))
-        .and_then(|sum| sum.checked_add(constant))
-        .ok_or_else(calculation_overflow)?;
-    KilocaloriesPerDay::try_new(value).map_err(|_| {
-        ProfileError::Calculation("calculated BMR is outside the supported range".to_owned())
-    })
-}
-
-fn calculation_overflow() -> ProfileError {
-    ProfileError::Calculation("calculated value is outside the supported range".to_owned())
+    let result = PerDay::<Kcal>::new(mass + height_component - age_component + constant);
+    if result.is_negative() {
+        return Err(ProfileError::Calculation(
+            "calculated BMR is outside the supported range".to_owned(),
+        ));
+    }
+    Ok(result)
 }
 
 fn patched_optional<T: Copy>(current: Option<T>, patch: &NullablePatch<T>) -> Option<T> {

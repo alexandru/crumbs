@@ -94,7 +94,7 @@ pub struct ServingSize {
 impl ServingSize {
     /// Creates a named serving with a positive mass or volume.
     pub fn new(name: ServingName, quantity: MeasuredQuantity) -> Result<Self, QuantityError> {
-        if quantity.value().is_zero() {
+        if !quantity.is_positive() {
             return Err(QuantityError::NonPositive);
         }
         Ok(Self { name, quantity })

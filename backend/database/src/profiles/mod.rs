@@ -1,12 +1,10 @@
 //! Account-owned personal profiles and calculated calorie values.
 
-mod energy;
 mod error;
 mod model;
 mod sqlite;
 mod store;
 
-pub use energy::KilocaloriesPerDay;
 pub use error::ProfileError;
 pub use model::{
     ActivityLevel, BaselineActivity, BirthDate, BirthDatePrecision, BmrPatch, BmrSetting,
