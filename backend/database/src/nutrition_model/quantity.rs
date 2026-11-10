@@ -271,13 +271,6 @@ macro_rules! measurement {
             }
         }
 
-        impl std::ops::Div<Decimal> for $name {
-            type Output = Self;
-            fn div(self, other: Decimal) -> Self {
-                Self(self.0 / other)
-            }
-        }
-
         impl std::ops::Neg for $name {
             type Output = Self;
             fn neg(self) -> Self {
@@ -513,15 +506,6 @@ where
     type Output = Self;
     fn mul(self, other: Scalar) -> Self {
         Self(self.0 * other)
-    }
-}
-impl<T, Scalar> std::ops::Div<Scalar> for PerDay<T>
-where
-    T: std::ops::Div<Scalar, Output = T>,
-{
-    type Output = Self;
-    fn div(self, other: Scalar) -> Self {
-        Self(self.0 / other)
     }
 }
 
