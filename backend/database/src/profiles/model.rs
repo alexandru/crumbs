@@ -584,10 +584,6 @@ pub struct ProfileData {
 }
 
 /// Calorie values calculated from settings and cache at read time.
-///
-/// Calculations use checked fixed-point decimal arithmetic. Precision
-/// reduction uses midpoint rounding to nearest-even, and overflow is reported
-/// as [ProfileError::Calculation].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileDerived {

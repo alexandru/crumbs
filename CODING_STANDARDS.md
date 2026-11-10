@@ -12,7 +12,7 @@ Domain types MUST make illegal states unrepresentable. Code MUST parse external 
 
 All units of measurement MUST use distinct semantic newtypes (e.g. `Grams`, `Milligrams`, `Kilocalories`, `Kilojoules`), not bare primitives or type aliases. Measurement types MUST keep their representation private so callers cannot construct invalid quantities or mix units implicitly. Unit conversions MUST be explicit and typed.
 
-Nutrition quantities and arithmetic MUST use fixed-point decimal representations. Parsing, conversion, storage, and serialization MUST NOT pass these quantities through binary floating-point values. Operations that require rounding MUST use an explicit, documented rounding policy.
+Nutrition quantities and arithmetic MUST use fixed-point decimal representations. Parsing, conversion, storage, and serialization MUST NOT pass these quantities through binary floating-point values.
 
 ## Enum payloads
 
