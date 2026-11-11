@@ -164,17 +164,7 @@ impl ProfileLogs for Database {
             return Ok(None);
         };
 
-        let row = sqlx::query_as::<_, ProfileLogRow>(
-            "SELECT id, profile_id, day, time, data_json
-             FROM profile_logs WHERE profile_id = ? AND id = ?",
-        )
-        .bind(profile.get())
-        .bind(id.get())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(ProfileLogError::storage)?;
-
-        let Some(row) = row else {
+        let Some(current) = owned_profile.load_log(&mut transaction, id).await? else {
             transaction
                 .commit()
                 .await
@@ -182,22 +172,8 @@ impl ProfileLogs for Database {
             return Ok(None);
         };
 
-        let current = row.into_log()?;
-        let day = match &patch.day {
-            crate::profiles::Patch::Unchanged => current.day,
-            crate::profiles::Patch::Set(day) => *day,
-        };
-        let time = match &patch.time {
-            crate::profiles::Patch::Unchanged => current.time,
-            crate::profiles::Patch::Set(time) => *time,
-        };
-        let data = match &patch.entry {
-            crate::profiles::Patch::Unchanged => current.data,
-            crate::profiles::Patch::Set(entry) => current.data.replace_same_variant(*entry),
-        };
-        let changed = day != current.day || time != current.time || data != current.data;
-
-        if !changed {
+        let updated = current.patched(patch);
+        if updated == current {
             transaction
                 .commit()
                 .await
@@ -211,9 +187,9 @@ impl ProfileLogs for Database {
              SET day = ?, time = ?, data_json = ?, updated_at = ?
              WHERE profile_id = ? AND id = ?",
         )
-        .bind(day.to_string())
-        .bind(time.to_string())
-        .bind(encode_data(&data)?)
+        .bind(updated.day.to_string())
+        .bind(updated.time.to_string())
+        .bind(encode_data(&updated.data)?)
         .bind(now)
         .bind(profile.get())
         .bind(id.get())
@@ -230,13 +206,7 @@ impl ProfileLogs for Database {
             .await
             .map_err(ProfileLogError::storage)?;
 
-        Ok(Some(ProfileLog {
-            id,
-            profile_id: profile,
-            day,
-            time,
-            data,
-        }))
+        Ok(Some(updated))
     }
 
     async fn delete_profile_log(
@@ -255,25 +225,17 @@ impl ProfileLogs for Database {
             return Ok(false);
         };
 
-        let row = sqlx::query_as::<_, ProfileLogRow>(
-            "SELECT id, profile_id, day, time, data_json
-             FROM profile_logs WHERE profile_id = ? AND id = ?",
-        )
-        .bind(profile.get())
-        .bind(id.get())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(ProfileLogError::storage)?;
-
-        let Some(row) = row else {
+        if owned_profile
+            .load_log(&mut transaction, id)
+            .await?
+            .is_none()
+        {
             transaction
                 .commit()
                 .await
                 .map_err(ProfileLogError::storage)?;
             return Ok(false);
-        };
-
-        row.into_log()?;
+        }
 
         sqlx::query("DELETE FROM profile_logs WHERE profile_id = ? AND id = ?")
             .bind(profile.get())
@@ -328,6 +290,24 @@ impl OwnedProfile {
                 })
             })
             .transpose()
+    }
+
+    async fn load_log(
+        &self,
+        transaction: &mut sqlx::Transaction<'_, Sqlite>,
+        id: ProfileLogId,
+    ) -> Result<Option<ProfileLog>, ProfileLogError> {
+        let row = sqlx::query_as::<_, ProfileLogRow>(
+            "SELECT id, profile_id, day, time, data_json
+             FROM profile_logs WHERE profile_id = ? AND id = ?",
+        )
+        .bind(self.id.get())
+        .bind(id.get())
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(ProfileLogError::storage)?;
+
+        row.map(ProfileLogRow::into_log).transpose()
     }
 
     async fn update_current_weight_if_changed(

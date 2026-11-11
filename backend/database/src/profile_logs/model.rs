@@ -441,6 +441,22 @@ pub struct ProfileLog {
     pub data: ProfileLogData,
 }
 
+impl ProfileLog {
+    pub(crate) fn patched(mut self, patch: &PatchLog) -> Self {
+        if let Patch::Set(day) = patch.day {
+            self.day = day;
+        }
+        if let Patch::Set(time) = patch.time {
+            self.time = time;
+        }
+        if let Patch::Set(entry) = patch.entry {
+            self.data = self.data.replace_same_variant(entry);
+        }
+
+        self
+    }
+}
+
 /// A fixed page of logs ordered by descending ID.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
