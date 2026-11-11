@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::foods::{FoodDescription, FoodId};
 use crate::nutrition_model::{
     ConsumedNutrition, Grams, Kilograms, Litres, Mass, MeasuredQuantity, Micrograms, Milligrams,
-    Millilitres, QuantityError, ServingName, ServingSize, Volume,
+    Millilitres, ServingName, ServingSize, Volume,
 };
 use crate::profiles::{BodyWeight, Patch, ProfileId};
 
@@ -314,14 +314,13 @@ impl MassUnit {
         }
     }
 
-    fn quantity(self) -> Result<MeasuredQuantity, QuantityError> {
-        let one = Decimal::ONE;
-        Ok(MeasuredQuantity::Mass(match self {
-            Self::Kilograms => Mass::Kilograms(Kilograms::try_new(one)?),
-            Self::Grams => Mass::Grams(Grams::try_new(one)?),
-            Self::Milligrams => Mass::Milligrams(Milligrams::try_new(one)?),
-            Self::Micrograms => Mass::Micrograms(Micrograms::try_new(one)?),
-        }))
+    fn quantity(self) -> MeasuredQuantity {
+        MeasuredQuantity::Mass(match self {
+            Self::Kilograms => Mass::Kilograms(Kilograms::from(1)),
+            Self::Grams => Mass::Grams(Grams::from(1)),
+            Self::Milligrams => Mass::Milligrams(Milligrams::from(1)),
+            Self::Micrograms => Mass::Micrograms(Micrograms::from(1)),
+        })
     }
 }
 
@@ -342,12 +341,11 @@ impl VolumeUnit {
         }
     }
 
-    fn quantity(self) -> Result<MeasuredQuantity, QuantityError> {
-        let one = Decimal::ONE;
-        Ok(MeasuredQuantity::Volume(match self {
-            Self::Litres => Volume::Litres(Litres::try_new(one)?),
-            Self::Millilitres => Volume::Millilitres(Millilitres::try_new(one)?),
-        }))
+    fn quantity(self) -> MeasuredQuantity {
+        MeasuredQuantity::Volume(match self {
+            Self::Litres => Volume::Litres(Litres::from(1)),
+            Self::Millilitres => Volume::Millilitres(Millilitres::from(1)),
+        })
     }
 }
 
@@ -369,7 +367,7 @@ impl MeasurementUnit {
         }
     }
 
-    pub(crate) fn quantity(self) -> Result<MeasuredQuantity, QuantityError> {
+    pub(crate) fn quantity(self) -> MeasuredQuantity {
         match self {
             Self::Mass(unit) => unit.quantity(),
             Self::Volume(unit) => unit.quantity(),
@@ -634,7 +632,7 @@ impl FoodLogEntry {
         if let Some(food_id) = food_id {
             validate_food_id(food_id)?;
         }
-        if quantity.value().is_zero() {
+        if !quantity.is_positive() {
             return Err(invalid_food("consumed quantity must be positive"));
         }
         if description.trim().is_empty() {

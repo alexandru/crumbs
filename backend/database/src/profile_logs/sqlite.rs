@@ -8,8 +8,8 @@ use crate::clock::UnixMillis;
 use crate::foods::FoodDescription;
 use crate::identity::UserId;
 use crate::nutrition_model::{
-    ConsumedNutrition, FoodData, Kilocalories, MeasuredQuantity, NutritionBasis, QuantityError,
-    Reported, ServingSize,
+    ConsumedNutrition, FoodData, Kcal, MeasuredQuantity, NutritionBasis, QuantityError, Reported,
+    ServingSize,
 };
 use crate::profiles::{IanaTimezone, ProfileData, ProfileId};
 use crate::runtime::Database;
@@ -32,6 +32,7 @@ impl ProfileLogs for Database {
         input: &CreateLog,
     ) -> Result<Option<ProfileLog>, ProfileLogError> {
         let mut transaction = begin_immediate(self).await?;
+
         let Some(mut profile_data) = owned_profile_data(&mut transaction, user, profile).await?
         else {
             transaction
@@ -40,6 +41,7 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(None);
         };
+
         let now = self.clock.now().map_err(ProfileLogError::clock)?;
         let time = match input.time {
             Some(time) => time,
@@ -61,6 +63,7 @@ impl ProfileLogs for Database {
         .fetch_one(&mut *transaction)
         .await
         .map_err(ProfileLogError::storage)?;
+
         let id = ProfileLogId::new(id).map_err(|_| ProfileLogError::InvalidStoredData)?;
         if is_weight(&data) {
             update_current_weight_if_changed(
@@ -72,6 +75,7 @@ impl ProfileLogs for Database {
             )
             .await?;
         }
+
         transaction
             .commit()
             .await
@@ -159,6 +163,7 @@ impl ProfileLogs for Database {
         patch: &PatchLog,
     ) -> Result<Option<ProfileLog>, ProfileLogError> {
         let mut transaction = begin_immediate(self).await?;
+
         let Some(mut profile_data) = owned_profile_data(&mut transaction, user, profile).await?
         else {
             transaction
@@ -167,6 +172,7 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(None);
         };
+
         let row = sqlx::query_as::<_, ProfileLogRow>(
             "SELECT id, profile_id, day, time, data_json
              FROM profile_logs WHERE profile_id = ? AND id = ?",
@@ -176,6 +182,7 @@ impl ProfileLogs for Database {
         .fetch_optional(&mut *transaction)
         .await
         .map_err(ProfileLogError::storage)?;
+
         let Some(row) = row else {
             transaction
                 .commit()
@@ -183,6 +190,7 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(None);
         };
+
         let current = row.into_log()?;
         let updates_weight = is_weight(&current.data);
         let day = match &patch.day {
@@ -210,8 +218,10 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(Some(current));
         }
+
         let data = replacement.unwrap_or(current.data);
         let now = self.clock.now().map_err(ProfileLogError::clock)?;
+
         sqlx::query(
             "UPDATE profile_logs
              SET day = ?, time = ?, data_json = ?, updated_at = ?
@@ -236,6 +246,7 @@ impl ProfileLogs for Database {
             )
             .await?;
         }
+
         transaction
             .commit()
             .await
@@ -256,6 +267,7 @@ impl ProfileLogs for Database {
         id: ProfileLogId,
     ) -> Result<bool, ProfileLogError> {
         let mut transaction = begin_immediate(self).await?;
+
         let Some(mut profile_data) = owned_profile_data(&mut transaction, user, profile).await?
         else {
             transaction
@@ -264,6 +276,7 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(false);
         };
+
         let row = sqlx::query_as::<_, ProfileLogRow>(
             "SELECT id, profile_id, day, time, data_json
              FROM profile_logs WHERE profile_id = ? AND id = ?",
@@ -273,6 +286,7 @@ impl ProfileLogs for Database {
         .fetch_optional(&mut *transaction)
         .await
         .map_err(ProfileLogError::storage)?;
+
         let Some(row) = row else {
             transaction
                 .commit()
@@ -280,13 +294,16 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(false);
         };
+
         let log = row.into_log()?;
+
         sqlx::query("DELETE FROM profile_logs WHERE profile_id = ? AND id = ?")
             .bind(profile.get())
             .bind(id.get())
             .execute(&mut *transaction)
             .await
             .map_err(ProfileLogError::storage)?;
+
         if is_weight(&log.data) {
             let now = self.clock.now().map_err(ProfileLogError::clock)?;
             update_current_weight_if_changed(
@@ -298,6 +315,7 @@ impl ProfileLogs for Database {
             )
             .await?;
         }
+
         transaction
             .commit()
             .await
@@ -410,7 +428,7 @@ async fn resolve_food_input(
     let scaled_energy = source_energy
         .checked_scale(factor)
         .map_err(food_calculation_error)?;
-    let calories = Reported::<Kilocalories>::new(
+    let calories = Reported::<Kcal>::new(
         scaled_energy.qualifier(),
         scaled_energy
             .amount()
@@ -440,11 +458,8 @@ fn resolve_serving(
     selector: &ServingSelector,
 ) -> Result<ServingSize, ProfileLogError> {
     match selector {
-        ServingSelector::Unit(unit) => ServingSize::new(
-            unit.as_str().to_owned(),
-            unit.quantity().map_err(food_calculation_error)?,
-        )
-        .map_err(food_calculation_error),
+        ServingSelector::Unit(unit) => ServingSize::new(unit.as_str().to_owned(), unit.quantity())
+            .map_err(food_calculation_error),
         ServingSelector::Named(name) => {
             let mut matches = servings
                 .into_iter()

@@ -10,7 +10,7 @@ use crumbs_database::identity::{
     OAuthClient, OAuthScope, OAuthStore, PasswordHash, PendingAuthorization, TokenPair, Username,
     Users,
 };
-use crumbs_database::nutrition_model::{Kilocalories, Mass, Reported};
+use crumbs_database::nutrition_model::{Kcal, Mass, Reported};
 use crumbs_database::profile_logs::ProfileLogError;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -137,8 +137,8 @@ pub(super) fn assert_calories(actual: &Value, expected: &str) -> Result<(), Box<
     let actual = actual
         .as_str()
         .ok_or("calorie value is not serialized as a string")?
-        .parse::<Reported<Kilocalories>>()?;
-    let expected = expected.parse::<Reported<Kilocalories>>()?;
+        .parse::<Reported<Kcal>>()?;
+    let expected = expected.parse::<Reported<Kcal>>()?;
     if actual != expected {
         return Err(format!("expected {expected}, received {actual}").into());
     }

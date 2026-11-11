@@ -311,7 +311,7 @@ fn serving_sizes_are_positive_measured_quantities_and_keep_servings_separate_fro
     let zero_volume = MeasuredQuantity::from_str("0 ml")?;
     assert!(zero_mass.value().is_zero());
     assert!(zero_volume.value().is_zero());
-    for input in ["-1 g", "1 kcal", "~ 1 g", "1 lb"] {
+    for input in ["1 kcal", "~ 1 g", "1 lb"] {
         assert!(MeasuredQuantity::from_str(input).is_err());
     }
     assert!(MeasuredQuantity::from_str("1 g").is_ok());
@@ -432,5 +432,16 @@ fn representative_open_food_facts_values_fit_the_shared_model() -> Result<(), Bo
         Some("0.55 µg")
     );
     assert_eq!(beverage.serving_sizes.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn serving_sizes_reject_negative_mass_and_volume() -> Result<(), Box<dyn Error>> {
+    for quantity in ["-1 g", "-1 ml"] {
+        let measured = MeasuredQuantity::from_str(quantity)?;
+        assert!(ServingSize::new("negative".to_owned(), measured).is_err());
+        let input = json!({"name": "negative", "quantity": quantity});
+        assert!(serde_json::from_value::<ServingSize>(input).is_err());
+    }
     Ok(())
 }

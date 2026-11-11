@@ -4,17 +4,12 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 use crate::oauth::tests::{TEST_MCP_ACCESS_TOKEN, TEST_MCP_WRITE_ACCESS_TOKEN};
-use crate::profiles::tests::profile_error_cases;
-use crate::tests::{TestApplication, mcp_call_router_with_token, mcp_initialize, protocol_request};
-
-use crate::profiles::tests::routes::{seed_other_mcp_user_access, seed_profile_account};
-
-use super::profile_tool_error;
+use crate::tests::{TestApplication, mcp_call_router_with_token};
 
 #[test]
 fn profile_tool_errors_preserve_structured_json_and_redact_sources() -> Result<(), Box<dyn Error>> {
-    for case in profile_error_cases() {
-        let result = profile_tool_error(case.error);
+    for case in crate::profiles::tests::profile_error_cases() {
+        let result = super::profile_tool_error(case.error);
         let serialized = serde_json::to_value(result)?;
 
         assert_eq!(serialized["isError"], true);
@@ -34,11 +29,11 @@ fn profile_tool_errors_preserve_structured_json_and_redact_sources() -> Result<(
 async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity()
 -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_account(&app).await?;
-    mcp_initialize(&app).await?;
+    crate::profiles::tests::routes::seed_profile_account(&app).await?;
+    crate::tests::mcp_initialize(&app).await?;
 
     let tools_response = app
-        .request(protocol_request(json!({
+        .request(crate::tests::protocol_request(json!({
             "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}
         }))?)
         .await?;
@@ -123,7 +118,7 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
             "profile": {
                 "name": "Amalia",
                 "settings": {
-                    "bmr": {"mode":"custom", "value":"1650 kcal"},
+                    "bmr": {"mode":"custom", "value":"1650 kcal/day"},
                     "baseline_activity": {"mode":"preset", "level":"sedentary"}
                 }
             }
@@ -136,9 +131,12 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
     let profile = &created.json["result"]["structuredContent"];
     let profile_id = profile["id"].as_i64().ok_or("profile has no ID")?;
     assert_eq!(profile["data"]["settings"]["bmr"]["mode"], "custom");
-    assert_eq!(profile["derived"]["bmr"], "1650 kcal");
-    assert_eq!(profile["derived"]["baseline_activity"], "330.0 kcal");
-    assert_eq!(profile["derived"]["maintenance_calories"], "1980.0 kcal");
+    assert_eq!(profile["derived"]["bmr"], "1650 kcal/day");
+    assert_eq!(profile["derived"]["baseline_activity"], "330.0 kcal/day");
+    assert_eq!(
+        profile["derived"]["maintenance_calories"],
+        "1980.0 kcal/day"
+    );
 
     let fetched = mcp_call_router_with_token(
         &app.router,
@@ -165,7 +163,7 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
         "64 kg"
     );
 
-    let other_token = seed_other_mcp_user_access(&app).await?;
+    let other_token = crate::profiles::tests::routes::seed_other_mcp_user_access(&app).await?;
     let hidden = mcp_call_router_with_token(
         &app.router,
         7,

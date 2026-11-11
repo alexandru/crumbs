@@ -3,9 +3,7 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use super::quantity::{
-    Energy, Kilocalories, Mass, MeasuredQuantity, Measurement, QuantityError, Reported,
-};
+use super::quantity::{Energy, Kcal, Mass, MeasuredQuantity, Measurement, QuantityError, Reported};
 
 /// Imported food details. Missing nutrition does not imply zero nutrients.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,7 +81,7 @@ impl Nutrients {
 /// Consumed nutrition totals, separate from source nutrition per 100 units.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsumedNutrition {
-    pub calories: Reported<Kilocalories>,
+    pub calories: Reported<Kcal>,
     #[serde(flatten)]
     pub nutrients: Nutrients,
 }
@@ -127,7 +125,7 @@ pub struct ServingSize {
 impl ServingSize {
     /// Creates a named serving with a positive mass or volume.
     pub fn new(name: ServingName, quantity: MeasuredQuantity) -> Result<Self, QuantityError> {
-        if quantity.value().is_zero() {
+        if !quantity.is_positive() {
             return Err(QuantityError::NonPositive);
         }
         Ok(Self { name, quantity })

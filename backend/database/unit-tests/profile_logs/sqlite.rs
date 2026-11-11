@@ -523,7 +523,7 @@ async fn cache_recalculation_updates_calculated_bmr_and_preserves_custom_setting
         }),
     )
     .await?;
-    assert_eq!(calculated.derived.bmr, None);
+    assert_eq!(calculated.derived.bmr(), None);
     create_weight_log(
         &database,
         user,
@@ -537,8 +537,8 @@ async fn cache_recalculation_updates_calculated_bmr_and_preserves_custom_setting
         get_profile(&database, user, calculated.id)
             .await?
             .derived
-            .bmr
-            .map(|value| value.value()),
+            .bmr()
+            .map(|value| value.amount().value()),
         Some(Decimal::new(16175, 1))
     );
 
@@ -556,7 +556,10 @@ async fn cache_recalculation_updates_calculated_bmr_and_preserves_custom_setting
     let calculated_after = get_profile(&database, user, calculated.id).await?;
     assert_eq!(current_weight(&calculated_after), Some(Decimal::from(75)));
     assert_eq!(
-        calculated_after.derived.bmr.map(|value| value.value()),
+        calculated_after
+            .derived
+            .bmr()
+            .map(|value| value.amount().value()),
         Some(Decimal::new(16675, 1))
     );
     assert_eq!(
@@ -570,8 +573,8 @@ async fn cache_recalculation_updates_calculated_bmr_and_preserves_custom_setting
         serde_json::json!({
             "name":"Custom",
             "settings": {
-                "bmr":{"mode":"custom","value":"1500 kcal"},
-                "baseline_activity":{"mode":"custom","value":"100 kcal"}
+                "bmr":{"mode":"custom","value":"1500 kcal/day"},
+                "baseline_activity":{"mode":"custom","value":"100 kcal/day"}
             }
         }),
     )
@@ -588,14 +591,17 @@ async fn cache_recalculation_updates_calculated_bmr_and_preserves_custom_setting
     let custom_after = get_profile(&database, user, custom.id).await?;
     assert_eq!(current_weight(&custom_after), Some(Decimal::from(80)));
     assert_eq!(
-        custom_after.derived.bmr.map(|value| value.value()),
+        custom_after
+            .derived
+            .bmr()
+            .map(|value| value.amount().value()),
         Some(Decimal::from(1500))
     );
     assert_eq!(
         custom_after
             .derived
-            .maintenance_calories
-            .map(|value| value.value()),
+            .maintenance_calories()
+            .map(|value| value.amount().value()),
         Some(Decimal::from(1600))
     );
     assert_eq!(custom_after.data.settings.bmr, custom.data.settings.bmr);

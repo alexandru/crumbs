@@ -1,4 +1,6 @@
+use std::borrow::Cow;
 use std::fmt;
+use std::marker::PhantomData;
 use std::str::FromStr;
 
 use rust_decimal::Decimal;
@@ -33,10 +35,28 @@ pub enum Qualifier {
     Approximate,
 }
 
-/// A nonnegative decimal measurement in its retained source unit.
+/// A decimal measurement in its retained source unit.
 pub trait Measurement: sealed::Sealed + Copy + fmt::Display {
     /// Returns the decimal value in the retained source unit.
     fn value(self) -> Decimal;
+
+    /// Returns the unit symbol for this measurement.
+    fn unit_symbol(self) -> Cow<'static, str>;
+
+    /// Returns whether the measurement is zero.
+    fn is_zero(self) -> bool {
+        self.value().is_zero()
+    }
+
+    /// Returns whether this measurement is negative.
+    fn is_negative(self) -> bool {
+        self.value().is_sign_negative() && !self.value().is_zero()
+    }
+
+    /// Returns whether this measurement is positive.
+    fn is_positive(self) -> bool {
+        self.value().is_sign_positive() && !self.value().is_zero()
+    }
 
     /// Parses a decimal value and its unit without first formatting them together.
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError>;
@@ -49,8 +69,14 @@ pub trait Measurement: sealed::Sealed + Copy + fmt::Display {
     /// # Errors
     ///
     /// Returns [`QuantityError::Arithmetic`] if the result is outside the representable
-    /// decimal range, or [`QuantityError::Negative`] if the result is negative.
+    /// decimal range.
     fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError>;
+}
+
+/// A measurement type with one fixed unit symbol.
+pub trait FixedUnit: Measurement {
+    /// The symbol for this unit.
+    const SYMBOL: &'static str;
 }
 
 /// A measured nutrient amount with its source-supplied qualification.
@@ -63,7 +89,10 @@ pub struct Reported<T: Measurement> {
 impl<T: Measurement> Reported<T> {
     /// Creates a reported amount, rejecting an impossible strict upper bound.
     pub fn new(qualifier: Qualifier, amount: T) -> Result<Self, QuantityError> {
-        if qualifier == Qualifier::LessThan && amount.value().is_zero() {
+        if amount.is_negative() {
+            return Err(QuantityError::Negative);
+        }
+        if qualifier == Qualifier::LessThan && amount.is_zero() {
             return Err(QuantityError::ZeroStrictUpperBound);
         }
         Ok(Self { qualifier, amount })
@@ -136,20 +165,56 @@ impl<'de, T: Measurement> Deserialize<'de> for Reported<T> {
     }
 }
 
+macro_rules! unit_numeric_conversions {
+    ($name:ident; $($number:ty),+ $(,)?) => {
+        impl From<Decimal> for $name {
+            fn from(value: Decimal) -> Self { Self::new(value) }
+        }
+        $(impl From<$number> for $name {
+            fn from(value: $number) -> Self { Self::new(Decimal::from(value)) }
+        })+
+    };
+}
+
+macro_rules! ratio_integer_conversions {
+    ($($number:ty),+ $(,)?) => {
+        $(impl<N: From<$number>, D> From<$number> for Ratio<N, D> {
+            fn from(value: $number) -> Self { Self::new(N::from(value)) }
+        })+
+    };
+}
+
 // Each concrete unit owns its invariant; dimension enums cannot contain raw decimals.
 macro_rules! measurement {
     ($name:ident, $unit:literal) => {
-        #[doc = concat!("A nonnegative, exact decimal quantity in ", $unit, ".")]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[doc = concat!("An exact signed decimal quantity in ", $unit, ".")]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
         pub struct $name(Decimal);
 
+        unit_numeric_conversions!($name; i8, i16, i32, i64, u8, u16, u32, u64);
+
         impl $name {
-            /// Creates a nonnegative quantity from an exact fixed-point value.
-            pub fn try_new(value: Decimal) -> Result<Self, QuantityError> {
-                if value.is_sign_negative() && !value.is_zero() {
-                    return Err(QuantityError::Negative);
-                }
-                Ok(Self(value))
+            /// Zero in this unit.
+            pub const ZERO: Self = Self(Decimal::ZERO);
+
+            /// Creates a quantity from an exact fixed-point value.
+            pub const fn new(value: Decimal) -> Self {
+                Self(value)
+            }
+
+            /// Returns whether the value is zero.
+            pub fn is_zero(self) -> bool {
+                self.0.is_zero()
+            }
+
+            /// Returns whether the value is negative.
+            pub fn is_negative(self) -> bool {
+                self.0.is_sign_negative() && !self.is_zero()
+            }
+
+            /// Returns whether the value is positive.
+            pub fn is_positive(self) -> bool {
+                self.0.is_sign_positive() && !self.is_zero()
             }
 
             /// Returns the exact fixed-point value in this unit.
@@ -169,20 +234,28 @@ macro_rules! measurement {
 
         impl sealed::Sealed for $name {}
 
+        impl FixedUnit for $name {
+            const SYMBOL: &'static str = $unit;
+        }
+
         impl Measurement for $name {
             fn value(self) -> Decimal {
                 self.0
+            }
+
+            fn unit_symbol(self) -> Cow<'static, str> {
+                Cow::Borrowed(Self::SYMBOL)
             }
 
             fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
                 if unit != $unit {
                     return Err(QuantityError::Unit(unit.to_owned()));
                 }
-                Self::try_new(parse_decimal(value)?)
+                Ok(Self::new(parse_decimal(value)?))
             }
 
             fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
-                Self::try_new(checked_mul(self.0, factor)?)
+                Ok(Self::new(checked_mul(self.0, factor)?))
             }
         }
 
@@ -205,6 +278,33 @@ macro_rules! measurement {
                     .map_err(serde::de::Error::custom)
             }
         }
+        impl std::ops::Add for $name {
+            type Output = Self;
+            fn add(self, other: Self) -> Self {
+                Self(self.0 + other.0)
+            }
+        }
+
+        impl std::ops::Sub for $name {
+            type Output = Self;
+            fn sub(self, other: Self) -> Self {
+                Self(self.0 - other.0)
+            }
+        }
+
+        impl std::ops::Mul<Decimal> for $name {
+            type Output = Self;
+            fn mul(self, other: Decimal) -> Self {
+                Self(self.0 * other)
+            }
+        }
+
+        impl std::ops::Neg for $name {
+            type Output = Self;
+            fn neg(self) -> Self {
+                Self(-self.0)
+            }
+        }
     };
 }
 
@@ -213,10 +313,237 @@ measurement!(Milligrams, "mg");
 measurement!(Micrograms, "µg");
 measurement!(Millilitres, "ml");
 measurement!(Litres, "l");
-measurement!(Kilocalories, "kcal");
+measurement!(Kcal, "kcal");
 measurement!(Kilojoules, "kJ");
 measurement!(Centimetres, "cm");
 measurement!(Kilograms, "kg");
+
+/// A numerator quantity per one unit of the denominator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Ratio<N, D>(N, PhantomData<D>);
+
+impl<N, D> Ratio<N, D> {
+    /// Creates a ratio from the numerator quantity.
+    pub const fn new(amount: N) -> Self {
+        Self(amount, PhantomData)
+    }
+
+    /// Returns the numerator quantity.
+    pub fn amount(self) -> N {
+        self.0
+    }
+}
+
+impl<N: From<Decimal>, D> From<Decimal> for Ratio<N, D> {
+    fn from(value: Decimal) -> Self {
+        Self::new(N::from(value))
+    }
+}
+
+ratio_integer_conversions!(i8, i16, i32, i64, u8, u16, u32, u64);
+
+impl<N: Measurement, D: FixedUnit> sealed::Sealed for Ratio<N, D> {}
+impl<N: Measurement, D: FixedUnit> Measurement for Ratio<N, D> {
+    fn value(self) -> Decimal {
+        self.0.value()
+    }
+    fn unit_symbol(self) -> Cow<'static, str> {
+        Cow::Owned(format!("{}/{}", self.0.unit_symbol(), D::SYMBOL))
+    }
+    fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
+        let (numerator, denominator) = unit
+            .rsplit_once('/')
+            .ok_or_else(|| QuantityError::Unit(unit.to_owned()))?;
+        if denominator != D::SYMBOL {
+            return Err(QuantityError::Unit(unit.to_owned()));
+        }
+        N::parse_with_unit(value, numerator).map(Self::new)
+    }
+    fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
+        self.0.checked_scale(factor).map(Self::new)
+    }
+}
+impl<N: Measurement, D: FixedUnit> FromStr for Ratio<N, D> {
+    type Err = QuantityError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (number, unit) = split_quantity(value)?;
+        Self::parse_with_unit(number, unit)
+    }
+}
+impl<N: Measurement, D: FixedUnit> fmt::Display for Ratio<N, D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {}/{}",
+            self.0.value(),
+            self.0.unit_symbol(),
+            D::SYMBOL
+        )
+    }
+}
+impl<N: Measurement, D: FixedUnit> Serialize for Ratio<N, D> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+impl<'de, N: Measurement, D: FixedUnit> Deserialize<'de> for Ratio<N, D> {
+    fn deserialize<Ds: Deserializer<'de>>(deserializer: Ds) -> Result<Self, Ds::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+impl<N, D: FixedUnit> std::ops::Mul<D> for Ratio<N, D>
+where
+    N: std::ops::Mul<Decimal, Output = N>,
+{
+    type Output = N;
+    fn mul(self, denominator: D) -> N {
+        self.0 * denominator.value()
+    }
+}
+impl<N: std::ops::Add<Output = N>, D> std::ops::Add for Ratio<N, D> {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
+        Self::new(self.0 + other.0)
+    }
+}
+impl<N: std::ops::Sub<Output = N>, D> std::ops::Sub for Ratio<N, D> {
+    type Output = Self;
+    fn sub(self, other: Self) -> Self {
+        Self::new(self.0 - other.0)
+    }
+}
+impl<N: std::ops::Neg<Output = N>, D> std::ops::Neg for Ratio<N, D> {
+    type Output = Self;
+    fn neg(self) -> Self {
+        Self::new(-self.0)
+    }
+}
+
+/// A quantity expressed per day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PerDay<T>(T);
+
+impl<T> PerDay<T> {
+    /// Creates a daily rate from its daily amount.
+    pub const fn new(value: T) -> Self {
+        Self(value)
+    }
+    /// Returns the amount for one day.
+    pub fn amount(self) -> T {
+        self.0
+    }
+}
+
+impl<T: Measurement> PerDay<T> {
+    /// Returns whether the amount is zero.
+    pub fn is_zero(self) -> bool {
+        self.0.is_zero()
+    }
+    /// Returns whether the amount is negative.
+    pub fn is_negative(self) -> bool {
+        self.0.is_negative()
+    }
+    /// Returns whether the amount is positive.
+    pub fn is_positive(self) -> bool {
+        self.0.is_positive()
+    }
+}
+
+impl<T> From<T> for PerDay<T> {
+    fn from(value: T) -> Self {
+        Self(value)
+    }
+}
+impl<T: Measurement> sealed::Sealed for PerDay<T> {}
+
+impl<T: Measurement> Measurement for PerDay<T> {
+    fn value(self) -> Decimal {
+        self.0.value()
+    }
+
+    fn unit_symbol(self) -> Cow<'static, str> {
+        Cow::Owned(format!("{}/day", self.0.unit_symbol()))
+    }
+
+    fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
+        let base = unit
+            .strip_suffix("/day")
+            .ok_or_else(|| QuantityError::Unit(unit.to_owned()))?;
+        T::parse_with_unit(value, base).map(Self)
+    }
+
+    fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
+        self.0.checked_scale(factor).map(Self)
+    }
+}
+
+impl<T: Measurement> FromStr for PerDay<T> {
+    type Err = QuantityError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (number, unit) = split_quantity(value)?;
+        Self::parse_with_unit(number, unit)
+    }
+}
+impl<T: Measurement> fmt::Display for PerDay<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}/day", self.0.value(), self.0.unit_symbol())
+    }
+}
+
+impl<T: Measurement> Serialize for PerDay<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de, T: Measurement> Deserialize<'de> for PerDay<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+impl<T: std::ops::Add<Output = T>> std::ops::Add for PerDay<T> {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
+        Self(self.0 + other.0)
+    }
+}
+impl<T: std::ops::Add<Output = T>> std::ops::Add<T> for PerDay<T> {
+    type Output = Self;
+    fn add(self, other: T) -> Self {
+        Self(self.0 + other)
+    }
+}
+impl<T: std::ops::Sub<Output = T>> std::ops::Sub for PerDay<T> {
+    type Output = Self;
+    fn sub(self, other: Self) -> Self {
+        Self(self.0 - other.0)
+    }
+}
+impl<T: std::ops::Sub<Output = T>> std::ops::Sub<T> for PerDay<T> {
+    type Output = Self;
+    fn sub(self, other: T) -> Self {
+        Self(self.0 - other)
+    }
+}
+impl<T: std::ops::Neg<Output = T>> std::ops::Neg for PerDay<T> {
+    type Output = Self;
+    fn neg(self) -> Self {
+        Self(-self.0)
+    }
+}
+impl<T, Scalar> std::ops::Mul<Scalar> for PerDay<T>
+where
+    T: std::ops::Mul<Scalar, Output = T>,
+{
+    type Output = Self;
+    fn mul(self, other: Scalar) -> Self {
+        Self(self.0 * other)
+    }
+}
 
 /// A mass amount retaining the supplied supported unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,15 +577,16 @@ impl Mass {
     pub fn to_grams(self) -> Result<Grams, QuantityError> {
         match self {
             Self::Kilograms(value) => {
-                Grams::try_new(checked_mul(value.value(), Decimal::from(1000))?)
+                Ok(Grams::new(checked_mul(value.value(), Decimal::from(1000))?))
             }
             Self::Grams(value) => Ok(value),
             Self::Milligrams(value) => {
-                Grams::try_new(checked_div(value.value(), Decimal::from(1000))?)
+                Ok(Grams::new(checked_div(value.value(), Decimal::from(1000))?))
             }
-            Self::Micrograms(value) => {
-                Grams::try_new(checked_div(value.value(), Decimal::from(1_000_000))?)
-            }
+            Self::Micrograms(value) => Ok(Grams::new(checked_div(
+                value.value(),
+                Decimal::from(1_000_000),
+            )?)),
         }
     }
 }
@@ -270,16 +598,21 @@ impl Measurement for Mass {
         Mass::value(self)
     }
 
+    fn unit_symbol(self) -> Cow<'static, str> {
+        match self {
+            Self::Kilograms(value) => value.unit_symbol(),
+            Self::Grams(value) => value.unit_symbol(),
+            Self::Milligrams(value) => value.unit_symbol(),
+            Self::Micrograms(value) => value.unit_symbol(),
+        }
+    }
+
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
         match unit {
-            "kg" => Ok(Self::Kilograms(Kilograms::parse_with_unit(value, unit)?)),
-            "g" => Ok(Self::Grams(Grams::try_new(parse_decimal(value)?)?)),
-            "mg" => Ok(Self::Milligrams(Milligrams::try_new(parse_decimal(
-                value,
-            )?)?)),
-            "µg" => Ok(Self::Micrograms(Micrograms::try_new(parse_decimal(
-                value,
-            )?)?)),
+            "kg" => Ok(Self::Kilograms(Kilograms::new(parse_decimal(value)?))),
+            "g" => Ok(Self::Grams(Grams::new(parse_decimal(value)?))),
+            "mg" => Ok(Self::Milligrams(Milligrams::new(parse_decimal(value)?))),
+            "µg" => Ok(Self::Micrograms(Micrograms::new(parse_decimal(value)?))),
             _ => Err(QuantityError::Unit(unit.to_owned())),
         }
     }
@@ -317,7 +650,7 @@ impl fmt::Display for Mass {
 /// Energy retaining the selected source unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Energy {
-    Kilocalories(Kilocalories),
+    Kcal(Kcal),
     Kilojoules(Kilojoules),
 }
 
@@ -325,7 +658,7 @@ impl Energy {
     /// Returns the decimal value in the retained source unit.
     pub fn value(self) -> Decimal {
         match self {
-            Self::Kilocalories(value) => value.value(),
+            Self::Kcal(value) => value.value(),
             Self::Kilojoules(value) => value.value(),
         }
     }
@@ -339,12 +672,13 @@ impl Energy {
     ///
     /// Returns [`QuantityError::Arithmetic`] if the result is outside the representable
     /// decimal range.
-    pub fn to_kilocalories(self) -> Result<Kilocalories, QuantityError> {
+    pub fn to_kilocalories(self) -> Result<Kcal, QuantityError> {
         match self {
-            Self::Kilocalories(value) => Ok(value),
-            Self::Kilojoules(value) => {
-                Kilocalories::try_new(checked_div(value.value(), Decimal::new(4184, 3))?)
-            }
+            Self::Kcal(value) => Ok(value),
+            Self::Kilojoules(value) => Ok(Kcal::new(checked_div(
+                value.value(),
+                Decimal::new(4184, 3),
+            )?)),
         }
     }
 }
@@ -356,21 +690,24 @@ impl Measurement for Energy {
         Energy::value(self)
     }
 
+    fn unit_symbol(self) -> Cow<'static, str> {
+        match self {
+            Self::Kcal(value) => value.unit_symbol(),
+            Self::Kilojoules(value) => value.unit_symbol(),
+        }
+    }
+
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
         match unit {
-            "kcal" => Ok(Self::Kilocalories(Kilocalories::try_new(parse_decimal(
-                value,
-            )?)?)),
-            "kJ" => Ok(Self::Kilojoules(Kilojoules::try_new(parse_decimal(
-                value,
-            )?)?)),
+            "kcal" => Ok(Self::Kcal(Kcal::new(parse_decimal(value)?))),
+            "kJ" => Ok(Self::Kilojoules(Kilojoules::new(parse_decimal(value)?))),
             _ => Err(QuantityError::Unit(unit.to_owned())),
         }
     }
 
     fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
         match self {
-            Self::Kilocalories(value) => Ok(Self::Kilocalories(value.checked_scale(factor)?)),
+            Self::Kcal(value) => Ok(Self::Kcal(value.checked_scale(factor)?)),
             Self::Kilojoules(value) => Ok(Self::Kilojoules(value.checked_scale(factor)?)),
         }
     }
@@ -388,7 +725,7 @@ impl FromStr for Energy {
 impl fmt::Display for Energy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Kilocalories(value) => value.fmt(f),
+            Self::Kcal(value) => value.fmt(f),
             Self::Kilojoules(value) => value.fmt(f),
         }
     }
@@ -402,6 +739,16 @@ pub enum MeasuredQuantity {
 }
 
 impl MeasuredQuantity {
+    pub(crate) fn is_positive(&self) -> bool {
+        match self {
+            Self::Mass(Mass::Kilograms(value)) => value.is_positive(),
+            Self::Mass(Mass::Grams(value)) => value.is_positive(),
+            Self::Mass(Mass::Milligrams(value)) => value.is_positive(),
+            Self::Mass(Mass::Micrograms(value)) => value.is_positive(),
+            Self::Volume(value) => value.is_positive(),
+        }
+    }
+
     /// Returns the decimal value in the retained source unit.
     pub fn value(self) -> Decimal {
         match self {
@@ -434,7 +781,7 @@ impl MeasuredQuantity {
     /// # Errors
     ///
     /// Returns [`QuantityError::Arithmetic`] if the result is outside the representable
-    /// decimal range, or [`QuantityError::Negative`] if the result is negative.
+    /// decimal range.
     pub fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
         match self {
             Self::Mass(value) => Ok(Self::Mass(value.checked_scale(factor)?)),
@@ -483,9 +830,10 @@ impl Volume {
     pub fn to_millilitres(self) -> Result<Millilitres, QuantityError> {
         match self {
             Self::Millilitres(value) => Ok(value),
-            Self::Litres(value) => {
-                Millilitres::try_new(checked_mul(value.value(), Decimal::from(1000))?)
-            }
+            Self::Litres(value) => Ok(Millilitres::new(checked_mul(
+                value.value(),
+                Decimal::from(1000),
+            )?)),
         }
     }
 }
@@ -495,6 +843,13 @@ impl sealed::Sealed for Volume {}
 impl Measurement for Volume {
     fn value(self) -> Decimal {
         Volume::value(self)
+    }
+
+    fn unit_symbol(self) -> Cow<'static, str> {
+        match self {
+            Self::Millilitres(value) => value.unit_symbol(),
+            Self::Litres(value) => value.unit_symbol(),
+        }
     }
 
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
@@ -555,6 +910,9 @@ impl<'de> Deserialize<'de> for MeasuredQuantity {
             .map_err(serde::de::Error::custom)
     }
 }
+
+pub(crate) type KcalPerKg = Ratio<Kcal, Kilograms>;
+pub(crate) type KcalPerCm = Ratio<Kcal, Centimetres>;
 
 mod sealed {
     pub trait Sealed {}

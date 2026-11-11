@@ -6,6 +6,122 @@ use rust_decimal::Decimal;
 use super::*;
 
 #[test]
+fn signed_energy_and_reported_values_enforce_distinct_invariants() -> Result<(), Box<dyn Error>> {
+    let ten = Kcal::new(Decimal::from(10));
+    let twenty = Kcal::new(Decimal::from(20));
+    assert_eq!((ten - twenty).to_string(), "-10 kcal");
+    assert_eq!((ten + twenty).to_string(), "30 kcal");
+    let negative = Kcal::from_str("-10 kcal")?;
+    assert_eq!(
+        serde_json::from_str::<Kcal>(&serde_json::to_string(&negative)?)?,
+        negative
+    );
+    let energy = Energy::from_str("-10 kcal")?;
+    assert!(Reported::new(Qualifier::Exact, energy).is_err());
+    assert!(Reported::<Energy>::from_str("-10 kcal").is_err());
+    assert!(serde_json::from_str::<Reported<Energy>>("\"-10 kcal\"").is_err());
+    assert!(Reported::<Energy>::from_str("-0 kcal").is_ok());
+    Ok(())
+}
+
+#[test]
+fn daily_energy_arithmetic_and_coefficients_use_typed_values() -> Result<(), Box<dyn Error>> {
+    let ten = Kcal::new(Decimal::from(10));
+    let twenty = Kcal::new(Decimal::from(20));
+    let daily = PerDay::new(ten);
+    assert_eq!((daily + twenty).amount(), Kcal::new(Decimal::from(30)));
+    assert_eq!((daily - twenty).amount(), Kcal::new(Decimal::from(-10)));
+    for value in [daily, PerDay::new(-ten)] {
+        assert_eq!(
+            serde_json::from_str::<PerDay<Kcal>>(&serde_json::to_string(&value)?)?,
+            value
+        );
+    }
+    assert_eq!(daily.to_string(), "10 kcal/day");
+    assert_eq!(serde_json::to_string(&daily)?, "\"10 kcal/day\"");
+    assert_eq!(PerDay::<Kcal>::from_str("-10 kcal/day")?, PerDay::new(-ten));
+    assert!(PerDay::<Kcal>::from_str("10 kcal").is_err());
+    assert!(PerDay::<Kcal>::from_str("10 g/day").is_err());
+    assert!(serde_json::from_str::<PerDay<Kcal>>("\"10 kcal\"").is_err());
+    assert_eq!(KcalPerKg::new(ten) * Kilograms::from_str("2 kg")?, twenty);
+    assert_eq!(KcalPerCm::new(ten) * Centimetres::from_str("2 cm")?, twenty);
+    Ok(())
+}
+
+#[test]
+fn ratios_preserve_compound_units_and_multiply_by_denominator() -> Result<(), Box<dyn Error>> {
+    let density = Ratio::<Grams, Millilitres>::from_str("-1.5 g/ml")?;
+    assert_eq!(density.unit_symbol(), "g/ml");
+    assert_eq!(density.to_string(), "-1.5 g/ml");
+    assert_eq!(
+        density * Millilitres::from_str("2 ml")?,
+        Grams::from_str("-3.0 g")?
+    );
+    assert_eq!(serde_json::to_string(&density)?, "\"-1.5 g/ml\"");
+    assert_eq!(
+        serde_json::from_str::<Ratio<Grams, Millilitres>>("\"-1.5 g/ml\"")?,
+        density
+    );
+    assert!(Ratio::<Grams, Millilitres>::from_str("1 g").is_err());
+    assert!(Ratio::<Grams, Millilitres>::from_str("1 g/kg").is_err());
+    assert!(serde_json::from_str::<Ratio<Grams, Millilitres>>("\"1 g\"").is_err());
+    let coefficient: Ratio<Kcal, Kilograms> = KcalPerKg::from(10);
+    assert_eq!(coefficient.to_string(), "10 kcal/kg");
+    let height: Ratio<Kcal, Centimetres> = KcalPerCm::from(Decimal::new(625, 2));
+    assert_eq!(height.to_string(), "6.25 kcal/cm");
+    Ok(())
+}
+
+#[test]
+fn numeric_conversions_keep_values_exact_for_units_and_ratios() {
+    assert_eq!(Grams::from(-5_i64).to_string(), "-5 g");
+    assert_eq!(Millilitres::from(u64::MAX).value(), Decimal::from(u64::MAX));
+    let density = Ratio::<Grams, Millilitres>::from(-3_i32);
+    assert_eq!(density.to_string(), "-3 g/ml");
+    let maximum = Ratio::<Grams, Millilitres>::from(u64::MAX);
+    assert_eq!(maximum.amount().value(), Decimal::from(u64::MAX));
+    assert_eq!(
+        Ratio::<Grams, Millilitres>::from(Decimal::new(125, 2)).to_string(),
+        "1.25 g/ml"
+    );
+}
+
+#[test]
+fn measurement_units_support_signed_arithmetic() {
+    macro_rules! assert_arithmetic {
+        ($unit:ty) => {{
+            let one = <$unit>::new(Decimal::ONE);
+            let two = <$unit>::new(Decimal::from(2));
+            assert_eq!(one + one, two);
+            assert_eq!(one - two, -one);
+        }};
+    }
+    let grams = PerDay::new(Grams::new(Decimal::from(3)));
+    let one_gram = Grams::new(Decimal::ONE);
+    assert_eq!((grams - one_gram).amount(), Grams::new(Decimal::from(2)));
+    assert_eq!((grams + one_gram).amount(), Grams::new(Decimal::from(4)));
+    assert_eq!(grams.to_string(), "3 g/day");
+    assert_eq!(grams.unit_symbol(), "g/day");
+
+    assert_arithmetic!(Grams);
+    assert_arithmetic!(Millilitres);
+    assert_arithmetic!(Kcal);
+}
+
+#[test]
+fn measurement_unit_symbols_follow_concrete_and_dimension_units() -> Result<(), Box<dyn Error>> {
+    assert_eq!(Grams::new(Decimal::ONE).unit_symbol(), "g");
+    assert_eq!(Kcal::new(Decimal::ONE).unit_symbol(), "kcal");
+    assert_eq!(Mass::from_str("2 mg")?.unit_symbol(), "mg");
+    assert_eq!(Energy::from_str("2 kJ")?.unit_symbol(), "kJ");
+    assert_eq!(
+        PerDay::<Grams>::from_str("-3 g/day")?.to_string(),
+        "-3 g/day"
+    );
+    Ok(())
+}
+
+#[test]
 fn reported_values_round_trip_exact_decimal_values_units_and_qualifiers()
 -> Result<(), Box<dyn Error>> {
     let values = [
@@ -55,7 +171,10 @@ fn rejects_negative_incompatible_unknown_and_unrepresentable_measurements()
     assert!(Reported::<Energy>::from_str("15 g").is_err());
     assert!(Reported::<Energy>::from_str("1 kcal extra").is_err());
     assert!(serde_json::from_str::<Grams>("\"1 mg\"").is_err());
-    assert!(serde_json::from_str::<Grams>("\"-1 g\"").is_err());
+    assert_eq!(
+        serde_json::from_str::<Grams>("\"-1 g\"")?.to_string(),
+        "-1 g"
+    );
     assert!(serde_json::from_str::<Kilojoules>("\"1 kcal\"").is_err());
     Ok(())
 }
@@ -135,7 +254,7 @@ fn concrete_measurement_types_serialize_and_deserialize_with_their_own_units()
         cases[3].1
     );
     assert_eq!(
-        serde_json::to_string(&serde_json::from_str::<Kilocalories>(cases[4].0)?)?,
+        serde_json::to_string(&serde_json::from_str::<Kcal>(cases[4].0)?)?,
         cases[4].1
     );
     assert_eq!(
@@ -155,7 +274,7 @@ fn profile_mass_and_height_units_use_fixed_point_values() -> Result<(), Box<dyn 
     assert_eq!(serde_json::to_string(&height)?, "\"172.5 cm\"");
     assert!(Kilograms::from_str("70 lb").is_err());
     assert!(Centimetres::from_str("172 mm").is_err());
-    assert!(Kilograms::from_str("-1 kg").is_err());
+    assert_eq!(Kilograms::from_str("-1 kg")?.to_string(), "-1 kg");
     Ok(())
 }
 
@@ -224,21 +343,27 @@ fn checked_scaling_preserves_units_and_qualifiers_and_reports_rounding_overflow(
     let quantity = MeasuredQuantity::from_str("2 ml")?.checked_scale(Decimal::new(5, 1))?;
     assert_eq!(quantity.to_string(), "1.0 ml");
 
-    let odd_tie = Grams::try_new(Decimal::new(3, 28))?.checked_scale(Decimal::new(5, 1))?;
+    let odd_tie = Grams::new(Decimal::new(3, 28)).checked_scale(Decimal::new(5, 1))?;
     assert_eq!(odd_tie.value(), Decimal::new(2, 28));
-    let even_tie = Grams::try_new(Decimal::new(1, 28))?.checked_scale(Decimal::new(5, 1))?;
+    let even_tie = Grams::new(Decimal::new(1, 28)).checked_scale(Decimal::new(5, 1))?;
     assert_eq!(even_tie.value(), Decimal::ZERO);
-    let strict_upper = Reported::new(Qualifier::LessThan, Grams::try_new(Decimal::new(1, 28))?)?;
+    let strict_upper = Reported::new(Qualifier::LessThan, Grams::new(Decimal::new(1, 28)))?;
     assert!(matches!(
         strict_upper.checked_scale(Decimal::new(5, 1)),
         Err(QuantityError::ZeroStrictUpperBound)
     ));
     assert!(matches!(
-        Grams::try_new(Decimal::MAX)?.checked_scale(Decimal::from(2)),
+        Grams::new(Decimal::MAX).checked_scale(Decimal::from(2)),
         Err(QuantityError::Arithmetic)
     ));
+    assert_eq!(
+        Grams::new(Decimal::ONE)
+            .checked_scale(Decimal::from(-1))?
+            .value(),
+        Decimal::NEGATIVE_ONE
+    );
     assert!(matches!(
-        Grams::try_new(Decimal::ONE)?.checked_scale(Decimal::from(-1)),
+        Reported::new(Qualifier::Exact, Grams::new(Decimal::ONE))?.checked_scale(Decimal::from(-1)),
         Err(QuantityError::Negative)
     ));
     Ok(())

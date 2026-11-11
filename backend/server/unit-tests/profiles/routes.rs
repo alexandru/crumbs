@@ -13,14 +13,45 @@ use sha2::{Digest, Sha256};
 use crate::oauth::tests::{
     TEST_MCP_RESOURCE, TEST_REST_ACCESS_TOKEN, TEST_REST_RESOURCE, TEST_REST_WRITE_ACCESS_TOKEN,
 };
-use crate::tests::{
-    TestApplication, http_json_request, http_method_request, http_request, http_request_with_token,
-};
+use crate::tests::{TestApplication, http_json_request, http_request, http_request_with_token};
+
+pub(super) const OTHER_MCP_USER_ACCESS_TOKEN: &str = "test-other-mcp-profile-user-access-token";
+
+pub(in crate::profiles) async fn seed_other_mcp_user_access(
+    app: &TestApplication,
+) -> Result<String, Box<dyn Error>> {
+    seed_other_user_access(
+        app,
+        TEST_MCP_RESOURCE,
+        OTHER_MCP_USER_ACCESS_TOKEN,
+        OTHER_MCP_USER_REFRESH_TOKEN,
+        OTHER_MCP_USER_CLIENT_ID,
+    )
+    .await
+}
+
+pub(in crate::profiles) async fn seed_profile_account(
+    app: &TestApplication,
+) -> Result<(), Box<dyn Error>> {
+    let username = Username::new("alice")?;
+    let credentials = app
+        ._authorization_database
+        .user_by_username(&username)
+        .await?
+        .ok_or("test authorization user is missing")?;
+    let content_user = app
+        .database
+        .create_user(&username, &credentials.password_hash)
+        .await?;
+    if content_user.id != credentials.user.id {
+        return Err("test user IDs differ between content and authorization databases".into());
+    }
+    Ok(())
+}
 
 const OTHER_USER_ACCESS_TOKEN: &str = "test-other-profile-user-access-token";
 const OTHER_USER_REFRESH_TOKEN: &str = "test-other-profile-user-refresh-token";
 const OTHER_USER_CLIENT_ID: &str = "test-other-profile-user-client";
-pub(super) const OTHER_MCP_USER_ACCESS_TOKEN: &str = "test-other-mcp-profile-user-access-token";
 const OTHER_MCP_USER_REFRESH_TOKEN: &str = "test-other-mcp-profile-user-refresh-token";
 const OTHER_MCP_USER_CLIENT_ID: &str = "test-other-mcp-profile-user-client";
 
@@ -38,8 +69,8 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
                 "name": " Alex ",
                 "settings": {
                     "weight_goal": "60 kg",
-                    "bmr": {"mode": "custom", "value": "1700 kcal"},
-                    "baseline_activity": {"mode": "custom", "value": "400 kcal"}
+                    "bmr": {"mode": "custom", "value": "1700 kcal/day"},
+                    "baseline_activity": {"mode": "custom", "value": "400 kcal/day"}
                 }
             }),
         )?)
@@ -51,16 +82,19 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
     assert_eq!(created.json["data"]["settings"]["weight_goal"], "60 kg");
     assert_eq!(
         created.json["data"]["settings"]["bmr"],
-        json!({"mode": "custom", "value": "1700 kcal"})
+        json!({"mode": "custom", "value": "1700 kcal/day"})
     );
     assert_eq!(
         created.json["data"]["settings"]["baseline_activity"],
-        json!({"mode": "custom", "value": "400 kcal"})
+        json!({"mode": "custom", "value": "400 kcal/day"})
     );
     assert_eq!(created.json["data"]["cache"]["current_weight"], Value::Null);
-    assert_eq!(created.json["derived"]["bmr"], "1700 kcal");
-    assert_eq!(created.json["derived"]["baseline_activity"], "400 kcal");
-    assert_eq!(created.json["derived"]["maintenance_calories"], "2100 kcal");
+    assert_eq!(created.json["derived"]["bmr"], "1700 kcal/day");
+    assert_eq!(created.json["derived"]["baseline_activity"], "400 kcal/day");
+    assert_eq!(
+        created.json["derived"]["maintenance_calories"],
+        "2100 kcal/day"
+    );
     assert_eq!(
         created
             .headers
@@ -106,11 +140,11 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
     );
     assert_eq!(
         omitted_patch.json["data"]["settings"]["bmr"],
-        json!({"mode": "custom", "value": "1700 kcal"})
+        json!({"mode": "custom", "value": "1700 kcal/day"})
     );
     assert_eq!(
         omitted_patch.json["derived"]["maintenance_calories"],
-        "2100 kcal"
+        "2100 kcal/day"
     );
 
     let reset_bmr = app
@@ -256,45 +290,13 @@ async fn rest_profiles_are_account_scoped_and_require_write_scope_for_changes()
     assert_eq!(read_only_patch.status, StatusCode::FORBIDDEN);
 
     let delete = app
-        .request(http_method_request(
+        .request(crate::tests::http_method_request(
             "DELETE",
             &profile_uri,
             TEST_REST_WRITE_ACCESS_TOKEN,
         )?)
         .await?;
     assert_eq!(delete.status, StatusCode::METHOD_NOT_ALLOWED);
-    Ok(())
-}
-
-pub(in crate::profiles) async fn seed_other_mcp_user_access(
-    app: &TestApplication,
-) -> Result<String, Box<dyn Error>> {
-    seed_other_user_access(
-        app,
-        TEST_MCP_RESOURCE,
-        OTHER_MCP_USER_ACCESS_TOKEN,
-        OTHER_MCP_USER_REFRESH_TOKEN,
-        OTHER_MCP_USER_CLIENT_ID,
-    )
-    .await
-}
-
-pub(in crate::profiles) async fn seed_profile_account(
-    app: &TestApplication,
-) -> Result<(), Box<dyn Error>> {
-    let username = Username::new("alice")?;
-    let credentials = app
-        ._authorization_database
-        .user_by_username(&username)
-        .await?
-        .ok_or("test authorization user is missing")?;
-    let content_user = app
-        .database
-        .create_user(&username, &credentials.password_hash)
-        .await?;
-    if content_user.id != credentials.user.id {
-        return Err("test user IDs differ between content and authorization databases".into());
-    }
     Ok(())
 }
 

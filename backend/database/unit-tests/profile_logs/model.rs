@@ -335,6 +335,16 @@ fn food_snapshot_union_is_self_describing_and_validated() -> Result<(), Box<dyn 
     assert_eq!(entry.quantity().to_string(), "50 g");
     assert_eq!(entry.nutrition().calories.to_string(), "100 kcal");
     assert_eq!(entry.description(), "source label");
+    assert!(
+        FoodLogEntry::new(
+            entry.food_id(),
+            "-1 g".parse()?,
+            entry.nutrition().clone(),
+            "label".to_owned(),
+            None,
+        )
+        .is_err()
+    );
     assert_eq!(
         entry
             .input()
@@ -346,6 +356,10 @@ fn food_snapshot_union_is_self_describing_and_validated() -> Result<(), Box<dyn 
     for invalid in [
         serde_json::json!({"type":"food","food_id":0,"quantity":"50 g","nutrition":{"calories":"100 kcal"},"description":"label"}),
         serde_json::json!({"type":"food","food_id":42,"quantity":"0 g","nutrition":{"calories":"100 kcal"},"description":"label"}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"-1 g","nutrition":{"calories":"100 kcal"},"description":"label"}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"calories":"-1 kcal"},"description":"label"}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"calories":"100 kcal", "protein":"-1 g"},"description":"label"}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"calories":"100 kcal"},"description":"label","input":{"amount":"1","serving_size":{"name":"portion","quantity":"-1 g"}}}),
         serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"protein":"5 g"},"description":"label"}),
         serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"calories":"100 kcal"},"description":"  "}),
         serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"calories":"100 kcal"},"description":"label","extra":1}),
