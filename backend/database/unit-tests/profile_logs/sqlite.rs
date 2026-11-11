@@ -2,8 +2,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use rust_decimal::Decimal;
-use rust_decimal::dec;
+use rust_decimal::{Decimal, dec};
 use sqlx::FromRow;
 use tokio::sync::Barrier;
 
@@ -284,6 +283,22 @@ async fn ownership_patch_get_delete_and_cache_are_scoped_to_profile() -> Result<
         original_profile_state.updated_at
     );
 
+    clock.store(u64::MAX, Ordering::SeqCst);
+    let same_patch: PatchLog = serde_json::from_str(
+        r#"{"day":"2024-01-01","time":"12:00","entry":{"type":"biometric","measurement":{"type":"weight","value":"70 kg"}}}"#,
+    )?;
+    assert_eq!(
+        database
+            .patch_profile_log(alex, alex_profile.id, original.id, &same_patch)
+            .await?,
+        Some(original.clone())
+    );
+    assert_eq!(log_state(&database, original.id).await?.updated_at, None);
+    assert_eq!(
+        profile_state(&database, alex_profile.id).await?.updated_at,
+        original_profile_state.updated_at
+    );
+
     clock.store(2_000, Ordering::SeqCst);
     let date_time_patch: PatchLog = serde_json::from_str(r#"{"day":"2024-02-02","time":"13:14"}"#)?;
     let changed = database
@@ -342,6 +357,52 @@ async fn ownership_patch_get_delete_and_cache_are_scoped_to_profile() -> Result<
     assert_eq!(
         current_weight(&get_profile(&database, alex, alex_profile.id).await?),
         None
+    );
+    database.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_stored_log_cannot_be_patched_or_deleted() -> Result<(), Box<dyn Error>> {
+    let (_directory, database, _) = open_database(1_000).await?;
+    let user = insert_user(&database, 1).await?;
+    let profile = create_profile(&database, user, serde_json::json!({"name": "Alex"})).await?;
+    let log = create_weight_log(
+        &database,
+        user,
+        profile.id,
+        "2024-01-01",
+        Some("12:00"),
+        "70 kg",
+    )
+    .await?;
+    let invalid = r#"{"type":"biometric","measurement":{"type":"weight","value":"0 kg"}}"#;
+    sqlx::query("UPDATE profile_logs SET data_json = ? WHERE id = ?")
+        .bind(invalid)
+        .bind(log.id.get())
+        .execute(&database.pool)
+        .await?;
+    let before = profile_state(&database, profile.id).await?;
+    assert!(matches!(
+        database
+            .patch_profile_log(user, profile.id, log.id, &PatchLog::default())
+            .await,
+        Err(ProfileLogError::InvalidStoredData)
+    ));
+    assert!(matches!(
+        database.delete_profile_log(user, profile.id, log.id).await,
+        Err(ProfileLogError::InvalidStoredData)
+    ));
+    let stored = log_state(&database, log.id).await?;
+    assert_eq!(stored.data_json, invalid);
+    assert_eq!(stored.updated_at, None);
+    assert_eq!(
+        profile_state(&database, profile.id).await?.updated_at,
+        before.updated_at
+    );
+    assert_eq!(
+        current_weight(&get_profile(&database, user, profile.id).await?),
+        Some(Decimal::from(70))
     );
     database.close().await;
     Ok(())

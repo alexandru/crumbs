@@ -7,7 +7,7 @@ use crate::profiles::{BodyWeight, Patch};
 
 #[test]
 fn log_day_validates_calendar_days_and_preserves_iso_form() -> Result<(), Box<dyn Error>> {
-    for value in ["0001-01-01", "2024-02-29", "9999-12-31"] {
+    for value in ["0001-01-01", "0012-01-02", "2024-02-29", "9999-12-31"] {
         let day: LogDay = serde_json::from_str(&format!("\"{value}\""))?;
         assert_eq!(serde_json::to_string(&day)?, format!("\"{value}\""));
     }
@@ -20,6 +20,11 @@ fn log_day_validates_calendar_days_and_preserves_iso_form() -> Result<(), Box<dy
         "2024-01-00",
         "2024-1-01",
         "+024-01-01",
+        "-001-01-01",
+        "2024/+1-01",
+        "2024/01/01",
+        "２０24-01-01",
+        "2024-０1-01",
         "2024-01-01T00:00:00Z",
     ] {
         assert!(
@@ -28,6 +33,7 @@ fn log_day_validates_calendar_days_and_preserves_iso_form() -> Result<(), Box<dy
         );
     }
     assert!(LogDay::new(10000, 1, 1).is_err());
+    assert!(LogDay::parse("2024-01-01\n").is_err());
     Ok(())
 }
 
@@ -40,6 +46,7 @@ fn local_time_accepts_supported_forms_and_serializes_canonically() -> Result<(),
         ("08:07:06.1", "08:07:06.100"),
         ("08:07:06.12", "08:07:06.120"),
         ("08:07:06.123", "08:07:06.123"),
+        ("01:02:03.004", "01:02:03.004"),
     ] {
         let time = LocalTime::parse(input)?;
         assert_eq!(time.to_string(), expected);
@@ -55,6 +62,16 @@ fn local_time_accepts_supported_forms_and_serializes_canonically() -> Result<(),
         "12:00:60",
         "23:59:60",
         "12:00:00.",
+        "12:00.1",
+        "12:00:",
+        "12-00",
+        "+2:00",
+        "12:+0",
+        "１２:00",
+        "12:00:00.1x",
+        "12:00:00.001Z",
+        "12:00:00\n",
+        "12:00:60.1",
         "12:00:00.1234",
         "12:00:00.1Z",
         "12:00+01:00",

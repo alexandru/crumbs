@@ -1,8 +1,9 @@
 use std::fmt;
+use std::sync::LazyLock;
 
 use chrono::{Datelike, NaiveDate, NaiveTime, Timelike};
-use rust_decimal::Decimal;
-use rust_decimal::dec;
+use regex::Regex;
+use rust_decimal::{Decimal, dec};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -73,28 +74,22 @@ impl LogDay {
     ///
     /// Returns InvalidInput for another format or invalid calendar components.
     pub fn parse(value: &str) -> Result<Self, ProfileLogError> {
-        if value.len() != 10
-            || value.as_bytes().get(4) != Some(&b'-')
-            || value.as_bytes().get(7) != Some(&b'-')
-            || !value
-                .get(..4)
-                .is_some_and(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
-            || !value
-                .get(5..7)
-                .is_some_and(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
-            || !value
-                .get(8..)
-                .is_some_and(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
-        {
+        static DATE_FORMAT: LazyLock<Result<Regex, regex::Error>> =
+            LazyLock::new(|| Regex::new(r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z"));
+
+        let format = DATE_FORMAT
+            .as_ref()
+            .map_err(|error| ProfileLogError::storage(error.clone()))?;
+        if !format.is_match(value) {
             return Err(invalid_day());
         }
-        let year = value.get(..4).and_then(|part| part.parse::<i32>().ok());
-        let month = value.get(5..7).and_then(|part| part.parse::<u32>().ok());
-        let day = value.get(8..).and_then(|part| part.parse::<u32>().ok());
-        match (year, month, day) {
-            (Some(year), Some(month), Some(day)) => Self::new(year, month, day),
-            _ => Err(invalid_day()),
+
+        let date = NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| invalid_day())?;
+        if date.year() == 0 {
+            return Err(invalid_day());
         }
+
+        Ok(Self(date))
     }
 
     /// Returns the year, month, and day components.
@@ -158,52 +153,24 @@ impl LocalTime {
     /// Returns InvalidInput for an unsupported format, offset, leap second, or
     /// out-of-range component.
     pub fn parse(value: &str) -> Result<Self, ProfileLogError> {
-        let (whole, fraction) = match value.split_once('.') {
-            Some((whole, fraction)) => (whole, Some(fraction)),
-            None => (value, None),
-        };
-        if let Some(fraction) = fraction
-            && (whole.len() != 8
-                || !(1..=3).contains(&fraction.len())
-                || !fraction.bytes().all(|byte| byte.is_ascii_digit()))
-        {
+        static TIME_FORMAT: LazyLock<Result<Regex, regex::Error>> =
+            LazyLock::new(|| Regex::new(r"\A[0-9]{2}:[0-9]{2}(?::[0-5][0-9](?:\.[0-9]{1,3})?)?\z"));
+
+        let format = TIME_FORMAT
+            .as_ref()
+            .map_err(|error| ProfileLogError::storage(error.clone()))?;
+        if !format.is_match(value) {
             return Err(invalid_time());
         }
-        let (hour, minute, second) = match whole.len() {
-            5 if whole.as_bytes().get(2) == Some(&b':') => (
-                parse_two(whole.get(..2)),
-                parse_two(whole.get(3..)),
-                Some(0),
-            ),
-            8 if whole.as_bytes().get(2) == Some(&b':')
-                && whole.as_bytes().get(5) == Some(&b':') =>
-            {
-                (
-                    parse_two(whole.get(..2)),
-                    parse_two(whole.get(3..5)),
-                    parse_two(whole.get(6..)),
-                )
-            }
-            _ => return Err(invalid_time()),
+
+        let chrono_format = if value.len() == 5 {
+            "%H:%M"
+        } else {
+            "%H:%M:%S%.f"
         };
-        let millisecond = match fraction {
-            None => 0,
-            Some(fraction) => {
-                let parsed = fraction.parse::<u32>().map_err(|_| invalid_time())?;
-                match fraction.len() {
-                    1 => parsed * 100,
-                    2 => parsed * 10,
-                    3 => parsed,
-                    _ => return Err(invalid_time()),
-                }
-            }
-        };
-        match (hour, minute, second) {
-            (Some(hour), Some(minute), Some(second)) => {
-                Self::new(hour, minute, second, millisecond)
-            }
-            _ => Err(invalid_time()),
-        }
+        NaiveTime::parse_from_str(value, chrono_format)
+            .map(Self)
+            .map_err(|_| invalid_time())
     }
 
     /// Returns hour, minute, second, and millisecond components.
@@ -1123,15 +1090,6 @@ pub struct LogPage {
     pub items: Vec<ProfileLog>,
     /// Last returned ID, or None for an empty page.
     pub last_id: Option<ProfileLogId>,
-}
-
-fn parse_two(value: Option<&str>) -> Option<u32> {
-    let value = value?;
-    if value.len() == 2 && value.bytes().all(|byte| byte.is_ascii_digit()) {
-        value.parse().ok()
-    } else {
-        None
-    }
 }
 
 fn invalid_day() -> ProfileLogError {

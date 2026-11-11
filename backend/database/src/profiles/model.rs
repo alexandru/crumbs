@@ -1,12 +1,14 @@
 use chrono::{Datelike, NaiveDate};
 use chrono_tz::Tz;
-use rust_decimal::Decimal;
-use rust_decimal::dec;
+use regex::Regex;
+use rust_decimal::{Decimal, dec};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
+use std::sync::LazyLock;
 use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
 
@@ -180,50 +182,34 @@ impl BirthDate {
     /// Returns [ProfileError::InvalidInput] for an unsupported year, an
     /// invalid format, or invalid calendar components.
     pub fn parse(value: &str) -> Result<Self, ProfileError> {
+        static FORMAT: LazyLock<Result<Regex, regex::Error>> =
+            LazyLock::new(|| Regex::new(r"\A[0-9]{4}(?:-[0-9]{2}(?:-[0-9]{2})?)?\z"));
+
         let invalid = || ProfileError::InvalidInput("invalid birth date".to_owned());
-        match value.len() {
-            4 if value.bytes().all(|byte| byte.is_ascii_digit()) => {
-                let year = value.parse::<i32>().map_err(|_| invalid())?;
-                Self::year(year)
-            }
-            7 if value.as_bytes().get(4) == Some(&b'-')
-                && value
-                    .get(..4)
-                    .is_some_and(|year| year.bytes().all(|byte| byte.is_ascii_digit()))
-                && value
-                    .get(5..)
-                    .is_some_and(|month| month.bytes().all(|byte| byte.is_ascii_digit())) =>
-            {
-                let year = value.get(..4).ok_or_else(invalid)?;
-                let month = value.get(5..).ok_or_else(invalid)?;
-                Self::year_month(
-                    year.parse::<i32>().map_err(|_| invalid())?,
-                    month.parse::<u32>().map_err(|_| invalid())?,
-                )
-            }
-            10 if value.as_bytes().get(4) == Some(&b'-')
-                && value.as_bytes().get(7) == Some(&b'-')
-                && value
-                    .get(..4)
-                    .is_some_and(|year| year.bytes().all(|byte| byte.is_ascii_digit()))
-                && value
-                    .get(5..7)
-                    .is_some_and(|month| month.bytes().all(|byte| byte.is_ascii_digit()))
-                && value
-                    .get(8..)
-                    .is_some_and(|day| day.bytes().all(|byte| byte.is_ascii_digit())) =>
-            {
-                let year = value.get(..4).ok_or_else(invalid)?;
-                let month = value.get(5..7).ok_or_else(invalid)?;
-                let day = value.get(8..).ok_or_else(invalid)?;
-                Self::full_date(
-                    year.parse::<i32>().map_err(|_| invalid())?,
-                    month.parse::<u32>().map_err(|_| invalid())?,
-                    day.parse::<u32>().map_err(|_| invalid())?,
-                )
-            }
-            _ => Err(invalid()),
+        let format = FORMAT
+            .as_ref()
+            .map_err(|error| ProfileError::storage(error.clone()))?;
+        if !format.is_match(value) {
+            return Err(invalid());
         }
+
+        let (date, precision) = match value.len() {
+            4 => (
+                Cow::Owned(format!("{value}-01-01")),
+                BirthDatePrecision::Year,
+            ),
+            7 => (
+                Cow::Owned(format!("{value}-01")),
+                BirthDatePrecision::YearMonth,
+            ),
+            _ => (Cow::Borrowed(value), BirthDatePrecision::FullDate),
+        };
+        let date = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|_| invalid())?;
+        if date.year() == 0 {
+            return Err(invalid());
+        }
+
+        Ok(Self { date, precision })
     }
 
     /// Returns the retained precision.
