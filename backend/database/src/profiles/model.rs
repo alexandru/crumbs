@@ -1,6 +1,6 @@
 use chrono::{Datelike, NaiveDate};
 use chrono_tz::Tz;
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, dec};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
@@ -254,9 +254,9 @@ impl BirthDate {
         if birthday > current_day {
             return None;
         }
-        let mut age = current_day.year().checked_sub(birthday.year())?;
+        let mut age = current_day.year() - birthday.year();
         if (current_day.month(), current_day.day()) < (birthday.month(), birthday.day()) {
-            age = age.checked_sub(1)?;
+            age -= 1;
         }
         Some(AgeYears(age))
     }
@@ -521,10 +521,10 @@ impl BaselineActivity {
                 let bmr = bmr?;
                 let coefficient = match level {
                     ActivityLevel::NoActivity => Decimal::ZERO,
-                    ActivityLevel::Sedentary => Decimal::new(2, 1),
-                    ActivityLevel::LightlyActive => Decimal::new(375, 3),
-                    ActivityLevel::ModeratelyActive => Decimal::new(5, 1),
-                    ActivityLevel::VeryActive => Decimal::new(9, 1),
+                    ActivityLevel::Sedentary => dec!(0.2),
+                    ActivityLevel::LightlyActive => dec!(0.375),
+                    ActivityLevel::ModeratelyActive => dec!(0.5),
+                    ActivityLevel::VeryActive => dec!(0.9),
                 };
                 Some(bmr * coefficient)
             }
@@ -1001,7 +1001,7 @@ fn calculate_bmr(
     sex: Sex,
 ) -> Result<PerDay<Kcal>, ProfileError> {
     let mass = KcalPerKg::from(10) * weight.value();
-    let height_component = KcalPerCm::from(Decimal::new(625, 2)) * height.value();
+    let height_component = KcalPerCm::from(dec!(6.25)) * height.value();
     let age_component = Kcal::from(5) * Decimal::from(age.0);
     let constant = match sex {
         Sex::Male => Kcal::from(5),
