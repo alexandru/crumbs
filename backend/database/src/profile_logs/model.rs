@@ -280,6 +280,14 @@ pub enum ProfileLogData {
     Biometric(BiometricLogEntry),
 }
 
+impl ProfileLogData {
+    pub(crate) const fn replace_same_variant(self, patch: LogEntryPatch) -> Self {
+        match (self, patch) {
+            (Self::Biometric(_), LogEntryPatch::Biometric(entry)) => Self::Biometric(entry),
+        }
+    }
+}
+
 /// A log entry accepted on create.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]

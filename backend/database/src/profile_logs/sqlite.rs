@@ -10,8 +10,8 @@ use crate::runtime::Database;
 
 use super::error::ProfileLogError;
 use super::model::{
-    BiometricEntry, BiometricLogEntry, CreateLog, LocalTime, LogDay, LogEntryPatch, LogFilter,
-    LogPage, PatchLog, ProfileLog, ProfileLogData, ProfileLogId,
+    BiometricEntry, BiometricLogEntry, CreateLog, LocalTime, LogDay, LogFilter, LogPage, PatchLog,
+    ProfileLog, ProfileLogData, ProfileLogId,
 };
 use super::store::ProfileLogs;
 
@@ -25,6 +25,7 @@ impl ProfileLogs for Database {
         input: &CreateLog,
     ) -> Result<Option<ProfileLog>, ProfileLogError> {
         let mut transaction = begin_immediate(self).await?;
+
         let Some(mut profile_data) = owned_profile_data(&mut transaction, user, profile).await?
         else {
             transaction
@@ -33,6 +34,7 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(None);
         };
+
         let now = self.clock.now().map_err(ProfileLogError::clock)?;
         let time = match input.time {
             Some(time) => time,
@@ -40,6 +42,7 @@ impl ProfileLogs for Database {
         };
         let data = input.entry.into_data();
         let data_json = encode_data(&data)?;
+
         let id = sqlx::query_scalar::<_, i64>(
             "INSERT INTO profile_logs (
                  profile_id, day, time, data_json, created_at, updated_at
@@ -55,12 +58,15 @@ impl ProfileLogs for Database {
         .await
         .map_err(ProfileLogError::storage)?;
         let id = ProfileLogId::new(id).map_err(|_| ProfileLogError::InvalidStoredData)?;
+
         update_current_weight_if_changed(&mut transaction, user, profile, &mut profile_data, now)
             .await?;
+
         transaction
             .commit()
             .await
             .map_err(ProfileLogError::storage)?;
+
         Ok(Some(ProfileLog {
             id,
             profile_id: profile,
@@ -88,6 +94,7 @@ impl ProfileLogs for Database {
         .fetch_optional(&self.pool)
         .await
         .map_err(ProfileLogError::storage)?;
+
         row.map(ProfileLogRow::into_log).transpose()
     }
 
@@ -100,6 +107,7 @@ impl ProfileLogs for Database {
         if !profile_owned(&self.pool, user, profile).await? {
             return Ok(None);
         }
+
         let mut query = QueryBuilder::<Sqlite>::new(
             "SELECT id, profile_id, day, time, data_json
              FROM profile_logs WHERE profile_id = ",
@@ -123,16 +131,19 @@ impl ProfileLogs for Database {
             query.push(" AND id < ").push_bind(last_id.get());
         }
         query.push(" ORDER BY id DESC LIMIT ").push_bind(PAGE_SIZE);
+
         let rows = query
             .build_query_as::<ProfileLogRow>()
             .fetch_all(&self.pool)
             .await
             .map_err(ProfileLogError::storage)?;
+
         let items = rows
             .into_iter()
             .map(ProfileLogRow::into_log)
             .collect::<Result<Vec<_>, _>>()?;
         let last_id = items.last().map(|item| item.id);
+
         Ok(Some(LogPage { items, last_id }))
     }
 
@@ -144,6 +155,7 @@ impl ProfileLogs for Database {
         patch: &PatchLog,
     ) -> Result<Option<ProfileLog>, ProfileLogError> {
         let mut transaction = begin_immediate(self).await?;
+
         let Some(mut profile_data) = owned_profile_data(&mut transaction, user, profile).await?
         else {
             transaction
@@ -152,6 +164,7 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(None);
         };
+
         let row = sqlx::query_as::<_, ProfileLogRow>(
             "SELECT id, profile_id, day, time, data_json
              FROM profile_logs WHERE profile_id = ? AND id = ?",
@@ -161,6 +174,7 @@ impl ProfileLogs for Database {
         .fetch_optional(&mut *transaction)
         .await
         .map_err(ProfileLogError::storage)?;
+
         let Some(row) = row else {
             transaction
                 .commit()
@@ -168,6 +182,7 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(None);
         };
+
         let current = row.into_log()?;
         let day = match &patch.day {
             crate::profiles::Patch::Unchanged => current.day,
@@ -179,9 +194,10 @@ impl ProfileLogs for Database {
         };
         let data = match &patch.entry {
             crate::profiles::Patch::Unchanged => current.data,
-            crate::profiles::Patch::Set(entry) => replace_same_variant(current.data, *entry),
+            crate::profiles::Patch::Set(entry) => current.data.replace_same_variant(*entry),
         };
         let changed = day != current.day || time != current.time || data != current.data;
+
         if !changed {
             transaction
                 .commit()
@@ -189,6 +205,7 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(Some(current));
         }
+
         let now = self.clock.now().map_err(ProfileLogError::clock)?;
         sqlx::query(
             "UPDATE profile_logs
@@ -204,12 +221,15 @@ impl ProfileLogs for Database {
         .execute(&mut *transaction)
         .await
         .map_err(ProfileLogError::storage)?;
+
         update_current_weight_if_changed(&mut transaction, user, profile, &mut profile_data, now)
             .await?;
+
         transaction
             .commit()
             .await
             .map_err(ProfileLogError::storage)?;
+
         Ok(Some(ProfileLog {
             id,
             profile_id: profile,
@@ -226,6 +246,7 @@ impl ProfileLogs for Database {
         id: ProfileLogId,
     ) -> Result<bool, ProfileLogError> {
         let mut transaction = begin_immediate(self).await?;
+
         let Some(mut profile_data) = owned_profile_data(&mut transaction, user, profile).await?
         else {
             transaction
@@ -234,6 +255,7 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(false);
         };
+
         let row = sqlx::query_as::<_, ProfileLogRow>(
             "SELECT id, profile_id, day, time, data_json
              FROM profile_logs WHERE profile_id = ? AND id = ?",
@@ -243,6 +265,7 @@ impl ProfileLogs for Database {
         .fetch_optional(&mut *transaction)
         .await
         .map_err(ProfileLogError::storage)?;
+
         let Some(row) = row else {
             transaction
                 .commit()
@@ -250,29 +273,26 @@ impl ProfileLogs for Database {
                 .map_err(ProfileLogError::storage)?;
             return Ok(false);
         };
+
         row.into_log()?;
+
         sqlx::query("DELETE FROM profile_logs WHERE profile_id = ? AND id = ?")
             .bind(profile.get())
             .bind(id.get())
             .execute(&mut *transaction)
             .await
             .map_err(ProfileLogError::storage)?;
+
         let now = self.clock.now().map_err(ProfileLogError::clock)?;
         update_current_weight_if_changed(&mut transaction, user, profile, &mut profile_data, now)
             .await?;
+
         transaction
             .commit()
             .await
             .map_err(ProfileLogError::storage)?;
-        Ok(true)
-    }
-}
 
-fn replace_same_variant(current: ProfileLogData, patch: LogEntryPatch) -> ProfileLogData {
-    match (current, patch) {
-        (ProfileLogData::Biometric(_), LogEntryPatch::Biometric(entry)) => {
-            ProfileLogData::Biometric(entry)
-        }
+        Ok(true)
     }
 }
 

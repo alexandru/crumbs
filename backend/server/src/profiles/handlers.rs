@@ -20,6 +20,7 @@ pub(super) async fn list<S: Profiles + Send + 'static>(
         Ok(request) => request,
         Err(error) => return invalid_request(error.to_string()),
     };
+
     match store.list_profiles(session.user_id, &query).await {
         Ok(profiles) => Json(profiles).into_response(),
         Err(error) => profile_error(error),
@@ -35,6 +36,7 @@ pub(super) async fn create<S: Profiles + Send + 'static>(
         Ok(input) => input,
         Err(error) => return invalid_request(error.to_string()),
     };
+
     match store.create_profile(session.user_id, &input).await {
         Ok(profile) => (
             StatusCode::CREATED,
@@ -55,6 +57,7 @@ pub(super) async fn get<S: Profiles + Send + 'static>(
         Ok(id) => id,
         Err(error) => return invalid_request(error.to_string()),
     };
+
     match store.profile(session.user_id, id).await {
         Ok(Some(profile)) => Json(profile).into_response(),
         Ok(None) => not_found(),
@@ -76,6 +79,7 @@ pub(super) async fn patch<S: Profiles + Send + 'static>(
         Ok(input) => input,
         Err(error) => return invalid_request(error.to_string()),
     };
+
     match store.patch_profile(session.user_id, id, &patch).await {
         Ok(Some(profile)) => Json(profile).into_response(),
         Ok(None) => not_found(),
@@ -98,6 +102,7 @@ fn profile_error(error: ProfileError) -> Response {
             "profile operation failed".to_owned(),
         ),
     };
+
     error_response(status, code, message)
 }
 
