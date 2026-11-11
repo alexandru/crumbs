@@ -2,7 +2,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, dec};
 use sqlx::FromRow;
 use tokio::sync::Barrier;
 
@@ -533,7 +533,7 @@ async fn cache_recalculation_updates_calculated_bmr_and_preserves_custom_setting
             .derived
             .bmr()
             .map(|value| value.amount().value()),
-        Some(Decimal::new(16175, 1))
+        Some(dec!(1617.5))
     );
 
     let next_day = chrono::DateTime::parse_from_rfc3339("2020-01-02T12:00:00Z")?.timestamp_millis();
@@ -554,7 +554,7 @@ async fn cache_recalculation_updates_calculated_bmr_and_preserves_custom_setting
             .derived
             .bmr()
             .map(|value| value.amount().value()),
-        Some(Decimal::new(16675, 1))
+        Some(dec!(1667.5))
     );
     assert_eq!(
         calculated_after.data.settings.height,

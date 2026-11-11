@@ -173,6 +173,9 @@ macro_rules! measurement {
             /// Zero in this unit.
             pub const ZERO: Self = Self(Decimal::ZERO);
 
+            /// One in this unit.
+            pub const ONE: Self = Self(Decimal::ONE);
+
             /// Creates a quantity from an exact fixed-point value.
             pub const fn new(value: Decimal) -> Self {
                 Self(value)
@@ -771,9 +774,9 @@ fn expand_decimal(base: &str, exponent: &str) -> Option<String> {
         return None;
     }
     let digits = format!("{integer}{fraction}");
-    let point = i32::try_from(integer.len()).ok()?.checked_add(exponent)?;
+    let point = i32::try_from(integer.len()).ok()? + exponent;
     if point <= 0 {
-        let zeros = usize::try_from(point.checked_neg()?).ok()?;
+        let zeros = usize::try_from(-point).ok()?;
         Some(format!("{sign}0.{}{digits}", "0".repeat(zeros)))
     } else {
         let point = usize::try_from(point).ok()?;
