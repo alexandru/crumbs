@@ -27,12 +27,23 @@ fn profile_ids_and_birth_dates_validate_and_preserve_wire_precision() -> Result<
     assert!(serde_json::from_str::<ProfileId>("0").is_err());
     assert!(serde_json::from_str::<ProfileId>("-2").is_err());
 
-    for value in ["1982", "1982-09", "1982-09-10"] {
+    for (value, precision, effective) in [
+        ("0001", BirthDatePrecision::Year, "0001-01-01"),
+        ("1982", BirthDatePrecision::Year, "1982-01-01"),
+        ("1982-09", BirthDatePrecision::YearMonth, "1982-09-01"),
+        ("1982-09-10", BirthDatePrecision::FullDate, "1982-09-10"),
+        ("2000-02-29", BirthDatePrecision::FullDate, "2000-02-29"),
+        ("9999-12-31", BirthDatePrecision::FullDate, "9999-12-31"),
+    ] {
         let date: BirthDate = serde_json::from_str(&format!("\"{value}\""))?;
         assert_eq!(serde_json::to_string(&date)?, format!("\"{value}\""));
+        assert_eq!(date.precision(), precision);
+        assert_eq!(date.effective_date().to_string(), effective);
     }
     for value in [
         "0000",
+        "0000-01",
+        "0000-01-01",
         "1982-00",
         "1982-13",
         "1982-02-29",
@@ -42,11 +53,15 @@ fn profile_ids_and_birth_dates_validate_and_preserve_wire_precision() -> Result<
         "1982-9",
         "1982-09-1",
         "1982-09-010",
+        "１９８２",
+        "-001",
+        "1982-09-10\n",
     ] {
         assert!(
-            serde_json::from_str::<BirthDate>(&format!("\"{value}\"")).is_err(),
+            BirthDate::parse(value).is_err(),
             "accepted invalid date {value}"
         );
+        assert!(serde_json::from_value::<BirthDate>(serde_json::json!(value)).is_err());
     }
     Ok(())
 }
