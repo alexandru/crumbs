@@ -2,6 +2,7 @@ use std::error::Error;
 use std::str::FromStr;
 
 use rust_decimal::Decimal;
+use rust_decimal::dec;
 
 use super::*;
 
@@ -67,7 +68,7 @@ fn ratios_preserve_compound_units_and_multiply_by_denominator() -> Result<(), Bo
     assert!(serde_json::from_str::<Ratio<Grams, Millilitres>>("\"1 g\"").is_err());
     let coefficient: Ratio<Kcal, Kilograms> = KcalPerKg::from(10);
     assert_eq!(coefficient.to_string(), "10 kcal/kg");
-    let height: Ratio<Kcal, Centimetres> = KcalPerCm::from(Decimal::new(625, 2));
+    let height: Ratio<Kcal, Centimetres> = KcalPerCm::from(dec!(6.25));
     assert_eq!(height.to_string(), "6.25 kcal/cm");
     Ok(())
 }
@@ -81,7 +82,7 @@ fn numeric_conversions_keep_values_exact_for_units_and_ratios() {
     let maximum = Ratio::<Grams, Millilitres>::from(u64::MAX);
     assert_eq!(maximum.amount().value(), Decimal::from(u64::MAX));
     assert_eq!(
-        Ratio::<Grams, Millilitres>::from(Decimal::new(125, 2)).to_string(),
+        Ratio::<Grams, Millilitres>::from(dec!(1.25)).to_string(),
         "1.25 g/ml"
     );
 }
@@ -90,16 +91,16 @@ fn numeric_conversions_keep_values_exact_for_units_and_ratios() {
 fn measurement_units_support_signed_arithmetic() {
     macro_rules! assert_arithmetic {
         ($unit:ty) => {{
-            let one = <$unit>::new(Decimal::ONE);
-            let two = <$unit>::new(Decimal::from(2));
+            let one = <$unit>::ONE;
+            let two = <$unit>::from(2);
             assert_eq!(one + one, two);
             assert_eq!(one - two, -one);
         }};
     }
-    let grams = PerDay::new(Grams::new(Decimal::from(3)));
-    let one_gram = Grams::new(Decimal::ONE);
-    assert_eq!((grams - one_gram).amount(), Grams::new(Decimal::from(2)));
-    assert_eq!((grams + one_gram).amount(), Grams::new(Decimal::from(4)));
+    let grams = PerDay::new(Grams::from(3));
+    let one_gram = Grams::ONE;
+    assert_eq!((grams - one_gram).amount(), Grams::from(2));
+    assert_eq!((grams + one_gram).amount(), Grams::from(4));
     assert_eq!(grams.to_string(), "3 g/day");
     assert_eq!(grams.unit_symbol(), "g/day");
 
@@ -110,8 +111,8 @@ fn measurement_units_support_signed_arithmetic() {
 
 #[test]
 fn measurement_unit_symbols_follow_concrete_and_dimension_units() -> Result<(), Box<dyn Error>> {
-    assert_eq!(Grams::new(Decimal::ONE).unit_symbol(), "g");
-    assert_eq!(Kcal::new(Decimal::ONE).unit_symbol(), "kcal");
+    assert_eq!(Grams::ONE.unit_symbol(), "g");
+    assert_eq!(Kcal::ONE.unit_symbol(), "kcal");
     assert_eq!(Mass::from_str("2 mg")?.unit_symbol(), "mg");
     assert_eq!(Energy::from_str("2 kJ")?.unit_symbol(), "kJ");
     assert_eq!(
@@ -279,33 +280,27 @@ fn profile_mass_and_height_units_use_fixed_point_values() -> Result<(), Box<dyn 
 }
 
 #[test]
-fn mass_volume_and_energy_conversions_use_checked_metric_factors() -> Result<(), Box<dyn Error>> {
+fn mass_volume_and_energy_conversions_use_metric_factors() -> Result<(), Box<dyn Error>> {
     assert_eq!(
-        Mass::from_str("1.25 kg")?.to_grams()?.value(),
+        Mass::from_str("1.25 kg")?.to_grams().value(),
+        Decimal::from(1250)
+    );
+    assert_eq!(Mass::from_str("1250 mg")?.to_grams().value(), dec!(1.25));
+    assert_eq!(Mass::from_str("250000 µg")?.to_grams().value(), dec!(0.25));
+    assert_eq!(
+        Volume::from_str("1.25 l")?.to_millilitres().value(),
         Decimal::from(1250)
     );
     assert_eq!(
-        Mass::from_str("1250 mg")?.to_grams()?.value(),
-        Decimal::new(125, 2)
-    );
-    assert_eq!(
-        Mass::from_str("250000 µg")?.to_grams()?.value(),
-        Decimal::new(25, 2)
-    );
-    assert_eq!(
-        Volume::from_str("1.25 l")?.to_millilitres()?.value(),
-        Decimal::from(1250)
-    );
-    assert_eq!(
-        Volume::from_str("250 ml")?.to_millilitres()?.value(),
+        Volume::from_str("250 ml")?.to_millilitres().value(),
         Decimal::from(250)
     );
     assert_eq!(
-        Energy::from_str("4.184 kJ")?.to_kilocalories()?.to_string(),
+        Energy::from_str("4.184 kJ")?.to_kilocalories().to_string(),
         "1 kcal"
     );
     assert_eq!(
-        Energy::from_str("2 kcal")?.to_kilocalories()?.to_string(),
+        Energy::from_str("2 kcal")?.to_kilocalories().to_string(),
         "2 kcal"
     );
 
@@ -329,41 +324,36 @@ fn mass_volume_and_energy_conversions_use_checked_metric_factors() -> Result<(),
 }
 
 #[test]
-fn checked_scaling_preserves_units_and_qualifiers_and_reports_rounding_overflow()
--> Result<(), Box<dyn Error>> {
-    let mass = Mass::from_str("1.25 kg")?.checked_scale(Decimal::from(2))?;
+fn arithmetic_preserves_units_and_qualifiers_and_rounds() -> Result<(), Box<dyn Error>> {
+    let mass = Mass::from_str("1.25 kg")? * dec!(2);
     assert_eq!(mass.to_string(), "2.50 kg");
-    let volume = Volume::from_str("2 l")?.checked_scale(Decimal::new(15, 1))?;
+    let volume = Volume::from_str("2 l")? * dec!(1.5);
     assert_eq!(volume.to_string(), "3.0 l");
-    let energy = Energy::from_str("2 kJ")?.checked_scale(Decimal::from(2))?;
+    let energy = Energy::from_str("2 kJ")? * dec!(2);
     assert_eq!(energy.to_string(), "4 kJ");
 
-    let reported = Reported::<Mass>::from_str("< 2 mg")?.checked_scale(Decimal::from(3))?;
+    let source = Reported::<Mass>::from_str("< 2 mg")?;
+    let reported = Reported::new(source.qualifier(), source.amount() * dec!(3))?;
     assert_eq!(reported.to_string(), "< 6 mg");
-    let quantity = MeasuredQuantity::from_str("2 ml")?.checked_scale(Decimal::new(5, 1))?;
+    let quantity = MeasuredQuantity::from_str("2 ml")? * dec!(0.5);
     assert_eq!(quantity.to_string(), "1.0 ml");
+    let half = Grams::from(9) / dec!(2);
+    assert_eq!(half.value(), dec!(4.5));
+    assert_eq!(half.unit_symbol(), "g");
 
-    let odd_tie = Grams::new(Decimal::new(3, 28)).checked_scale(Decimal::new(5, 1))?;
-    assert_eq!(odd_tie.value(), Decimal::new(2, 28));
-    let even_tie = Grams::new(Decimal::new(1, 28)).checked_scale(Decimal::new(5, 1))?;
+    let odd_tie = Grams::new(dec!(3e-28)) * dec!(0.5);
+    assert_eq!(odd_tie.value(), dec!(2e-28));
+    let even_tie = Grams::new(dec!(1e-28)) * dec!(0.5);
     assert_eq!(even_tie.value(), Decimal::ZERO);
-    let strict_upper = Reported::new(Qualifier::LessThan, Grams::new(Decimal::new(1, 28)))?;
+    let strict_upper = Reported::new(Qualifier::LessThan, Grams::new(dec!(1e-28)))?;
     assert!(matches!(
-        strict_upper.checked_scale(Decimal::new(5, 1)),
+        Reported::new(strict_upper.qualifier(), strict_upper.amount() * dec!(0.5)),
         Err(QuantityError::ZeroStrictUpperBound)
     ));
+    assert_eq!((Grams::ONE * dec!(-1)).value(), Decimal::NEGATIVE_ONE);
+    let exact = Reported::new(Qualifier::Exact, Grams::ONE)?;
     assert!(matches!(
-        Grams::new(Decimal::MAX).checked_scale(Decimal::from(2)),
-        Err(QuantityError::Arithmetic)
-    ));
-    assert_eq!(
-        Grams::new(Decimal::ONE)
-            .checked_scale(Decimal::from(-1))?
-            .value(),
-        Decimal::NEGATIVE_ONE
-    );
-    assert!(matches!(
-        Reported::new(Qualifier::Exact, Grams::new(Decimal::ONE))?.checked_scale(Decimal::from(-1)),
+        Reported::new(exact.qualifier(), exact.amount() * dec!(-1)),
         Err(QuantityError::Negative)
     ));
     Ok(())

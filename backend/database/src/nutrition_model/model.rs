@@ -3,7 +3,7 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use super::quantity::{Energy, Kcal, Mass, MeasuredQuantity, Measurement, QuantityError, Reported};
+use super::quantity::{Energy, Kcal, Mass, MeasuredQuantity, QuantityError, Reported};
 
 /// Imported food details. Missing nutrition does not imply zero nutrients.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,33 +57,62 @@ pub struct Nutrients {
     pub cholesterol: Option<Reported<Mass>>,
 }
 
-impl Nutrients {
-    /// Scales every available nutrient while retaining qualifiers, units, and missing values.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QuantityError::Arithmetic`] if any scaled value is outside the representable
-    /// decimal range, [`QuantityError::Negative`] if a result is negative, or
-    /// [`QuantityError::ZeroStrictUpperBound`] if a strict upper bound rounds to zero.
-    pub fn checked_scale(&self, factor: Decimal) -> Result<Self, QuantityError> {
-        Ok(Self {
-            fat: self.fat.checked_scale(factor)?,
-            carbohydrates: self.carbohydrates.checked_scale(factor)?,
-            fibre: checked_scale_optional(self.fibre, factor)?,
-            protein: checked_scale_optional(self.protein, factor)?,
-            sodium: checked_scale_optional(self.sodium, factor)?,
-            salt: checked_scale_optional(self.salt, factor)?,
-            cholesterol: checked_scale_optional(self.cholesterol, factor)?,
-        })
-    }
-}
-
 /// Consumed nutrition totals, separate from source nutrition per 100 units.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsumedNutrition {
     pub calories: Reported<Kcal>,
     #[serde(flatten)]
     pub nutrients: Nutrients,
+}
+
+impl ConsumedNutrition {
+    /// Builds consumed totals from source nutrition and a portion factor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a negative nutrient amount or a strict upper bound of zero.
+    pub fn from_source(
+        energy: Reported<Energy>,
+        nutrients: &Nutrients,
+        factor: Decimal,
+    ) -> Result<Self, QuantityError> {
+        let nutrient = |value: Option<Reported<Mass>>| {
+            value
+                .map(|value| Reported::new(value.qualifier(), value.amount() * factor))
+                .transpose()
+        };
+
+        Ok(Self {
+            calories: Reported::new(
+                energy.qualifier(),
+                (energy.amount() * factor).to_kilocalories(),
+            )?,
+            nutrients: Nutrients {
+                fat: Fat {
+                    total: nutrient(nutrients.fat.total)?,
+                    saturated: nutrient(nutrients.fat.saturated)?,
+                    monounsaturated: nutrient(nutrients.fat.monounsaturated)?,
+                    polyunsaturated: nutrient(nutrients.fat.polyunsaturated)?,
+                    trans: nutrient(nutrients.fat.trans)?,
+                },
+                carbohydrates: Carbohydrates {
+                    including_fibre: nutrient(nutrients.carbohydrates.including_fibre)?,
+                    excluding_fibre: nutrient(nutrients.carbohydrates.excluding_fibre)?,
+                    sugars: Sugars {
+                        total: nutrient(nutrients.carbohydrates.sugars.total)?,
+                        added: nutrient(nutrients.carbohydrates.sugars.added)?,
+                        lactose: nutrient(nutrients.carbohydrates.sugars.lactose)?,
+                    },
+                    starch: nutrient(nutrients.carbohydrates.starch)?,
+                },
+                fibre: nutrient(nutrients.fibre)?,
+                protein: nutrient(nutrients.protein)?,
+                sodium: nutrient(nutrients.sodium)?,
+                salt: nutrient(nutrients.salt)?,
+                cholesterol: nutrient(nutrients.cholesterol)?,
+            },
+        })
+    }
 }
 
 /// Reported fat amounts, retaining each supplied unit and qualifier.
@@ -155,46 +184,6 @@ impl<'de> Deserialize<'de> for ServingSize {
 
 /// Source-supplied display name of a measured portion.
 pub type ServingName = String;
-
-impl Fat {
-    fn checked_scale(&self, factor: Decimal) -> Result<Self, QuantityError> {
-        Ok(Self {
-            total: checked_scale_optional(self.total, factor)?,
-            saturated: checked_scale_optional(self.saturated, factor)?,
-            monounsaturated: checked_scale_optional(self.monounsaturated, factor)?,
-            polyunsaturated: checked_scale_optional(self.polyunsaturated, factor)?,
-            trans: checked_scale_optional(self.trans, factor)?,
-        })
-    }
-}
-
-impl Carbohydrates {
-    fn checked_scale(&self, factor: Decimal) -> Result<Self, QuantityError> {
-        Ok(Self {
-            including_fibre: checked_scale_optional(self.including_fibre, factor)?,
-            excluding_fibre: checked_scale_optional(self.excluding_fibre, factor)?,
-            sugars: self.sugars.checked_scale(factor)?,
-            starch: checked_scale_optional(self.starch, factor)?,
-        })
-    }
-}
-
-impl Sugars {
-    fn checked_scale(&self, factor: Decimal) -> Result<Self, QuantityError> {
-        Ok(Self {
-            total: checked_scale_optional(self.total, factor)?,
-            added: checked_scale_optional(self.added, factor)?,
-            lactose: checked_scale_optional(self.lactose, factor)?,
-        })
-    }
-}
-
-fn checked_scale_optional<T: Measurement>(
-    value: Option<Reported<T>>,
-    factor: Decimal,
-) -> Result<Option<Reported<T>>, QuantityError> {
-    value.map(|value| value.checked_scale(factor)).transpose()
-}
 
 #[cfg(test)]
 #[path = "../../unit-tests/nutrition_model/model.rs"]

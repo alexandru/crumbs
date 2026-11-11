@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use rust_decimal::Decimal;
+use rust_decimal::dec;
 use sqlx::FromRow;
 use tokio::sync::Barrier;
 
@@ -539,7 +540,7 @@ async fn cache_recalculation_updates_calculated_bmr_and_preserves_custom_setting
             .derived
             .bmr()
             .map(|value| value.amount().value()),
-        Some(Decimal::new(16175, 1))
+        Some(dec!(1617.5))
     );
 
     let next_day = chrono::DateTime::parse_from_rfc3339("2020-01-02T12:00:00Z")?.timestamp_millis();
@@ -560,7 +561,7 @@ async fn cache_recalculation_updates_calculated_bmr_and_preserves_custom_setting
             .derived
             .bmr()
             .map(|value| value.amount().value()),
-        Some(Decimal::new(16675, 1))
+        Some(dec!(1667.5))
     );
     assert_eq!(
         calculated_after.data.settings.height,
@@ -1077,6 +1078,109 @@ async fn food_logs_validate_sources_calories_dimensions_servings_and_precision()
         .await?;
     assert_eq!(count, 1);
     database.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn food_snapshot_without_optional_inputs_survives_patches_until_refresh()
+-> Result<(), Box<dyn Error>> {
+    let (_directory, database, clock) = open_database(1_000).await?;
+    let user = insert_user(&database, 1).await?;
+    let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
+    let food_id = create_custom_food(
+        &database,
+        "Food",
+        serde_json::json!({"nutrition":{"per":"100 g","energy":"100 kcal"}}),
+    )
+    .await?;
+    let original = create_food_log(
+        &database,
+        user,
+        profile.id,
+        food_id,
+        "2024-01-01",
+        "100",
+        "g",
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE profile_logs SET data_json = json_remove(data_json, '$.food_id', '$.input') WHERE id = ?",
+    )
+    .bind(original.id.get())
+    .execute(&database.pool)
+    .await?;
+    let stored = database
+        .profile_log(user, profile.id, original.id)
+        .await?
+        .ok_or_else(|| std::io::Error::other("food log was not found"))?;
+    let ProfileLogData::Food(entry) = &stored.data else {
+        return Err(std::io::Error::other("entry was not food").into());
+    };
+    assert_eq!(entry.food_id(), None);
+    assert_eq!(entry.input(), None);
+
+    let metadata: PatchLog = serde_json::from_str(r#"{"day":"2024-02-01"}"#)?;
+    let updated = database
+        .patch_profile_log(user, profile.id, original.id, &metadata)
+        .await?
+        .ok_or_else(|| std::io::Error::other("food log was not found"))?;
+    assert_eq!(updated.data, stored.data);
+    let empty: PatchLog = serde_json::from_str(r#"{"entry":{"type":"food"}}"#)?;
+    assert_eq!(
+        database
+            .patch_profile_log(user, profile.id, original.id, &empty)
+            .await?
+            .ok_or_else(|| std::io::Error::other("food log was not found"))?,
+        updated
+    );
+
+    let before_failure = log_state(&database, original.id).await?;
+    clock.store(2_000, Ordering::SeqCst);
+    let incomplete = [
+        (
+            "food_id",
+            serde_json::json!({"type":"food","amount":"2","serving_size":"g"}),
+        ),
+        (
+            "amount",
+            serde_json::json!({"type":"food","food_id":food_id.0,"serving_size":"g"}),
+        ),
+        (
+            "serving_size",
+            serde_json::json!({"type":"food","food_id":food_id.0,"amount":"2"}),
+        ),
+    ];
+    for (missing, entry) in incomplete {
+        let patch: PatchLog = serde_json::from_value(serde_json::json!({
+            "day":"2024-03-01", "entry":entry
+        }))?;
+        let error = database
+            .patch_profile_log(user, profile.id, original.id, &patch)
+            .await
+            .err()
+            .ok_or_else(|| std::io::Error::other("incomplete refresh succeeded"))?;
+        assert!(
+            matches!(&error, ProfileLogError::InvalidInput(message) if message.contains(missing))
+        );
+        let after_failure = log_state(&database, original.id).await?;
+        assert_eq!(after_failure.day, before_failure.day);
+        assert_eq!(after_failure.data_json, before_failure.data_json);
+        assert_eq!(after_failure.updated_at, before_failure.updated_at);
+    }
+
+    let complete: PatchLog = serde_json::from_value(serde_json::json!({
+        "entry":{"type":"food","food_id":food_id.0,"amount":"2","serving_size":"g"}
+    }))?;
+    let refreshed = database
+        .patch_profile_log(user, profile.id, original.id, &complete)
+        .await?
+        .ok_or_else(|| std::io::Error::other("food log was not found"))?;
+    let ProfileLogData::Food(entry) = refreshed.data else {
+        return Err(std::io::Error::other("refreshed entry was not food").into());
+    };
+    assert_eq!(entry.food_id(), Some(food_id));
+    assert_eq!(entry.quantity().to_string(), "2 g");
+    assert!(entry.input().is_some());
     Ok(())
 }
 

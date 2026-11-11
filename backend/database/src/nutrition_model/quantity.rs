@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use std::str::FromStr;
 
 use rust_decimal::Decimal;
+use rust_decimal::dec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Invalid source measurements are rejected before entering the domain model.
@@ -19,8 +20,6 @@ pub enum QuantityError {
     NonPositive,
     #[error("a strict upper bound must be greater than zero")]
     ZeroStrictUpperBound,
-    #[error("measurement arithmetic overflow or out of range")]
-    Arithmetic,
 }
 
 /// A comparison or approximation supplied by the source.
@@ -60,17 +59,6 @@ pub trait Measurement: sealed::Sealed + Copy + fmt::Display {
 
     /// Parses a decimal value and its unit without first formatting them together.
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError>;
-
-    /// Multiplies this measurement by a fixed-point factor while preserving its unit.
-    ///
-    /// Arithmetic uses at most 28 fractional decimal places and the `Decimal` 96-bit
-    /// coefficient. When precision must be reduced, midpoint ties round to nearest even.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QuantityError::Arithmetic`] if the result is outside the representable
-    /// decimal range.
-    fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError>;
 }
 
 /// A measurement type with one fixed unit symbol.
@@ -113,17 +101,6 @@ impl<T: Measurement> Reported<T> {
     /// Returns the measured amount.
     pub const fn amount(&self) -> T {
         self.amount
-    }
-
-    /// Scales the amount while preserving its source qualifier.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QuantityError::Arithmetic`] if the result is outside the representable
-    /// decimal range, [`QuantityError::Negative`] if the result is negative, or
-    /// [`QuantityError::ZeroStrictUpperBound`] if a `LessThan` amount rounds to zero.
-    pub fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
-        Self::new(self.qualifier, self.amount.checked_scale(factor)?)
     }
 }
 
@@ -197,6 +174,9 @@ macro_rules! measurement {
             /// Zero in this unit.
             pub const ZERO: Self = Self(Decimal::ZERO);
 
+            /// One in this unit.
+            pub const ONE: Self = Self(Decimal::ONE);
+
             /// Creates a quantity from an exact fixed-point value.
             pub const fn new(value: Decimal) -> Self {
                 Self(value)
@@ -253,10 +233,6 @@ macro_rules! measurement {
                 }
                 Ok(Self::new(parse_decimal(value)?))
             }
-
-            fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
-                Ok(Self::new(checked_mul(self.0, factor)?))
-            }
         }
 
         impl fmt::Display for $name {
@@ -296,6 +272,13 @@ macro_rules! measurement {
             type Output = Self;
             fn mul(self, other: Decimal) -> Self {
                 Self(self.0 * other)
+            }
+        }
+
+        impl std::ops::Div<Decimal> for $name {
+            type Output = Self;
+            fn div(self, other: Decimal) -> Self {
+                Self(self.0 / other)
             }
         }
 
@@ -358,9 +341,6 @@ impl<N: Measurement, D: FixedUnit> Measurement for Ratio<N, D> {
             return Err(QuantityError::Unit(unit.to_owned()));
         }
         N::parse_with_unit(value, numerator).map(Self::new)
-    }
-    fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
-        self.0.checked_scale(factor).map(Self::new)
     }
 }
 impl<N: Measurement, D: FixedUnit> FromStr for Ratio<N, D> {
@@ -473,10 +453,6 @@ impl<T: Measurement> Measurement for PerDay<T> {
             .ok_or_else(|| QuantityError::Unit(unit.to_owned()))?;
         T::parse_with_unit(value, base).map(Self)
     }
-
-    fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
-        self.0.checked_scale(factor).map(Self)
-    }
 }
 
 impl<T: Measurement> FromStr for PerDay<T> {
@@ -569,24 +545,12 @@ impl Mass {
     ///
     /// Arithmetic uses at most 28 fractional decimal places and the `Decimal` 96-bit
     /// coefficient. When precision must be reduced, midpoint ties round to nearest even.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QuantityError::Arithmetic`] if the result is outside the representable
-    /// decimal range.
-    pub fn to_grams(self) -> Result<Grams, QuantityError> {
+    pub fn to_grams(self) -> Grams {
         match self {
-            Self::Kilograms(value) => {
-                Ok(Grams::new(checked_mul(value.value(), Decimal::from(1000))?))
-            }
-            Self::Grams(value) => Ok(value),
-            Self::Milligrams(value) => {
-                Ok(Grams::new(checked_div(value.value(), Decimal::from(1000))?))
-            }
-            Self::Micrograms(value) => Ok(Grams::new(checked_div(
-                value.value(),
-                Decimal::from(1_000_000),
-            )?)),
+            Self::Kilograms(value) => Grams::new(value.value() * dec!(1000)),
+            Self::Grams(value) => value,
+            Self::Milligrams(value) => Grams::new(value.value() / dec!(1000)),
+            Self::Micrograms(value) => Grams::new(value.value() / dec!(1_000_000)),
         }
     }
 }
@@ -616,13 +580,17 @@ impl Measurement for Mass {
             _ => Err(QuantityError::Unit(unit.to_owned())),
         }
     }
+}
 
-    fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
+impl std::ops::Mul<Decimal> for Mass {
+    type Output = Self;
+
+    fn mul(self, factor: Decimal) -> Self {
         match self {
-            Self::Kilograms(value) => Ok(Self::Kilograms(value.checked_scale(factor)?)),
-            Self::Grams(value) => Ok(Self::Grams(value.checked_scale(factor)?)),
-            Self::Milligrams(value) => Ok(Self::Milligrams(value.checked_scale(factor)?)),
-            Self::Micrograms(value) => Ok(Self::Micrograms(value.checked_scale(factor)?)),
+            Self::Kilograms(value) => Self::Kilograms(value * factor),
+            Self::Grams(value) => Self::Grams(value * factor),
+            Self::Milligrams(value) => Self::Milligrams(value * factor),
+            Self::Micrograms(value) => Self::Micrograms(value * factor),
         }
     }
 }
@@ -667,18 +635,10 @@ impl Energy {
     ///
     /// Arithmetic uses at most 28 fractional decimal places and the `Decimal` 96-bit
     /// coefficient. When precision must be reduced, midpoint ties round to nearest even.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QuantityError::Arithmetic`] if the result is outside the representable
-    /// decimal range.
-    pub fn to_kilocalories(self) -> Result<Kcal, QuantityError> {
+    pub fn to_kilocalories(self) -> Kcal {
         match self {
-            Self::Kcal(value) => Ok(value),
-            Self::Kilojoules(value) => Ok(Kcal::new(checked_div(
-                value.value(),
-                Decimal::new(4184, 3),
-            )?)),
+            Self::Kcal(value) => value,
+            Self::Kilojoules(value) => Kcal::new(value.value() / dec!(4.184)),
         }
     }
 }
@@ -704,11 +664,15 @@ impl Measurement for Energy {
             _ => Err(QuantityError::Unit(unit.to_owned())),
         }
     }
+}
 
-    fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
+impl std::ops::Mul<Decimal> for Energy {
+    type Output = Self;
+
+    fn mul(self, factor: Decimal) -> Self {
         match self {
-            Self::Kcal(value) => Ok(Self::Kcal(value.checked_scale(factor)?)),
-            Self::Kilojoules(value) => Ok(Self::Kilojoules(value.checked_scale(factor)?)),
+            Self::Kcal(value) => Self::Kcal(value * factor),
+            Self::Kilojoules(value) => Self::Kilojoules(value * factor),
         }
     }
 }
@@ -772,20 +736,15 @@ impl MeasuredQuantity {
             Self::Mass(_) => None,
         }
     }
+}
 
-    /// Multiplies this measured quantity by a factor while preserving its unit.
-    ///
-    /// Arithmetic uses at most 28 fractional decimal places and the `Decimal` 96-bit
-    /// coefficient. When precision must be reduced, midpoint ties round to nearest even.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QuantityError::Arithmetic`] if the result is outside the representable
-    /// decimal range.
-    pub fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
+impl std::ops::Mul<Decimal> for MeasuredQuantity {
+    type Output = Self;
+
+    fn mul(self, factor: Decimal) -> Self {
         match self {
-            Self::Mass(value) => Ok(Self::Mass(value.checked_scale(factor)?)),
-            Self::Volume(value) => Ok(Self::Volume(value.checked_scale(factor)?)),
+            Self::Mass(value) => Self::Mass(value * factor),
+            Self::Volume(value) => Self::Volume(value * factor),
         }
     }
 }
@@ -822,18 +781,10 @@ impl Volume {
     ///
     /// Arithmetic uses at most 28 fractional decimal places and the `Decimal` 96-bit
     /// coefficient. When precision must be reduced, midpoint ties round to nearest even.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QuantityError::Arithmetic`] if the result is outside the representable
-    /// decimal range.
-    pub fn to_millilitres(self) -> Result<Millilitres, QuantityError> {
+    pub fn to_millilitres(self) -> Millilitres {
         match self {
-            Self::Millilitres(value) => Ok(value),
-            Self::Litres(value) => Ok(Millilitres::new(checked_mul(
-                value.value(),
-                Decimal::from(1000),
-            )?)),
+            Self::Millilitres(value) => value,
+            Self::Litres(value) => Millilitres::new(value.value() * dec!(1000)),
         }
     }
 }
@@ -861,11 +812,15 @@ impl Measurement for Volume {
             _ => Err(QuantityError::Unit(unit.to_owned())),
         }
     }
+}
 
-    fn checked_scale(self, factor: Decimal) -> Result<Self, QuantityError> {
+impl std::ops::Mul<Decimal> for Volume {
+    type Output = Self;
+
+    fn mul(self, factor: Decimal) -> Self {
         match self {
-            Self::Millilitres(value) => Ok(Self::Millilitres(value.checked_scale(factor)?)),
-            Self::Litres(value) => Ok(Self::Litres(value.checked_scale(factor)?)),
+            Self::Millilitres(value) => Self::Millilitres(value * factor),
+            Self::Litres(value) => Self::Litres(value * factor),
         }
     }
 }
@@ -916,16 +871,6 @@ pub(crate) type KcalPerCm = Ratio<Kcal, Centimetres>;
 
 mod sealed {
     pub trait Sealed {}
-}
-
-/// Applies fixed-point multiplication and maps representational overflow to a domain error.
-fn checked_mul(left: Decimal, right: Decimal) -> Result<Decimal, QuantityError> {
-    left.checked_mul(right).ok_or(QuantityError::Arithmetic)
-}
-
-/// Applies fixed-point division and maps representational overflow to a domain error.
-fn checked_div(left: Decimal, right: Decimal) -> Result<Decimal, QuantityError> {
-    left.checked_div(right).ok_or(QuantityError::Arithmetic)
 }
 
 fn qualifier_and_amount(value: &str) -> (Qualifier, &str) {
@@ -985,9 +930,9 @@ fn expand_decimal(base: &str, exponent: &str) -> Option<String> {
         return None;
     }
     let digits = format!("{integer}{fraction}");
-    let point = i32::try_from(integer.len()).ok()?.checked_add(exponent)?;
+    let point = i32::try_from(integer.len()).ok()? + exponent;
     if point <= 0 {
-        let zeros = usize::try_from(point.checked_neg()?).ok()?;
+        let zeros = usize::try_from(-point).ok()?;
         Some(format!("{sign}0.{}{digits}", "0".repeat(zeros)))
     } else {
         let point = usize::try_from(point).ok()?;

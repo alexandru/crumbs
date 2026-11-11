@@ -14,6 +14,15 @@ All units of measurement MUST use distinct semantic newtypes (e.g. `Grams`, `Mil
 
 Nutrition quantities and arithmetic MUST use fixed-point decimal representations. Parsing, conversion, storage, and serialization MUST NOT pass these quantities through binary floating-point values.
 
+## Arithmetic
+
+Use ordinary operators and `std::ops` traits. Do not wrap arithmetic in overflow checks or `Result`. See [ADR-0014](docs/adr/0014-use-standard-arithmetic-operators.md).
+
+```diff
+-let total = amount.checked_scale(Decimal::new(25, 1))?;
++let total = amount * dec!(2.5);
+```
+
 ## Construction
 
 Numeric newtypes SHOULD implement `From` for common inputs that convert without loss or validation. Call sites SHOULD use these conversions directly, such as `KcalPerKg::from(10)`.
@@ -53,7 +62,7 @@ pub enum LogEntryPatch {
 
 ## Panics
 
-Rust code MUST NOT panic. Agents MUST NOT use `unwrap`, `expect`, `panic!`, `todo!`, or `unreachable!`.
+Rust code SHOULD avoid panics. Agents MUST NOT use `unwrap`, `expect`, `panic!`, `todo!`, or `unreachable!`.
 
 ## Errors
 

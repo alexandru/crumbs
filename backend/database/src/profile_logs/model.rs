@@ -2,13 +2,14 @@ use std::fmt;
 
 use chrono::{Datelike, NaiveDate, NaiveTime, Timelike};
 use rust_decimal::Decimal;
+use rust_decimal::dec;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::foods::{FoodDescription, FoodId};
 use crate::nutrition_model::{
-    ConsumedNutrition, Grams, Kilograms, Litres, Mass, MeasuredQuantity, Micrograms, Milligrams,
-    Millilitres, ServingName, ServingSize, Volume,
+    ConsumedNutrition, FoodData, Grams, Kilograms, Litres, Mass, MeasuredQuantity, Micrograms,
+    Milligrams, Millilitres, NutritionBasis, QuantityError, ServingName, ServingSize, Volume,
 };
 use crate::profiles::{BodyWeight, Patch, ProfileId};
 
@@ -367,7 +368,7 @@ impl MeasurementUnit {
         }
     }
 
-    pub(crate) fn quantity(self) -> MeasuredQuantity {
+    fn quantity(self) -> MeasuredQuantity {
         match self {
             Self::Mass(unit) => unit.quantity(),
             Self::Volume(unit) => unit.quantity(),
@@ -460,6 +461,31 @@ impl ServingSelector {
         match MeasurementUnit::parse(value) {
             Some(unit) => Ok(Self::Unit(unit)),
             None => Ok(Self::Named(SelectedServingName::new(value)?)),
+        }
+    }
+
+    fn resolve(&self, servings: Vec<ServingSize>) -> Result<ServingSize, ProfileLogError> {
+        match self {
+            Self::Unit(unit) => ServingSize::new(unit.as_str().to_owned(), unit.quantity())
+                .map_err(food_calculation_error),
+            Self::Named(name) => {
+                let mut matches = servings
+                    .into_iter()
+                    .filter(|serving| serving.name.trim() == name.as_str());
+                let serving = matches.next().ok_or_else(|| {
+                    ProfileLogError::InvalidInput(format!(
+                        "serving '{}' is not available for this food",
+                        name.as_str()
+                    ))
+                })?;
+                if matches.next().is_some() {
+                    return Err(ProfileLogError::InvalidInput(format!(
+                        "serving '{}' is ambiguous for this food",
+                        name.as_str()
+                    )));
+                }
+                Ok(serving)
+            }
         }
     }
 }
@@ -671,6 +697,34 @@ impl FoodLogEntry {
     pub const fn input(&self) -> Option<&FoodInputSnapshot> {
         self.input.as_ref()
     }
+
+    pub(super) fn from_food(
+        input: &FoodLogInput,
+        description: FoodDescription,
+        food_data: FoodData,
+    ) -> Result<Self, ProfileLogError> {
+        let nutrition = food_data.nutrition.as_ref().ok_or_else(missing_calories)?;
+        let source_energy = nutrition.energy.ok_or_else(missing_calories)?;
+
+        let serving = input.serving_size().resolve(food_data.serving_sizes)?;
+        let quantity = serving.quantity() * input.amount().value();
+        if quantity.value().is_zero() {
+            return Err(unsupported_precision("consumed quantity"));
+        }
+
+        let factor = nutrition_factor(nutrition.per, quantity)?;
+        let nutrition = ConsumedNutrition::from_source(source_energy, &nutrition.nutrients, factor)
+            .map_err(food_calculation_error)?;
+
+        let input_snapshot = FoodInputSnapshot::new(input.amount(), serving)?;
+        Self::new(
+            Some(input.food_id()),
+            quantity,
+            nutrition,
+            description,
+            Some(input_snapshot),
+        )
+    }
 }
 
 impl<'de> Deserialize<'de> for FoodLogEntry {
@@ -749,6 +803,48 @@ impl FoodLogPatch {
             || !matches!(&self.amount, Patch::Unchanged)
             || !matches!(&self.serving_size, Patch::Unchanged)
     }
+
+    pub(super) fn apply(&self, current: &FoodLogEntry) -> Result<FoodLogInput, ProfileLogError> {
+        let food_id = match &self.food_id {
+            Patch::Unchanged => current.food_id(),
+            Patch::Set(food_id) => Some(*food_id),
+        }
+        .ok_or_else(|| {
+            ProfileLogError::InvalidInput(
+                "food_id is required to refresh this food entry".to_owned(),
+            )
+        })?;
+
+        let amount = match &self.amount {
+            Patch::Unchanged => current.input().map(FoodInputSnapshot::amount),
+            Patch::Set(amount) => Some(*amount),
+        }
+        .ok_or_else(|| {
+            ProfileLogError::InvalidInput(
+                "amount is required to refresh this food entry".to_owned(),
+            )
+        })?;
+
+        let serving_size = match &self.serving_size {
+            Patch::Unchanged => current
+                .input()
+                .map(FoodInputSnapshot::serving_size)
+                .map(|serving| ServingSelector::parse(&serving.name))
+                .transpose()?,
+            Patch::Set(serving_size) => Some(serving_size.clone()),
+        }
+        .ok_or_else(|| {
+            ProfileLogError::InvalidInput(
+                "serving_size is required to refresh this food entry".to_owned(),
+            )
+        })?;
+
+        Ok(FoodLogInput {
+            food_id,
+            amount,
+            serving_size,
+        })
+    }
 }
 
 impl<'de> Deserialize<'de> for FoodLogPatch {
@@ -825,6 +921,17 @@ pub enum ProfileLogData {
     Biometric(BiometricLogEntry),
     /// A self-contained food-consumption entry.
     Food(FoodLogEntry),
+}
+
+impl ProfileLogData {
+    pub(super) fn is_weight(&self) -> bool {
+        matches!(
+            self,
+            Self::Biometric(BiometricLogEntry {
+                measurement: BiometricEntry::Weight(_)
+            })
+        )
+    }
 }
 
 /// A log entry accepted on create.
@@ -1045,4 +1152,47 @@ fn validate_food_id(food_id: FoodId) -> Result<(), ProfileLogError> {
 
 fn invalid_food(message: &str) -> ProfileLogError {
     ProfileLogError::InvalidInput(message.to_owned())
+}
+
+fn nutrition_factor(
+    basis: NutritionBasis,
+    quantity: MeasuredQuantity,
+) -> Result<Decimal, ProfileLogError> {
+    let normalized = match (basis, quantity) {
+        (NutritionBasis::Per100Grams, MeasuredQuantity::Mass(mass)) => mass.to_grams().value(),
+        (NutritionBasis::Per100Millilitres, MeasuredQuantity::Volume(volume)) => {
+            volume.to_millilitres().value()
+        }
+        _ => {
+            return Err(ProfileLogError::InvalidInput(
+                "serving unit must match the food nutrition basis".to_owned(),
+            ));
+        }
+    };
+    if normalized.is_zero() {
+        return Err(unsupported_precision("normalized quantity"));
+    }
+    let factor = normalized / dec!(100);
+    if factor.is_zero() {
+        return Err(unsupported_precision("nutrition scale"));
+    }
+    Ok(factor)
+}
+
+fn missing_calories() -> ProfileLogError {
+    ProfileLogError::InvalidInput(
+        "food has no usable calorie data; edit the food's nutrition or create a food with calories, then retry".to_owned(),
+    )
+}
+
+fn unsupported_precision(value: &str) -> ProfileLogError {
+    ProfileLogError::InvalidInput(format!(
+        "{value} is below the supported fixed-point precision"
+    ))
+}
+
+fn food_calculation_error(error: QuantityError) -> ProfileLogError {
+    ProfileLogError::InvalidInput(format!(
+        "food quantity or nutrition cannot be represented at supported fixed-point precision: {error}"
+    ))
 }

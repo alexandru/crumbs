@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::str::FromStr;
 
-use rust_decimal::Decimal;
+use rust_decimal::dec;
 use serde_json::json;
 
 use super::*;
@@ -135,7 +135,9 @@ fn nutrient_scaling_preserves_qualifiers_units_and_missing_values() -> Result<()
         "salt": null,
         "cholesterol": "6 µg"
     }))?;
-    let scaled = nutrients.checked_scale(Decimal::new(5, 1))?;
+    let consumed = ConsumedNutrition::from_source("100 kcal".parse()?, &nutrients, dec!(0.5))?;
+    assert_eq!(consumed.calories, "50 kcal".parse()?);
+    let scaled = consumed.nutrients;
     assert_eq!(
         scaled.fat.total.map(|value| value.to_string()).as_deref(),
         Some("<= 5.0 mg")
