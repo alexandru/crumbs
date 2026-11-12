@@ -10,13 +10,59 @@ Configuration fields and other domain values MUST use semantic types (e.g. `Http
 
 Domain types MUST make illegal states unrepresentable. Code MUST parse external values into semantic types that preserve their invariants ("parse, don't validate"). Public constructors and deserialization MUST enforce those invariants so callers cannot construct invalid values. Once parsed, downstream code MUST rely on the type rather than repeat validation.
 
-All units of measurement MUST use distinct semantic newtypes (e.g. `Grams`, `Milligrams`, `Kilocalories`, `Kilojoules`), not bare primitives or type aliases. Measurement types MUST keep their representation private so callers cannot construct invalid quantities or mix units implicitly. Unit conversions MUST be explicit and typed.
+All units of measurement MUST use distinct semantic newtypes (e.g. `Grams`, `Milligrams`, `Kcal`, `Kilojoules`), not bare primitives or type aliases. Measurement types MUST keep their representation private so callers cannot construct invalid quantities or mix units implicitly. Unit conversions MUST be explicit and typed.
 
-Nutrition quantities and arithmetic MUST use fixed-point decimal representations. Parsing, conversion, storage, and serialization MUST NOT pass these quantities through binary floating-point values. Operations that require rounding MUST use an explicit, documented rounding policy.
+Nutrition quantities and arithmetic MUST use fixed-point decimal representations. Parsing, conversion, storage, and serialization MUST NOT pass these quantities through binary floating-point values.
+
+## Arithmetic
+
+Use ordinary operators and `std::ops` traits. Do not wrap arithmetic in overflow checks or `Result`. See [ADR-0014](docs/adr/0014-use-standard-arithmetic-operators.md).
+
+```diff
+-let total = amount.checked_scale(Decimal::new(25, 1))?;
++let total = amount * dec!(2.5);
+```
+
+## Construction
+
+Numeric newtypes SHOULD implement `From` for common inputs that convert without loss or validation. Call sites SHOULD use these conversions directly, such as `KcalPerKg::from(10)`.
+
+## Enum payloads
+
+Equivalent payload alternatives in a domain enum MUST use the same constructor style. Stored, create, and patch enums for the same categories MUST follow the same convention. When alternatives wrap category payload types, each variant MUST carry one payload through a tuple constructor; each payload’s named fields belong in its own struct. Unit variants and variants with different semantic roles MAY use different shapes.
+
+Code MUST NOT add `Box` or other heap indirection solely to silence a size lint or without a demonstrated benefit for the expected workload. An enum intentionally stored inline MAY use a narrowly scoped lint allowance.
+
+For example, the payload struct retains the existing `{"type":"biometric","measurement":...}` JSON representation:
+
+```diff
++pub struct BiometricLogEntry {
++    pub measurement: BiometricEntry,
++}
++
+pub enum ProfileLogData {
+-    Biometric { measurement: BiometricEntry },
+-    Food(Box<FoodLogEntry>),
++    Biometric(BiometricLogEntry),
++    Food(FoodLogEntry),
+}
+
+pub enum LogInput {
+-    Biometric { measurement: BiometricEntry },
++    Biometric(BiometricLogEntry),
+    Food(FoodLogInput),
+}
+
+pub enum LogEntryPatch {
+-    Biometric { measurement: BiometricEntry },
++    Biometric(BiometricLogEntry),
+    Food(FoodLogPatch),
+}
+```
 
 ## Panics
 
-Rust code MUST NOT panic. Agents MUST NOT use `unwrap`, `expect`, `panic!`, `todo!`, or `unreachable!`.
+Rust code SHOULD avoid panics. Agents MUST NOT use `unwrap`, `expect`, `panic!`, `todo!`, or `unreachable!`.
 
 ## Errors
 
@@ -25,6 +71,10 @@ Fallible operations MUST return `Result` and use `?` to propagate errors.
 ## Async runtime
 
 Async subsystems SHOULD share the application's runtime. The composition root MUST enable the drivers required by its subsystems and propagate runtime-creation failures as typed `Result` errors. Subsystem APIs MAY assume this configured application context. Supporting arbitrary externally configured runtimes requires a separate explicit requirement.
+
+## Dependencies
+
+Third-party dependencies SHOULD be widely used and actively maintained.
 
 ## Imports
 
@@ -43,6 +93,49 @@ fn parse(input: &str) -> Result<Vec<u8>, FromHexError> {
 ## File structure
 
 Files MUST start with the most important definitions: public types, their impls, and public functions. Private items follow, so the file reads from most important to least important.
+
+## Keep related data and behavior together
+
+A function SHOULD live in a type’s inherent `impl` when that type is its natural receiver or the function builds values of that type. After refactoring, the function MUST refer to `Self` in its input parameters or return type, directly or as a type parameter. Keep these implementations adjacent to the type definition.
+
+These examples show signatures only. Function bodies are omitted.
+
+A builder returns the type it constructs:
+
+```diff
+-pub(crate) fn derive_profile(...) -> Result<ProfileDerived, ProfileError> {
+-    ...
+-}
++impl ProfileDerived {
++    pub(crate) fn calculate(...) -> Result<Self, ProfileError> {
++        ...
++    }
++}
+```
+
+A method calculates age from a birth date:
+
+```diff
+-fn age_on(birth_date: BirthDate, current_day: NaiveDate) -> Option<i32> {
+-    ...
+-}
++impl BirthDate {
++    fn age_on(&self, current_day: NaiveDate) -> Option<i32> {
++        ...
++    }
++}
+```
+
+## Code paragraphs
+
+Function bodies MUST use blank lines to separate main ideas.
+
+```diff
+ let result = profile(stored_id, name, data, now)?;
++
+ transaction.commit().await.map_err(ProfileError::storage)?;
+ Ok(Some(result))
+```
 
 ## Test compilation
 

@@ -8,7 +8,12 @@ use crumbs_database::foods::{
     CustomFoodInput, CustomFoodStore, Dataset, Food, FoodId, FoodLimit, FoodSearch, FoodWriter,
     SearchError, SearchQuery, SearchResults, Source, StoredFood, TagName, TagStore,
 };
+use crumbs_database::identity::UserId;
 use crumbs_database::nutrition_model::FoodData;
+use crumbs_database::profiles::{
+    CreateProfile, PatchProfile, Profile, ProfileError, ProfileId, ProfileList, ProfileListQuery,
+    Profiles,
+};
 use crumbs_database::{Database, DatabaseConfig};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -412,6 +417,47 @@ impl CustomFoodStore for RecordingFoodReader {
             "management unavailable in recording reader",
         ))
     }
+}
+
+impl Profiles for RecordingFoodReader {
+    async fn create_profile(
+        &self,
+        _user: UserId,
+        _input: &CreateProfile,
+    ) -> Result<Profile, ProfileError> {
+        Err(profile_storage_error())
+    }
+
+    async fn profile(
+        &self,
+        _user: UserId,
+        _id: ProfileId,
+    ) -> Result<Option<Profile>, ProfileError> {
+        Err(profile_storage_error())
+    }
+
+    async fn list_profiles(
+        &self,
+        _user: UserId,
+        _query: &ProfileListQuery,
+    ) -> Result<ProfileList, ProfileError> {
+        Err(profile_storage_error())
+    }
+
+    async fn patch_profile(
+        &self,
+        _user: UserId,
+        _id: ProfileId,
+        _patch: &PatchProfile,
+    ) -> Result<Option<Profile>, ProfileError> {
+        Err(profile_storage_error())
+    }
+}
+
+fn profile_storage_error() -> ProfileError {
+    ProfileError::Storage(Box::new(io::Error::other(
+        "profile management unavailable in recording reader",
+    )))
 }
 #[tokio::test]
 async fn http_and_mcp_return_the_same_food_and_full_nutrition() -> Result<(), Box<dyn Error>> {

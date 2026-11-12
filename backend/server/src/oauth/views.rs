@@ -49,9 +49,11 @@ pub(crate) fn login(page: LoginPage<'_>) -> Markup {
                                 @if page.scopes.can_read() {
                                     li { "Read the food library" }
                                     li { "Search the food library and view nutrition data" }
+                                    li { "Read account profiles and calorie calculations" }
                                 }
                                 @if page.scopes.can_write() {
                                     li { "Create, edit, and delete custom foods" }
+                                    li { "Create and update account profiles" }
                                 }
                             }
                         }

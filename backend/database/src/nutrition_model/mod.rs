@@ -8,6 +8,9 @@ pub use model::{
     Sugars,
 };
 pub use quantity::{
-    Energy, Grams, Kilocalories, Kilojoules, Mass, MeasuredQuantity, Measurement, Micrograms,
-    Milligrams, Millilitres, Qualifier, QuantityError, Reported,
+    Centimetres, Energy, FixedUnit, Grams, Kcal, Kilograms, Kilojoules, Mass, MeasuredQuantity,
+    Measurement, Micrograms, Milligrams, Millilitres, PerDay, Qualifier, QuantityError, Ratio,
+    Reported,
 };
+
+pub(crate) use quantity::{KcalPerCm, KcalPerKg};
