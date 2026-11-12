@@ -68,3 +68,7 @@ docker compose run --rm --no-deps crumbs db create-user --username alice
 Enter `https://crumbs.example.com/mcp` (with your domain), use OAuth, and sign in with your Crumbs account.
 
 </details>
+
+## License
+
+Crumbs is licensed under the [GNU Affero General Public License version 3](LICENSE) (AGPL-3.0-only).
