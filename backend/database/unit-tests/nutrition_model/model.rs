@@ -447,3 +447,59 @@ fn serving_sizes_reject_negative_mass_and_volume() -> Result<(), Box<dyn Error>>
     }
     Ok(())
 }
+
+#[test]
+fn expanded_nutrients_round_trip_and_scale() -> Result<(), Box<dyn Error>> {
+    let input = json!({
+        "water": "10 g", "caffeine": "< 2 mg", "choline": "0 mg",
+        "minerals": {"calcium": "2 mg", "iron": "2 mg", "magnesium": "2 mg", "phosphorus": "2 mg", "potassium": "2 mg", "zinc": "2 mg", "copper": "2 mg", "manganese": "2 mg", "selenium": "2 mg"},
+        "vitamins": {"vitamin_a": "2 µg", "vitamin_c": "2 µg", "vitamin_d": "2 µg", "vitamin_e": "2 µg", "vitamin_k1": "2 µg", "vitamin_b1": "2 µg", "vitamin_b2": "2 µg", "vitamin_b3": "2 µg", "vitamin_b5": "2 µg", "vitamin_b6": "2 µg", "vitamin_b9": "2 µg", "vitamin_b12": "2 µg"}
+    });
+    let nutrients: Nutrients = serde_json::from_value(input)?;
+    let decoded: Nutrients = serde_json::from_value(serde_json::to_value(&nutrients)?)?;
+    assert_eq!(decoded, nutrients);
+    let scaled =
+        ConsumedNutrition::from_source("100 kcal".parse()?, &nutrients, dec!(0.5))?.nutrients;
+    assert_eq!(scaled.water, Some("5 g".parse()?));
+    assert_eq!(scaled.caffeine, Some("< 1 mg".parse()?));
+    assert_eq!(scaled.choline, Some("0 mg".parse()?));
+    assert_eq!(scaled.minerals.calcium, Some("1 mg".parse()?));
+    assert_eq!(scaled.minerals.iron, Some("1 mg".parse()?));
+    assert_eq!(scaled.minerals.magnesium, Some("1 mg".parse()?));
+    assert_eq!(scaled.minerals.phosphorus, Some("1 mg".parse()?));
+    assert_eq!(scaled.minerals.potassium, Some("1 mg".parse()?));
+    assert_eq!(scaled.minerals.zinc, Some("1 mg".parse()?));
+    assert_eq!(scaled.minerals.copper, Some("1 mg".parse()?));
+    assert_eq!(scaled.minerals.manganese, Some("1 mg".parse()?));
+    assert_eq!(scaled.minerals.selenium, Some("1 mg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_a, Some("1 µg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_c, Some("1 µg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_d, Some("1 µg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_e, Some("1 µg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_k1, Some("1 µg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_b1, Some("1 µg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_b2, Some("1 µg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_b3, Some("1 µg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_b5, Some("1 µg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_b6, Some("1 µg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_b9, Some("1 µg".parse()?));
+    assert_eq!(scaled.vitamins.vitamin_b12, Some("1 µg".parse()?));
+    let partial: Nutrients = serde_json::from_value(
+        json!({"minerals":{"iron":"0 mg"}, "vitamins":{"vitamin_a":"3 µg"}}),
+    )?;
+    assert_eq!(partial.minerals.iron, Some("0 mg".parse()?));
+    assert_eq!(partial.minerals.zinc, None);
+    assert_eq!(partial.vitamins.vitamin_b12, None);
+    assert!(serde_json::from_value::<Nutrients>(json!({"minerals":{"iron":"-1 mg"}})).is_err());
+    assert!(
+        serde_json::from_value::<Nutrients>(json!({"vitamins":{"vitamin_a":"-1 µg"}})).is_err()
+    );
+    let old: ConsumedNutrition = serde_json::from_value(json!({"calories":"1 kcal"}))?;
+    assert_eq!(old.nutrients.minerals, Minerals::default());
+    assert_eq!(old.nutrients.vitamins, Vitamins::default());
+    let old_food: FoodData = serde_json::from_value(json!({"nutrition":{"per":"100 g"}}))?;
+    let old_profile = old_food.nutrition.ok_or("missing profile")?;
+    assert_eq!(old_profile.nutrients.minerals, Minerals::default());
+    assert_eq!(old_profile.nutrients.vitamins, Vitamins::default());
+    Ok(())
+}

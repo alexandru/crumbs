@@ -338,6 +338,46 @@ async fn unsupported_nutrition_unit_sanitizes_only_its_nutrient() -> Result<(), 
 }
 
 #[tokio::test]
+async fn reimport_populates_extended_nutrients_on_existing_food() -> Result<(), Box<dyn StdError>> {
+    let fixture = DatabaseFixture::open().await?;
+    let input = r#"{"FoundationFoods":[{"fdcId":9210,"description":"Tea","dataType":"Foundation","foodNutrients":[{"nutrient":{"id":1057,"unitName":"mg"},"amount":12},{"nutrient":{"id":1090,"unitName":"mg"},"amount":5}]}]}"#;
+    let path = write_input(fixture.directory.path(), "extended.json", input)?;
+    import_usda(&fixture.database, &path).await?;
+    let id = food_row(&fixture.pool, "usda", "9210").await?.id;
+    query(r#"UPDATE crumbs_foods SET parsed_data = '{"nutrition":null,"serving_sizes":[]}' WHERE id = ?"#)
+        .bind(id)
+        .execute(&fixture.pool)
+        .await?;
+
+    import_usda(&fixture.database, &path).await?;
+
+    let food = food_row(&fixture.pool, "usda", "9210").await?;
+    assert_eq!(food.id, id);
+    let nutrition = food
+        .parsed_data()?
+        .nutrition
+        .ok_or_else(|| io::Error::other("missing nutrition"))?;
+    assert_eq!(
+        nutrition
+            .nutrients
+            .caffeine
+            .map(|amount| amount.to_string())
+            .as_deref(),
+        Some("12 mg")
+    );
+    assert_eq!(
+        nutrition
+            .nutrients
+            .minerals
+            .magnesium
+            .map(|amount| amount.to_string())
+            .as_deref(),
+        Some("5 mg")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn reimport_updates_in_place_and_retains_internal_id() -> Result<(), Box<dyn StdError>> {
     let fixture = DatabaseFixture::open().await?;
     let path = write_input(fixture.directory.path(), "foundation.json", FOUNDATION_JSON)?;
