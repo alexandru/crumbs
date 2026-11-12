@@ -95,7 +95,21 @@ Clients must quote values requiring quotes, such as values containing spaces, hy
     ]);
     Tool::new_with_raw(
         NAME,
-        Some("Search foods with Crumbs full-text expressions over descriptions, categories, tags, source, and dataset. Results contain common, branded, and custom lists with independent limits, full nutrition data, and optional notes. Within each dataset, results use best-effort relevance, then food ID. Choose the appropriate food across datasets. No matches return three empty lists. Invalid search expressions return an error. There is no pagination.".into()),
+        Some(r#"Search foods with a Crumbs full-text expression.
+
+Example arguments:
+```json
+{
+  "query": "\"chicken breast\" dataset:common",
+  "limit": 20
+}
+```
+
+- Use AND, OR, NOT, parentheses, quoted phrases, prefixes, and field selectors.
+- Omit limit for 20; supplied limits are clamped to 20 through 1000 per dataset.
+- Results contain common, branded, and custom lists with independent limits, nutrition, and optional notes, ordered by best-effort relevance then food ID. Choose the appropriate food across datasets.
+- No matches return three empty lists. Invalid search expressions return an error. There is no pagination.
+- Requires crumbs:read."#.into()),
         schema,
     )
     .with_annotations(

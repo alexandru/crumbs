@@ -1,10 +1,15 @@
-# Crumbs
+# 🍽️ Crumbs
 
-Crumbs is a self-hosted calorie tracker in early development. The first milestone is a food catalog that an MCP server can search and extend; the goal is to track daily caloric intake and burn.
+**Your food diary, one conversation away.**
 
-## Run with Docker Compose
+A self-hosted nutrition tracker for ChatGPT, Mistral, and Claude. Search USDA foods, add your own, and track meals, calories, nutrients, and weight through conversation.
 
-Requires Docker with Compose. Set `CRUMBS_OAUTH_ISSUER` to the public HTTPS origin; see [Authentication](docs/authentication.md). Save this as `compose.yaml`:
+## Get started
+
+<details>
+<summary><b>1. Start with Docker Compose</b></summary>
+
+Save as `compose.yaml` and replace the domain with yours. Route public HTTPS traffic to `localhost:8080` through a [reverse proxy](docs/authentication.md#configure-and-run).
 
 ```yaml
 services:
@@ -21,13 +26,16 @@ volumes:
   crumbs-data:
 ```
 
-From the same directory, start the server:
-
 ```sh
 docker compose up -d
 ```
 
-Download the [USDA Foundation Foods JSON dataset](https://fdc.nal.usda.gov/download-datasets/), extract the ZIP, and save the JSON file as `~/Downloads/usda.json`. Import it with:
+</details>
+
+<details>
+<summary><b>2. Import USDA foods</b></summary>
+
+Download [USDA Foundation Foods (JSON)](https://fdc.nal.usda.gov/download-datasets/), unzip it, and save the JSON file as `~/Downloads/usda.json`.
 
 ```sh
 docker compose run --rm --no-deps \
@@ -35,4 +43,25 @@ docker compose run --rm --no-deps \
   crumbs db import-usda /imports/usda.json
 ```
 
-Stop the service with `docker compose down`; the `crumbs-data` volume keeps the database.
+</details>
+
+<details>
+<summary><b>3. Create your user</b></summary>
+
+Replace `alice` with your username. Enter a password when prompted.
+
+```sh
+docker compose run --rm --no-deps crumbs db create-user --username alice
+```
+
+</details>
+
+<details>
+<summary><b>4. Connect your assistant</b></summary>
+
+- [**ChatGPT**](https://developers.openai.com/api/docs/guides/custom-mcp-server): **Plugins → + → Add custom MCP server**.
+- [**Mistral**](https://docs.mistral.ai/vibe/work/connectors/mcp-connectors): **Connectors → + Add Connector → Custom MCP Connector**.
+
+Enter `https://crumbs.example.com/mcp` (with your domain), use OAuth, and sign in with your Crumbs account.
+
+</details>

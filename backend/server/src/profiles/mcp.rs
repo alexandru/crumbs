@@ -77,16 +77,80 @@ impl ProfileTool {
     fn tool(self) -> Tool {
         let description = match self {
             Self::List => {
-                "List profiles owned by the authenticated account in ascending profile ID order. Use last_id as an exclusive cursor. Requires crumbs:read."
+                r#"List profiles owned by the authenticated account in ascending profile ID order.
+
+Example arguments:
+```json
+{
+  "last_id": 123,
+  "limit": 20
+}
+```
+
+- Omit last_id or use null for the first page; it is an exclusive cursor.
+- Omit limit or use null for 100; the limit is 1 through 100. Requires crumbs:read."#
             }
             Self::Get => {
-                "Get one profile owned by the authenticated account. Requires crumbs:read."
+                r#"Get one profile owned by the authenticated account.
+
+Example arguments:
+```json
+{
+  "id": 123
+}
+```
+
+- Requires crumbs:read."#
             }
             Self::Create => {
-                "Create a named profile for the authenticated account. Omitted settings use profile defaults. Requires crumbs:write."
+                r#"Create a named profile for the authenticated account.
+
+Example arguments:
+```json
+{
+  "profile": {
+    "name": "Alex",
+    "settings": {
+      "birth_date": "1990-01-01",
+      "sex": "female",
+      "height": "175 cm",
+      "timezone": "Europe/Bucharest",
+      "weight_goal": "70 kg",
+      "bmr": {"mode": "custom", "value": "1700 kcal/day"},
+      "baseline_activity": {"mode": "preset", "level": "sedentary"}
+    }
+  }
+}
+```
+
+- Place settings inside profile.settings. Omitted settings use profile defaults; settings may be null.
+- Use unit-bearing strings for height, weight goal, and custom energy values.
+- BMR is `{"mode":"calculated"}` or `{"mode":"custom","value":"1700 kcal/day"}`.
+- Baseline activity is `{"mode":"preset","level":"sedentary"}` or `{"mode":"custom","value":"400 kcal/day"}`.
+- Requires crumbs:write."#
             }
             Self::Update => {
-                "Patch supported settings for a profile owned by the authenticated account. Omitted fields remain unchanged; null clears nullable settings and resets BMR to calculated. Requires crumbs:write."
+                r#"Patch a profile owned by the authenticated account.
+
+Example arguments:
+```json
+{
+  "id": 123,
+  "patch": {
+    "height": "175 cm",
+    "weight_goal": "70 kg",
+    "bmr": {"mode": "custom", "value": "1700 kcal/day"},
+    "baseline_activity": {"mode": "preset", "level": "sedentary"}
+  }
+}
+```
+
+- Place settings directly inside patch, not inside settings.
+- Omitted fields remain unchanged; null clears nullable settings and resets BMR to calculated. Name and timezone cannot be null.
+- Use unit-bearing strings for height, weight goal, and custom energy values.
+- BMR is `{"mode":"calculated"}` or `{"mode":"custom","value":"1700 kcal/day"}`.
+- Baseline activity is `{"mode":"preset","level":"sedentary"}` or `{"mode":"custom","value":"400 kcal/day"}`.
+- Requires crumbs:write."#
             }
         };
 
@@ -287,7 +351,7 @@ fn definitions() -> Value {
             "required": ["name"],
             "properties": {
                 "name": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Profile display name. Surrounding whitespace is trimmed; names are unique per account ignoring case, while accents remain significant."},
-                "settings": {"anyOf": [{"$ref": "#/$defs/create_settings"}, {"type": "null"}]}
+                "settings": {"anyOf": [{"$ref": "#/$defs/create_settings"}, {"type": "null"}], "description": "Optional settings object nested inside profile. Omit or use null for defaults."}
             }
         },
         "create_settings": {
@@ -322,12 +386,14 @@ fn definitions() -> Value {
         "height": {"type": "string", "description": "Positive height in centimetres, for example 175 cm."},
         "weight": {"type": "string", "description": "Positive body weight with the kg unit, for example 70 kg."},
         "bmr": {
+            "description": "Tagged object: calculated mode, or custom mode with a unit-bearing kcal/day value.",
             "oneOf": [
                 {"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "calculated"}}},
                 {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "custom"}, "value": {"type": "string", "description": "Positive BMR in kcal/day, for example 1700 kcal/day."}}}
             ]
         },
         "baseline_activity": {
+            "description": "Tagged object: preset mode with level, or custom mode with a unit-bearing kcal/day value.",
             "oneOf": [
                 {"type": "object", "additionalProperties": false, "required": ["mode", "level"], "properties": {"mode": {"const": "preset"}, "level": {"type": "string", "enum": ["no_activity", "sedentary", "lightly_active", "moderately_active", "very_active"]}}},
                 {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "custom"}, "value": {"type": "string", "description": "Fixed baseline activity in kcal/day, for example 400 kcal/day."}}}

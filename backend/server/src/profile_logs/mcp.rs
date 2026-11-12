@@ -79,19 +79,177 @@ impl ProfileLogTool {
     fn tool(self) -> Tool {
         let description = match self {
             Self::List => {
-                "List a profile's food and biometric logs by inclusive day range, entry type, biometric subtype, and exclusive last_id cursor. Results are ordered by ID descending in fixed pages of 100. The optional filter object contains from, to, entry_type, subtype, and last_id. Requires crumbs:read."
+                r#"List food and biometric logs for one profile owned by the authenticated account.
+
+Example arguments:
+```json
+{
+  "profile_id": 1,
+  "filter": {
+    "from": "2026-11-01",
+    "to": "2026-11-12",
+    "entry_type": "food"
+  }
+}
+```
+
+- All filter fields are optional. Omit filter to list all entry types.
+- Dates are inclusive YYYY-MM-DD strings.
+- For weight logs, set entry_type to "biometric" and subtype to "weight".
+- Results contain at most 100 logs, ordered by ID descending.
+- For the next page, set filter.last_id to the last returned ID. Only smaller IDs are returned.
+
+Requires crumbs:read."#
             }
             Self::Get => {
-                "Get one log from a profile owned by the authenticated account. Requires crumbs:read."
+                r#"Get one log from a profile owned by the authenticated account.
+
+Example arguments:
+```json
+{
+  "profile_id": 1,
+  "id": 42
+}
+```
+
+- profile_id identifies the profile.
+- id identifies the log in that profile.
+- Both IDs are positive integers.
+
+Requires crumbs:read."#
             }
             Self::Create => {
-                "Create a food or weight log for a profile. Food entries require an existing FoodId and a positive amount with a mass unit, volume unit, or named serving that matches the food. The server copies calories, available nutrients, and description into an immutable snapshot. If food calories are missing, edit the food or create a food with calories before logging it. Omit time to use the current local time in the profile timezone. Requires crumbs:write."
+                r#"Create one food or weight log for a profile owned by the authenticated account.
+
+Food arguments:
+```json
+{
+  "profile_id": 1,
+  "log": {
+    "day": "2026-11-12",
+    "entry": {
+      "type": "food",
+      "food_id": 123,
+      "amount": "150",
+      "serving_size": "g"
+    }
+  }
+}
+```
+
+Named serving entry (inside log.entry):
+```json
+{
+  "type": "food",
+  "food_id": 123,
+  "amount": "1",
+  "serving_size": "one cup"
+}
+```
+
+Weight arguments:
+```json
+{
+  "profile_id": 1,
+  "log": {
+    "day": "2026-11-12",
+    "entry": {
+      "type": "biometric",
+      "measurement": {
+        "type": "weight",
+        "value": "90 kg"
+      }
+    }
+  }
+}
+```
+
+- Food amount is a positive decimal string without a unit.
+- Put the unit or exact named serving in the separate serving_size string.
+- Use an existing food_id from food search or custom-food tools.
+- Units are kg, g, mg, µg, l, or ml and must match the food's nutrition basis.
+- Named servings must match a serving defined by that food, including case.
+- The server copies calories, available nutrients, and description into a stored snapshot.
+- If calories are missing, edit the food or create a food with calories before logging it.
+- day is a required YYYY-MM-DD string.
+- Optional log.time is a profile-local time string such as "14:30". Omit it or use null for the current local time in the profile timezone, including for past dates.
+
+Requires crumbs:write."#
             }
             Self::Update => {
-                "Patch a log's day or time, or patch its weight or food input without changing its profile or entry type. Omitted fields remain unchanged. Date/time-only changes preserve a food snapshot; supplied food input fields refresh it from the current food record. Requires crumbs:write."
+                r#"Update selected fields of one log without changing its profile or entry type.
+
+Food arguments:
+```json
+{
+  "profile_id": 1,
+  "id": 42,
+  "patch": {
+    "entry": {
+      "type": "food",
+      "amount": "200",
+      "serving_size": "g"
+    }
+  }
+}
+```
+
+Weight arguments:
+```json
+{
+  "profile_id": 1,
+  "id": 42,
+  "patch": {
+    "entry": {
+      "type": "biometric",
+      "measurement": {
+        "type": "weight",
+        "value": "89.5 kg"
+      }
+    }
+  }
+}
+```
+
+Date/time arguments:
+```json
+{
+  "profile_id": 1,
+  "id": 42,
+  "patch": {
+    "day": "2026-11-12",
+    "time": "14:30"
+  }
+}
+```
+
+- Omit fields to keep their stored values. Null is invalid.
+- For food entries, amount is a positive decimal string without a unit.
+- serving_size is a separate unit or exact named serving string.
+- food_id, amount, and serving_size are independently optional inside patch.entry.
+- type is required when entry is supplied.
+- Supplied food input fields rebuild the snapshot from the current food record.
+- Date/time-only changes preserve the snapshot.
+
+Requires crumbs:write."#
             }
             Self::Delete => {
-                "Delete one log from a profile owned by the authenticated account. Deleting a weight log recalculates the profile's current weight. Requires crumbs:write."
+                r#"Delete one log from a profile owned by the authenticated account.
+
+Example arguments:
+```json
+{
+  "profile_id": 1,
+  "id": 42
+}
+```
+
+- profile_id identifies the profile.
+- id identifies the log in that profile.
+- Both IDs are positive integers.
+- Deleting a weight log recalculates the profile's current weight.
+
+Requires crumbs:write."#
             }
         };
         Tool::new_with_raw(self.name(), Some(description.into()), self.schema()).with_annotations(
@@ -380,7 +538,7 @@ fn definitions() -> Value {
             "properties": {
                 "type": {"const": "food"},
                 "food_id": {"type": "integer", "minimum": 1, "description": "Existing positive FoodId. The server validates the food and derives the snapshot."},
-                "amount": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$", "description": "Positive fixed-point amount, for example 300 or 1.5."},
+                "amount": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$", "description": "Positive decimal string without a unit, such as \"300\" or \"1.5\". Set the unit or named serving in the sibling serving_size field."},
                 "serving_size": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "One of kg, g, mg, µg, l, ml, or one nonblank, case-sensitive named serving defined by this food. The dimension must match the food's nutrition basis; surrounding whitespace is ignored."}
             }
         },
@@ -391,7 +549,7 @@ fn definitions() -> Value {
             "properties": {
                 "type": {"const": "food"},
                 "food_id": {"type": "integer", "minimum": 1, "description": "Existing positive FoodId. Omit to keep the stored FoodId."},
-                "amount": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$", "description": "Positive fixed-point amount. Omit to keep the stored amount."},
+                "amount": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$", "description": "Positive decimal string without a unit, such as \"1.5\". Set the unit or named serving in the sibling serving_size field. Omit to keep the stored amount."},
                 "serving_size": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "kg, g, mg, µg, l, ml, or one nonblank, case-sensitive named serving defined by the food. Omit to keep the stored serving. Null is invalid."}
             },
             "description": "Fields are optional and null is invalid. An empty food patch preserves the existing snapshot. Supplying any input field rebuilds the snapshot from the current food record after the merged food ID, amount, and serving size validate."

@@ -61,19 +61,97 @@ impl CustomFoodTool {
     fn tool(self) -> Tool {
         let description = match self {
             Self::List => {
-                "List custom foods by food ID, including nutrition and optional notes. Requires crumbs:read. The limit defaults to 20 and is clamped to 20 through 1000. There is no pagination."
+                r#"List custom foods by food ID, including nutrition and optional notes.
+
+Example arguments:
+```json
+{
+  "limit": 20
+}
+```
+
+- Omit limit for 20; supplied limits are clamped to 20 through 1000.
+- There is no pagination. Requires crumbs:read."#
             }
             Self::Get => {
-                "Get a custom food by its local food ID, including nutrition and optional notes. Imported or missing IDs return an error. Requires crumbs:read."
+                r#"Get a custom food by its local food ID, including nutrition and optional notes.
+
+Example arguments:
+```json
+{
+  "id": 123
+}
+```
+
+- Imported or missing IDs return an error. Requires crumbs:read."#
             }
             Self::Create => {
-                "Create a custom food with a description, optional category and ingredient notes, and optional nutrition and measured servings. Source, dataset, and IDs are assigned by Crumbs. Requires crumbs:write."
+                r#"Create a custom food with optional nutrition and measured servings.
+
+Example arguments:
+```json
+{
+  "food": {
+    "description": "Oat drink",
+    "category": "Drinks",
+    "notes": "Oats and water",
+    "parsed_data": {
+      "nutrition": {
+        "per": "100 ml",
+        "energy": "45 kcal",
+        "fat": {"total": "1.5 g"},
+        "protein": "1 g"
+      },
+      "serving_sizes": [{"name": "cup", "quantity": "250 ml"}]
+    }
+  }
+}
+```
+
+- Use unit-bearing decimal strings, not objects or numbers, for energy, nutrients, and serving quantities.
+- Nutrition is per 100 g or 100 ml; omitted nutrient amounts are unknown. Omit optional fields when unknown.
+- Crumbs assigns source, dataset, and IDs. Requires crumbs:write."#
             }
             Self::Update => {
-                "Replace a custom food's description, category, notes, nutrition, and servings. Omitted optional fields are cleared. Local and source identity and tag assignments are preserved. Imported or missing IDs return an error. Requires crumbs:write."
+                r#"Replace a custom food's description, category, notes, nutrition, and servings.
+
+Example arguments:
+```json
+{
+  "id": 123,
+  "food": {
+    "description": "Oat drink",
+    "category": "Drinks",
+    "notes": "Oats and water",
+    "parsed_data": {
+      "nutrition": {
+        "per": "100 ml",
+        "energy": "45 kcal",
+        "fat": {"total": "1.5 g"},
+        "protein": "1 g"
+      },
+      "serving_sizes": [{"name": "cup", "quantity": "250 ml"}]
+    }
+  }
+}
+```
+
+- Use unit-bearing decimal strings, not objects or numbers, for energy, nutrients, and serving quantities.
+- Nutrition is per 100 g or 100 ml; omitted nutrient amounts are unknown.
+- Omitted optional fields are cleared. Local and source identity and tag assignments are preserved.
+- Imported or missing IDs return an error. Requires crumbs:write."#
             }
             Self::Delete => {
-                "Permanently delete a custom food and its tag assignments. Imported or missing IDs return an error. Requires crumbs:write."
+                r#"Permanently delete a custom food and its tag assignments.
+
+Example arguments:
+```json
+{
+  "id": 123
+}
+```
+
+- Imported or missing IDs return an error. Requires crumbs:write."#
             }
         };
         Tool::new_with_raw(self.name(), Some(description.into()), self.schema()).with_annotations(
@@ -264,15 +342,15 @@ fn food_definitions() -> Value {
                 "description": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank food name or description without NUL characters."},
                 "category": {"type": ["string", "null"]},
                 "notes": {"type": ["string", "null"], "description": "Free text such as ingredients. Returned with the food but excluded from full-text search."},
-                "parsed_data": {"$ref": "#/$defs/food_data"}
+                "parsed_data": {"$ref": "#/$defs/food_data", "description": "Optional object containing nutrition and serving_sizes."}
             }
         },
         "food_data": {
             "type": "object",
             "description": "Nutrition applies per 100 g or 100 ml. Omitted nutrient amounts are unknown. Amounts are unit-bearing decimal strings, such as 7 g or 120 kcal.",
             "properties": {
-                "nutrition": {"anyOf": [{"$ref": "#/$defs/nutrition"}, {"type": "null"}]},
-                "serving_sizes": {"type": "array", "items": {"$ref": "#/$defs/serving"}}
+                "nutrition": {"anyOf": [{"$ref": "#/$defs/nutrition"}, {"type": "null"}], "description": "Optional nutrition object; use null when nutrition is unknown."},
+                "serving_sizes": {"type": "array", "items": {"$ref": "#/$defs/serving"}, "description": "Named measured servings, each with name and quantity."}
             }
         },
         "mass": {"type": ["string", "null"], "description": "Nonnegative reported mass with a unit, for example 7 g. Use a string to preserve decimal precision."},
@@ -282,8 +360,8 @@ fn food_definitions() -> Value {
             "properties": {
                 "per": {"type": "string", "enum": ["100 g", "100 ml"]},
                 "energy": {"type": ["string", "null"], "description": "Reported energy with a unit, for example 120 kcal or 500 kJ."},
-                "fat": {"$ref": "#/$defs/fat"},
-                "carbohydrates": {"$ref": "#/$defs/carbohydrates"},
+                "fat": {"$ref": "#/$defs/fat", "description": "Object with optional mass fields such as total and saturated; each value is a unit-bearing string."},
+                "carbohydrates": {"$ref": "#/$defs/carbohydrates", "description": "Object with optional mass fields and a sugars object; each mass value is a unit-bearing string."},
                 "fibre": {"$ref": "#/$defs/mass"},
                 "protein": {"$ref": "#/$defs/mass"},
                 "sodium": {"$ref": "#/$defs/mass"},
