@@ -56,7 +56,10 @@ The association of a food with a tag. Assignments are managed by Crumbs and surv
 The personal context for one person. One user can have multiple profiles, whose names are unique within that user after ignoring case and surrounding whitespace.
 
 **Profile log entry**:
-A record of food consumed or a biometric measurement for one profile.
+A record of food consumed, a biometric measurement, or a journal entry for one profile.
+
+**Journal entry**:
+A free-text record of a person's feelings, experiences, or observations for one profile. A person can record multiple journal entries on the same day.
 
 **Biometric measurement**:
 A recorded value for a physical characteristic of a person, such as body weight.

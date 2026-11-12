@@ -938,3 +938,111 @@ fn assert_local_time_near_now(time: &str, offset_seconds: u64) -> Result<(), Box
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn journal_rest_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    seed_profile_owner(&app).await?;
+    let (profile_id, _) =
+        create_test_profile(&app, "Journal", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    let (other_id, _) = create_test_profile(&app, "Other", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    let uri = format!("/profiles/{profile_id}/logs");
+    let original = "  Café\n今日  ";
+    let create = |text| json!({"day":"2025-06-01","entry":{"type":"journal","text":text}});
+    let first = app
+        .request(http_json_request(
+            "POST",
+            &uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            create(original),
+        )?)
+        .await?;
+    assert_eq!(first.status, StatusCode::CREATED, "{:?}", first.json);
+    assert_eq!(
+        first.json["data"],
+        json!({"type":"journal","text":original})
+    );
+    let id = first.json["id"].as_i64().ok_or("journal ID is missing")?;
+    let item_uri = format!("{uri}/{id}");
+    let second = app
+        .request(http_json_request(
+            "POST",
+            &uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            create("Second"),
+        )?)
+        .await?;
+    assert_eq!(second.status, StatusCode::CREATED);
+    let blank = app
+        .request(http_json_request(
+            "POST",
+            &uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            create(" \n\t"),
+        )?)
+        .await?;
+    assert_eq!(blank.status, StatusCode::BAD_REQUEST);
+    let fetched = app.request(http_request(&item_uri)?).await?;
+    assert_eq!(fetched.json["data"]["text"], original);
+    let wrong_profile = app
+        .request(http_request(&format!("/profiles/{other_id}/logs/{id}"))?)
+        .await?;
+    assert_eq!(wrong_profile.status, StatusCode::NOT_FOUND);
+    let listed = app
+        .request(http_request(&format!("{uri}?entry_type=journal"))?)
+        .await?;
+    assert_eq!(listed.json["items"].as_array().map(Vec::len), Some(2));
+    let invalid_filter = app
+        .request(http_request(&format!(
+            "{uri}?entry_type=journal&subtype=weight"
+        ))?)
+        .await?;
+    assert_eq!(invalid_filter.status, StatusCode::BAD_REQUEST);
+    let moved = app
+        .request(http_json_request(
+            "PATCH",
+            &item_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"day":"2025-06-02"}),
+        )?)
+        .await?;
+    assert_eq!(moved.json["data"]["text"], original);
+    let updated = app
+        .request(http_json_request(
+            "PATCH",
+            &item_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"entry":{"type":"journal","text":" revised "}}),
+        )?)
+        .await?;
+    assert_eq!(updated.json["data"]["text"], " revised ");
+    let rejected = app
+        .request(http_json_request(
+            "PATCH",
+            &item_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"entry":{"type":"biometric","measurement":{"type":"weight","value":"80 kg"}}}),
+        )?)
+        .await?;
+    assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
+    let denied = app
+        .request(http_json_request(
+            "PATCH",
+            &item_uri,
+            TEST_REST_ACCESS_TOKEN,
+            json!({"day":"2025-06-03"}),
+        )?)
+        .await?;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN);
+    let deleted = app
+        .request(http_method_request(
+            "DELETE",
+            &item_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+        )?)
+        .await?;
+    assert!(deleted.status.is_success());
+    let missing = app.request(http_request(&item_uri)?).await?;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    Ok(())
+}

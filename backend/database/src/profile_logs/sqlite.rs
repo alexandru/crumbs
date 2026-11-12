@@ -355,7 +355,9 @@ impl OwnedProfile {
                     ProfileLogData::Biometric(BiometricLogEntry {
                         measurement: BiometricEntry::Weight(measurement),
                     }) => Ok(measurement.value),
-                    ProfileLogData::Food(_) => Err(ProfileLogError::InvalidStoredData),
+                    ProfileLogData::Food(_) | ProfileLogData::Journal(_) => {
+                        Err(ProfileLogError::InvalidStoredData)
+                    }
                 }
             })
             .transpose()?;
@@ -395,6 +397,7 @@ async fn resolve_log_input(
         LogInput::Food(input) => Ok(ProfileLogData::Food(
             resolve_food_input(transaction, input).await?,
         )),
+        LogInput::Journal(entry) => Ok(ProfileLogData::Journal(entry.clone())),
     }
 }
 
@@ -407,6 +410,9 @@ async fn replace_same_variant(
         (ProfileLogData::Biometric(_), LogEntryPatch::Biometric(entry)) => {
             Ok(Some(ProfileLogData::Biometric(*entry)))
         }
+        (ProfileLogData::Journal(_), LogEntryPatch::Journal(entry)) => {
+            Ok(Some(ProfileLogData::Journal(entry.clone())))
+        }
         (ProfileLogData::Food(current), LogEntryPatch::Food(patch)) => {
             if !patch.has_changes() {
                 return Ok(None);
@@ -417,11 +423,13 @@ async fn replace_same_variant(
             )))
         }
         (ProfileLogData::Biometric(_), LogEntryPatch::Food(_))
-        | (ProfileLogData::Food(_), LogEntryPatch::Biometric(_)) => {
-            Err(ProfileLogError::InvalidInput(
-                "a log entry cannot change between food and biometric categories".to_owned(),
-            ))
-        }
+        | (ProfileLogData::Biometric(_), LogEntryPatch::Journal(_))
+        | (ProfileLogData::Food(_), LogEntryPatch::Biometric(_))
+        | (ProfileLogData::Food(_), LogEntryPatch::Journal(_))
+        | (ProfileLogData::Journal(_), LogEntryPatch::Biometric(_))
+        | (ProfileLogData::Journal(_), LogEntryPatch::Food(_)) => Err(
+            ProfileLogError::InvalidInput("a log entry cannot change its category".to_owned()),
+        ),
     }
 }
 

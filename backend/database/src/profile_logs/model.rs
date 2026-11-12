@@ -876,6 +876,47 @@ pub struct BiometricLogEntry {
     pub measurement: BiometricEntry,
 }
 
+/// Nonblank journal text, preserved exactly as supplied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct JournalText(String);
+
+impl JournalText {
+    /// Creates journal text without changing its content.
+    ///
+    /// # Errors
+    ///
+    /// Returns InvalidInput if the text is empty or contains only whitespace.
+    pub fn new(value: impl Into<String>) -> Result<Self, ProfileLogError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(ProfileLogError::InvalidInput(
+                "journal text must not be blank".to_owned(),
+            ));
+        }
+
+        Ok(Self(value))
+    }
+
+    /// Returns the text as supplied.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for JournalText {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(String::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
+/// The free-text payload for an independent journal log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JournalLogEntry {
+    pub text: JournalText,
+}
+
 /// The standalone JSON payload for a profile log.
 #[allow(
     clippy::large_enum_variant,
@@ -888,6 +929,8 @@ pub enum ProfileLogData {
     Biometric(BiometricLogEntry),
     /// A self-contained food-consumption entry.
     Food(FoodLogEntry),
+    /// A journal entry.
+    Journal(JournalLogEntry),
 }
 
 impl ProfileLogData {
@@ -909,6 +952,8 @@ pub enum LogInput {
     Biometric(BiometricLogEntry),
     /// A food serving input resolved against the current food source.
     Food(FoodLogInput),
+    /// A journal entry.
+    Journal(JournalLogEntry),
 }
 
 /// Input for creating a profile log.
@@ -919,7 +964,7 @@ pub struct CreateLog {
     pub day: LogDay,
     /// Optional local time. Omission resolves to the current profile-local time.
     pub time: Option<LocalTime>,
-    /// Weight or food entry data.
+    /// Biometric, food, or journal entry data.
     pub entry: LogInput,
 }
 
@@ -931,6 +976,8 @@ pub enum LogEntryPatch {
     Biometric(BiometricLogEntry),
     /// Rebuild a food snapshot from the supplied food input changes.
     Food(FoodLogPatch),
+    /// Replace the journal text.
+    Journal(JournalLogEntry),
 }
 
 /// A partial patch for a profile log.
@@ -956,6 +1003,8 @@ pub enum LogEntryType {
     Food,
     /// Biometric measurements.
     Biometric,
+    /// Free-text journal entries.
+    Journal,
 }
 
 impl LogEntryType {
@@ -963,6 +1012,7 @@ impl LogEntryType {
         match self {
             Self::Food => "food",
             Self::Biometric => "biometric",
+            Self::Journal => "journal",
         }
     }
 }
