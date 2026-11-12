@@ -28,6 +28,9 @@ A named portion of a food with a known measured mass or volume.
 **Nutrition profile**:
 The reported nutrient amounts for 100 grams or 100 millilitres of a food.
 
+**Consumed nutrition**:
+Nutrient amounts for the quantity of food recorded in a food log entry. These amounts retain the values used when the entry was recorded.
+
 **Reported nutrient amount**:
 An amount of a nutrient for a nutrition basis, including any stated comparison or approximation.
 

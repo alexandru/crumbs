@@ -217,15 +217,26 @@ async fn imports_typed_nutrition_for_all_supported_usda_food_kinds() -> Result<(
             Some(case.expected_energy)
         );
         assert_eq!(
-            profile.protein.as_ref().map(ToString::to_string).as_deref(),
+            profile
+                .nutrients
+                .protein
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
             Some(case.expected_protein)
         );
         assert_eq!(
-            profile.sodium.as_ref().map(ToString::to_string).as_deref(),
+            profile
+                .nutrients
+                .sodium
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
             Some("1.234 mg")
         );
         assert_eq!(
             profile
+                .nutrients
                 .carbohydrates
                 .including_fibre
                 .as_ref()
@@ -233,9 +244,10 @@ async fn imports_typed_nutrition_for_all_supported_usda_food_kinds() -> Result<(
                 .as_deref(),
             Some("4.5 g")
         );
-        assert_eq!(profile.carbohydrates.excluding_fibre, None);
+        assert_eq!(profile.nutrients.carbohydrates.excluding_fibre, None);
         assert_eq!(
             profile
+                .nutrients
                 .carbohydrates
                 .sugars
                 .lactose
@@ -295,7 +307,7 @@ async fn unsupported_nutrition_unit_sanitizes_only_its_nutrient() -> Result<(), 
             .parsed_data()?
             .nutrition
             .as_ref()
-            .and_then(|profile| profile.protein.as_ref())
+            .and_then(|profile| profile.nutrients.protein.as_ref())
             .map(ToString::to_string)
             .as_deref(),
         Some("3.25 g")
@@ -305,9 +317,10 @@ async fn unsupported_nutrition_unit_sanitizes_only_its_nutrient() -> Result<(), 
         .parsed_data()?
         .nutrition
         .ok_or_else(|| io::Error::other("valid sibling nutrient was not persisted"))?;
-    assert_eq!(second_profile.protein, None);
+    assert_eq!(second_profile.nutrients.protein, None);
     assert_eq!(
         second_profile
+            .nutrients
             .fat
             .total
             .as_ref()
@@ -595,14 +608,20 @@ async fn import_continues_after_sanitized_and_rejected_foods_with_diagnostics()
         profile.energy.as_ref().map(ToString::to_string).as_deref(),
         Some("42 kcal")
     );
-    assert_eq!(profile.protein, None);
-    assert_eq!(
-        profile.sodium.as_ref().map(ToString::to_string).as_deref(),
-        Some("1.5 mg")
-    );
-    assert_eq!(profile.fibre, None);
+    assert_eq!(profile.nutrients.protein, None);
     assert_eq!(
         profile
+            .nutrients
+            .sodium
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("1.5 mg")
+    );
+    assert_eq!(profile.nutrients.fibre, None);
+    assert_eq!(
+        profile
+            .nutrients
             .carbohydrates
             .starch
             .as_ref()
@@ -612,6 +631,7 @@ async fn import_continues_after_sanitized_and_rejected_foods_with_diagnostics()
     );
     assert_eq!(
         profile
+            .nutrients
             .carbohydrates
             .sugars
             .added
@@ -626,9 +646,10 @@ async fn import_continues_after_sanitized_and_rejected_foods_with_diagnostics()
         .parsed_data()?
         .nutrition
         .ok_or_else(|| io::Error::other("valid nutrient sibling was not persisted"))?;
-    assert_eq!(invalid_unit_profile.protein, None);
+    assert_eq!(invalid_unit_profile.nutrients.protein, None);
     assert_eq!(
         invalid_unit_profile
+            .nutrients
             .fat
             .total
             .as_ref()
@@ -728,9 +749,10 @@ async fn sanitizes_optional_fields_independently_and_counts_each_food_once()
         .nutrition
         .as_ref()
         .ok_or_else(|| io::Error::other("valid nutrient was not persisted"))?;
-    assert_eq!(profile.protein, None);
+    assert_eq!(profile.nutrients.protein, None);
     assert_eq!(
         profile
+            .nutrients
             .fat
             .total
             .as_ref()
@@ -738,8 +760,8 @@ async fn sanitizes_optional_fields_independently_and_counts_each_food_once()
             .as_deref(),
         Some("2 g")
     );
-    assert_eq!(profile.fibre, None);
-    assert_eq!(profile.sodium, None);
+    assert_eq!(profile.nutrients.fibre, None);
+    assert_eq!(profile.nutrients.sodium, None);
     assert_eq!(parsed.serving_sizes.len(), 1);
     assert_eq!(serving_size_at(&parsed, 0)?.quantity().to_string(), "30 g");
     food_row(&fixture.pool, "usda", "9702").await?;

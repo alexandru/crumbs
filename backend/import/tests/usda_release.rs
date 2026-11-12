@@ -321,7 +321,7 @@ fn verify_negative_carbohydrates_absent(stored: &[StoredFood]) -> TestResult {
         let carbohydrate = parsed_data
             .nutrition
             .as_ref()
-            .and_then(|profile| profile.carbohydrates.including_fibre.as_ref());
+            .and_then(|profile| profile.nutrients.carbohydrates.including_fibre.as_ref());
         assert_eq!(carbohydrate, None, "negative carbohydrate {source_food_id}");
     }
     Ok(())
@@ -365,7 +365,7 @@ fn verify_protein(
     let actual_protein = parsed_data
         .nutrition
         .as_ref()
-        .and_then(|profile| profile.protein.as_ref())
+        .and_then(|profile| profile.nutrients.protein.as_ref())
         .map(ToString::to_string);
     assert_eq!(
         actual_protein.as_deref(),

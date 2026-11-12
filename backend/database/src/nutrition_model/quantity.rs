@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use std::str::FromStr;
 
 use rust_decimal::Decimal;
+use rust_decimal::dec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Invalid source measurements are rejected before entering the domain model.
@@ -274,6 +275,13 @@ macro_rules! measurement {
             }
         }
 
+        impl std::ops::Div<Decimal> for $name {
+            type Output = Self;
+            fn div(self, other: Decimal) -> Self {
+                Self(self.0 / other)
+            }
+        }
+
         impl std::ops::Neg for $name {
             type Output = Self;
             fn neg(self) -> Self {
@@ -287,6 +295,7 @@ measurement!(Grams, "g");
 measurement!(Milligrams, "mg");
 measurement!(Micrograms, "µg");
 measurement!(Millilitres, "ml");
+measurement!(Litres, "l");
 measurement!(Kcal, "kcal");
 measurement!(Kilojoules, "kJ");
 measurement!(Centimetres, "cm");
@@ -515,6 +524,7 @@ where
 /// A mass amount retaining the supplied supported unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mass {
+    Kilograms(Kilograms),
     Grams(Grams),
     Milligrams(Milligrams),
     Micrograms(Micrograms),
@@ -524,9 +534,23 @@ impl Mass {
     /// Returns the decimal value in the retained source unit.
     pub fn value(self) -> Decimal {
         match self {
+            Self::Kilograms(value) => value.value(),
             Self::Grams(value) => value.value(),
             Self::Milligrams(value) => value.value(),
             Self::Micrograms(value) => value.value(),
+        }
+    }
+
+    /// Converts this mass to grams using exact metric unit factors.
+    ///
+    /// Arithmetic uses at most 28 fractional decimal places and the `Decimal` 96-bit
+    /// coefficient. When precision must be reduced, midpoint ties round to nearest even.
+    pub fn to_grams(self) -> Grams {
+        match self {
+            Self::Kilograms(value) => Grams::new(value.value() * dec!(1000)),
+            Self::Grams(value) => value,
+            Self::Milligrams(value) => Grams::new(value.value() / dec!(1000)),
+            Self::Micrograms(value) => Grams::new(value.value() / dec!(1_000_000)),
         }
     }
 }
@@ -540,6 +564,7 @@ impl Measurement for Mass {
 
     fn unit_symbol(self) -> Cow<'static, str> {
         match self {
+            Self::Kilograms(value) => value.unit_symbol(),
             Self::Grams(value) => value.unit_symbol(),
             Self::Milligrams(value) => value.unit_symbol(),
             Self::Micrograms(value) => value.unit_symbol(),
@@ -548,10 +573,24 @@ impl Measurement for Mass {
 
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
         match unit {
+            "kg" => Ok(Self::Kilograms(Kilograms::new(parse_decimal(value)?))),
             "g" => Ok(Self::Grams(Grams::new(parse_decimal(value)?))),
             "mg" => Ok(Self::Milligrams(Milligrams::new(parse_decimal(value)?))),
             "µg" => Ok(Self::Micrograms(Micrograms::new(parse_decimal(value)?))),
             _ => Err(QuantityError::Unit(unit.to_owned())),
+        }
+    }
+}
+
+impl std::ops::Mul<Decimal> for Mass {
+    type Output = Self;
+
+    fn mul(self, factor: Decimal) -> Self {
+        match self {
+            Self::Kilograms(value) => Self::Kilograms(value * factor),
+            Self::Grams(value) => Self::Grams(value * factor),
+            Self::Milligrams(value) => Self::Milligrams(value * factor),
+            Self::Micrograms(value) => Self::Micrograms(value * factor),
         }
     }
 }
@@ -568,6 +607,7 @@ impl FromStr for Mass {
 impl fmt::Display for Mass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Kilograms(value) => value.fmt(f),
             Self::Grams(value) => value.fmt(f),
             Self::Milligrams(value) => value.fmt(f),
             Self::Micrograms(value) => value.fmt(f),
@@ -588,6 +628,17 @@ impl Energy {
         match self {
             Self::Kcal(value) => value.value(),
             Self::Kilojoules(value) => value.value(),
+        }
+    }
+
+    /// Converts this energy to kilocalories using `1 kcal = 4.184 kJ`.
+    ///
+    /// Arithmetic uses at most 28 fractional decimal places and the `Decimal` 96-bit
+    /// coefficient. When precision must be reduced, midpoint ties round to nearest even.
+    pub fn to_kilocalories(self) -> Kcal {
+        match self {
+            Self::Kcal(value) => value,
+            Self::Kilojoules(value) => Kcal::new(value.value() / dec!(4.184)),
         }
     }
 }
@@ -615,6 +666,17 @@ impl Measurement for Energy {
     }
 }
 
+impl std::ops::Mul<Decimal> for Energy {
+    type Output = Self;
+
+    fn mul(self, factor: Decimal) -> Self {
+        match self {
+            Self::Kcal(value) => Self::Kcal(value * factor),
+            Self::Kilojoules(value) => Self::Kilojoules(value * factor),
+        }
+    }
+}
+
 impl FromStr for Energy {
     type Err = QuantityError;
 
@@ -637,12 +699,13 @@ impl fmt::Display for Energy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeasuredQuantity {
     Mass(Mass),
-    Volume(Millilitres),
+    Volume(Volume),
 }
 
 impl MeasuredQuantity {
     pub(crate) fn is_positive(&self) -> bool {
         match self {
+            Self::Mass(Mass::Kilograms(value)) => value.is_positive(),
             Self::Mass(Mass::Grams(value)) => value.is_positive(),
             Self::Mass(Mass::Milligrams(value)) => value.is_positive(),
             Self::Mass(Mass::Micrograms(value)) => value.is_positive(),
@@ -667,10 +730,21 @@ impl MeasuredQuantity {
     }
 
     /// Returns the measured volume, when the serving has a volume measurement.
-    pub const fn volume(self) -> Option<Millilitres> {
+    pub const fn volume(self) -> Option<Volume> {
         match self {
             Self::Volume(volume) => Some(volume),
             Self::Mass(_) => None,
+        }
+    }
+}
+
+impl std::ops::Mul<Decimal> for MeasuredQuantity {
+    type Output = Self;
+
+    fn mul(self, factor: Decimal) -> Self {
+        match self {
+            Self::Mass(value) => Self::Mass(value * factor),
+            Self::Volume(value) => Self::Volume(value * factor),
         }
     }
 }
@@ -681,8 +755,90 @@ impl FromStr for MeasuredQuantity {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let (number, unit) = split_quantity(value)?;
         match unit {
-            "ml" => Ok(Self::Volume(Millilitres::parse_with_unit(number, unit)?)),
+            "ml" | "l" => Ok(Self::Volume(Volume::parse_with_unit(number, unit)?)),
             _ => Ok(Self::Mass(Mass::parse_with_unit(number, unit)?)),
+        }
+    }
+}
+
+/// A volume amount retaining the supplied supported unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Volume {
+    Millilitres(Millilitres),
+    Litres(Litres),
+}
+
+impl Volume {
+    /// Returns the decimal value in the retained source unit.
+    pub fn value(self) -> Decimal {
+        match self {
+            Self::Millilitres(value) => value.value(),
+            Self::Litres(value) => value.value(),
+        }
+    }
+
+    /// Converts this volume to millilitres using exact metric unit factors.
+    ///
+    /// Arithmetic uses at most 28 fractional decimal places and the `Decimal` 96-bit
+    /// coefficient. When precision must be reduced, midpoint ties round to nearest even.
+    pub fn to_millilitres(self) -> Millilitres {
+        match self {
+            Self::Millilitres(value) => value,
+            Self::Litres(value) => Millilitres::new(value.value() * dec!(1000)),
+        }
+    }
+}
+
+impl sealed::Sealed for Volume {}
+
+impl Measurement for Volume {
+    fn value(self) -> Decimal {
+        Volume::value(self)
+    }
+
+    fn unit_symbol(self) -> Cow<'static, str> {
+        match self {
+            Self::Millilitres(value) => value.unit_symbol(),
+            Self::Litres(value) => value.unit_symbol(),
+        }
+    }
+
+    fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
+        match unit {
+            "ml" => Ok(Self::Millilitres(Millilitres::parse_with_unit(
+                value, unit,
+            )?)),
+            "l" => Ok(Self::Litres(Litres::parse_with_unit(value, unit)?)),
+            _ => Err(QuantityError::Unit(unit.to_owned())),
+        }
+    }
+}
+
+impl std::ops::Mul<Decimal> for Volume {
+    type Output = Self;
+
+    fn mul(self, factor: Decimal) -> Self {
+        match self {
+            Self::Millilitres(value) => Self::Millilitres(value * factor),
+            Self::Litres(value) => Self::Litres(value * factor),
+        }
+    }
+}
+
+impl FromStr for Volume {
+    type Err = QuantityError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (number, unit) = split_quantity(value)?;
+        <Self as Measurement>::parse_with_unit(number, unit)
+    }
+}
+
+impl fmt::Display for Volume {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Millilitres(value) => value.fmt(f),
+            Self::Litres(value) => value.fmt(f),
         }
     }
 }

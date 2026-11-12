@@ -1,5 +1,7 @@
 use std::error::Error;
 
+use rust_decimal::Decimal;
+
 use crate::profile_logs::*;
 use crate::profiles::{BodyWeight, Patch};
 
@@ -97,14 +99,18 @@ fn ids_payload_union_and_create_input_validate_strictly() -> Result<(), Box<dyn 
     let input: LogInput = serde_json::from_str(
         r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg"}}"#,
     )?;
-    assert_eq!(serde_json::to_string(&input.into_data())?, expected);
+    assert!(matches!(
+        input,
+        LogInput::Biometric(BiometricLogEntry {
+            measurement: BiometricEntry::Weight(_)
+        })
+    ));
     assert_eq!(
         serde_json::to_value(data)?,
-        serde_json::to_value(ProfileLogData::Biometric(BiometricLogEntry {
-            measurement: BiometricEntry::Weight(WeightMeasurement {
-                value: BodyWeight::new("70 kg".parse()?)?,
-            }),
-        }))?
+        serde_json::json!({
+            "type": "biometric",
+            "measurement": {"type": "weight", "value": "70 kg"}
+        })
     );
 
     for invalid in [
@@ -166,8 +172,17 @@ fn patch_fields_preserve_omission_and_reject_nulls() -> Result<(), Box<dyn Error
     let patch_entry: LogEntryPatch = serde_json::from_str(
         r#"{"type":"biometric","measurement":{"type":"weight","value":"75 kg"}}"#,
     )?;
+    assert!(matches!(
+        &patch_entry,
+        LogEntryPatch::Biometric(BiometricLogEntry {
+            measurement: BiometricEntry::Weight(_)
+        })
+    ));
     let patch_data = match patch_entry {
         LogEntryPatch::Biometric(entry) => ProfileLogData::Biometric(entry),
+        LogEntryPatch::Food(_) => {
+            return Err(std::io::Error::other("expected biometric patch entry").into());
+        }
     };
     assert_eq!(
         serde_json::to_value(patch_data)?,
@@ -177,7 +192,6 @@ fn patch_fields_preserve_omission_and_reject_nulls() -> Result<(), Box<dyn Error
         r#"{"day":null}"#,
         r#"{"time":null}"#,
         r#"{"entry":null}"#,
-        r#"{"entry":{"type":"food"}}"#,
         r#"{"entry":{"type":"biometric","measurement":{"type":"weight","value":"0 kg"}}}"#,
         r#"{"log_id":4}"#,
     ] {
@@ -213,5 +227,197 @@ fn log_filters_validate_date_ranges_subtypes_and_wire_fields() -> Result<(), Box
     );
     assert!(serde_json::from_str::<LogFilter>(r#"{"subtype":"weight"}"#).is_err());
     assert!(serde_json::from_str::<LogFilter>(r#"{"unknown":true}"#).is_err());
+    Ok(())
+}
+
+#[test]
+fn food_input_amount_units_and_serving_names_are_strict() -> Result<(), Box<dyn Error>> {
+    let amount = Amount::parse("1.250")?;
+    assert_eq!(amount.value(), "1.250".parse()?);
+    assert_eq!(serde_json::to_string(&amount)?, r#""1.250""#);
+    for invalid in ["0", "-1", "not-a-number"] {
+        assert!(Amount::parse(invalid).is_err());
+    }
+    assert!(serde_json::from_str::<Amount>("1.5").is_err());
+
+    for unit in ["kg", "g", "mg", "µg", "l", "ml"] {
+        for selector in [unit.to_owned(), format!(" {unit} ")] {
+            let parsed = ServingSelector::parse(&selector)?;
+            assert!(matches!(parsed, ServingSelector::Unit(_)));
+            let serialized = serde_json::to_string(&parsed)?;
+            assert_eq!(
+                serde_json::from_str::<ServingSelector>(&serialized)?,
+                parsed
+            );
+            assert!(SelectedServingName::new(selector.clone()).is_err());
+            assert!(
+                serde_json::from_str::<SelectedServingName>(&serde_json::to_string(&selector)?)
+                    .is_err()
+            );
+        }
+    }
+    let named = ServingSelector::parse("  Small bowl  ")?;
+    assert!(matches!(&named, ServingSelector::Named(name) if name.as_str() == "Small bowl"));
+    let named_json = serde_json::to_string(&named)?;
+    assert_eq!(serde_json::from_str::<ServingSelector>(&named_json)?, named);
+    assert!(ServingSelector::parse(" ").is_err());
+
+    let input: FoodLogInput = serde_json::from_value(serde_json::json!({
+        "food_id": 42,
+        "amount": "2",
+        "serving_size": "small bowl"
+    }))?;
+    assert_eq!(input.food_id().0, 42);
+    assert_eq!(input.amount().value(), Decimal::from(2));
+    assert_eq!(
+        serde_json::to_value(input)?,
+        serde_json::json!({
+            "food_id": 42,
+            "amount": "2",
+            "serving_size": "small bowl"
+        })
+    );
+    for invalid in [
+        serde_json::json!({"food_id": 0, "amount": "1", "serving_size": "g"}),
+        serde_json::json!({"food_id": 42, "amount": "0", "serving_size": "g"}),
+        serde_json::json!({"food_id": 42, "amount": "1", "serving_size": " "}),
+        serde_json::json!({"food_id": 42, "amount": "1", "serving_size": "g", "extra": 1}),
+    ] {
+        assert!(
+            serde_json::from_value::<FoodLogInput>(invalid).is_err(),
+            "accepted invalid food input"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn food_snapshot_union_is_self_describing_and_validated() -> Result<(), Box<dyn Error>> {
+    let input = serde_json::json!({
+        "type": "food",
+        "food_id": 42,
+        "quantity": "50 g",
+        "nutrition": {
+            "calories": "100 kcal",
+            "protein": "5 g"
+        },
+        "description": "source label",
+        "input": {
+            "amount": "2",
+            "serving_size": {"name": "portion", "quantity": "25 g"}
+        }
+    });
+    let data: ProfileLogData = serde_json::from_value(input)?;
+    let serialized = serde_json::to_value(&data)?;
+    assert_eq!(
+        serialized,
+        serde_json::json!({
+            "type": "food",
+            "food_id": 42,
+            "quantity": "50 g",
+            "nutrition": {
+                "calories": "100 kcal",
+                "fat": {
+                    "total": null,
+                    "saturated": null,
+                    "monounsaturated": null,
+                    "polyunsaturated": null,
+                    "trans": null
+                },
+                "carbohydrates": {
+                    "including_fibre": null,
+                    "excluding_fibre": null,
+                    "sugars": {"total": null, "added": null, "lactose": null},
+                    "starch": null
+                },
+                "fibre": null,
+                "protein": "5 g",
+                "sodium": null,
+                "salt": null,
+                "cholesterol": null
+            },
+            "description": "source label",
+            "input": {
+                "amount": "2",
+                "serving_size": {"name": "portion", "quantity": "25 g"}
+            }
+        })
+    );
+    assert!(serialized.get("entry_type").is_none());
+    assert_eq!(serde_json::from_value::<ProfileLogData>(serialized)?, data);
+    let ProfileLogData::Food(entry) = data else {
+        return Err(std::io::Error::other("food payload decoded to another category").into());
+    };
+    assert_eq!(entry.food_id().map(|id| id.0), Some(42));
+    assert_eq!(entry.quantity().to_string(), "50 g");
+    assert_eq!(entry.nutrition().calories.to_string(), "100 kcal");
+    assert_eq!(entry.description(), "source label");
+    assert!(
+        FoodLogEntry::new(
+            entry.food_id(),
+            "-1 g".parse()?,
+            entry.nutrition().clone(),
+            "label".to_owned(),
+            None,
+        )
+        .is_err()
+    );
+    assert_eq!(
+        entry
+            .input()
+            .map(FoodInputSnapshot::amount)
+            .map(Amount::value),
+        Some(Decimal::from(2))
+    );
+
+    for invalid in [
+        serde_json::json!({"type":"food","food_id":0,"quantity":"50 g","nutrition":{"calories":"100 kcal"},"description":"label"}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"0 g","nutrition":{"calories":"100 kcal"},"description":"label"}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"-1 g","nutrition":{"calories":"100 kcal"},"description":"label"}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"calories":"-1 kcal"},"description":"label"}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"calories":"100 kcal", "protein":"-1 g"},"description":"label"}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"calories":"100 kcal"},"description":"label","input":{"amount":"1","serving_size":{"name":"portion","quantity":"-1 g"}}}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"protein":"5 g"},"description":"label"}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"calories":"100 kcal"},"description":"  "}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"calories":"100 kcal"},"description":"label","extra":1}),
+        serde_json::json!({"type":"food","food_id":42,"quantity":"50 g","nutrition":{"calories":"100 kcal"},"description":"label","input":{"amount":"1","serving_size":{"name":"portion","quantity":"25 g","extra":true}}}),
+    ] {
+        assert!(
+            serde_json::from_value::<ProfileLogData>(invalid).is_err(),
+            "accepted invalid food snapshot"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn food_log_patch_keeps_missing_fields_and_rejects_null_or_invalid_ids()
+-> Result<(), Box<dyn Error>> {
+    let empty: FoodLogPatch = serde_json::from_str("{}")?;
+    assert!(!empty.has_changes());
+    let patch: FoodLogPatch =
+        serde_json::from_str(r#"{"food_id":7,"amount":"1.5","serving_size":"g"}"#)?;
+    assert!(patch.has_changes());
+    assert!(matches!(patch.food_id(), Patch::Set(id) if id.0 == 7));
+    assert!(matches!(patch.amount(), Patch::Set(amount) if amount.value() == Decimal::new(15, 1)));
+    assert!(matches!(
+        patch.serving_size(),
+        Patch::Set(ServingSelector::Unit(_))
+    ));
+    for invalid in [
+        r#"{"food_id":null}"#,
+        r#"{"amount":null}"#,
+        r#"{"serving_size":null}"#,
+        r#"{"food_id":0}"#,
+        r#"{"unknown":true}"#,
+        r#"{"type":"food","food_id":-1}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<FoodLogPatch>(invalid).is_err(),
+            "accepted invalid food log patch {invalid}"
+        );
+    }
+    let entry_patch: LogEntryPatch = serde_json::from_str(r#"{"type":"food"}"#)?;
+    assert!(matches!(entry_patch, LogEntryPatch::Food(patch) if !patch.has_changes()));
     Ok(())
 }

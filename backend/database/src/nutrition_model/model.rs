@@ -1,8 +1,9 @@
 //! Source-independent nutrition and measured serving definitions.
 
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use super::quantity::{Energy, Mass, MeasuredQuantity, QuantityError, Reported};
+use super::quantity::{Energy, Kcal, Mass, MeasuredQuantity, QuantityError, Reported};
 
 /// Imported food details. Missing nutrition does not imply zero nutrients.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +28,24 @@ pub enum NutritionBasis {
 pub struct NutritionProfile {
     pub per: NutritionBasis,
     pub energy: Option<Reported<Energy>>,
+    #[serde(flatten)]
+    pub nutrients: Nutrients,
+}
+
+impl NutritionProfile {
+    /// Creates a profile with no reported nutrients on the selected basis.
+    pub fn empty(per: NutritionBasis) -> Self {
+        Self {
+            per,
+            energy: None,
+            nutrients: Nutrients::default(),
+        }
+    }
+}
+
+/// Reported non-energy nutrients, preserving source units and qualifiers.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Nutrients {
     #[serde(default)]
     pub fat: Fat,
     #[serde(default)]
@@ -38,20 +57,61 @@ pub struct NutritionProfile {
     pub cholesterol: Option<Reported<Mass>>,
 }
 
-impl NutritionProfile {
-    /// Creates a profile with no reported nutrients on the selected basis.
-    pub fn empty(per: NutritionBasis) -> Self {
-        Self {
-            per,
-            energy: None,
-            fat: Fat::default(),
-            carbohydrates: Carbohydrates::default(),
-            fibre: None,
-            protein: None,
-            sodium: None,
-            salt: None,
-            cholesterol: None,
-        }
+/// Consumed nutrition totals, separate from source nutrition per 100 units.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsumedNutrition {
+    pub calories: Reported<Kcal>,
+    #[serde(flatten)]
+    pub nutrients: Nutrients,
+}
+
+impl ConsumedNutrition {
+    /// Builds consumed totals from source nutrition and a portion factor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a negative nutrient amount or a strict upper bound of zero.
+    pub fn from_source(
+        energy: Reported<Energy>,
+        nutrients: &Nutrients,
+        factor: Decimal,
+    ) -> Result<Self, QuantityError> {
+        let nutrient = |value: Option<Reported<Mass>>| {
+            value
+                .map(|value| Reported::new(value.qualifier(), value.amount() * factor))
+                .transpose()
+        };
+
+        Ok(Self {
+            calories: Reported::new(
+                energy.qualifier(),
+                (energy.amount() * factor).to_kilocalories(),
+            )?,
+            nutrients: Nutrients {
+                fat: Fat {
+                    total: nutrient(nutrients.fat.total)?,
+                    saturated: nutrient(nutrients.fat.saturated)?,
+                    monounsaturated: nutrient(nutrients.fat.monounsaturated)?,
+                    polyunsaturated: nutrient(nutrients.fat.polyunsaturated)?,
+                    trans: nutrient(nutrients.fat.trans)?,
+                },
+                carbohydrates: Carbohydrates {
+                    including_fibre: nutrient(nutrients.carbohydrates.including_fibre)?,
+                    excluding_fibre: nutrient(nutrients.carbohydrates.excluding_fibre)?,
+                    sugars: Sugars {
+                        total: nutrient(nutrients.carbohydrates.sugars.total)?,
+                        added: nutrient(nutrients.carbohydrates.sugars.added)?,
+                        lactose: nutrient(nutrients.carbohydrates.sugars.lactose)?,
+                    },
+                    starch: nutrient(nutrients.carbohydrates.starch)?,
+                },
+                fibre: nutrient(nutrients.fibre)?,
+                protein: nutrient(nutrients.protein)?,
+                sodium: nutrient(nutrients.sodium)?,
+                salt: nutrient(nutrients.salt)?,
+                cholesterol: nutrient(nutrients.cholesterol)?,
+            },
+        })
     }
 }
 

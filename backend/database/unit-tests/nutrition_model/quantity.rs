@@ -279,6 +279,86 @@ fn profile_mass_and_height_units_use_fixed_point_values() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn mass_volume_and_energy_conversions_use_metric_factors() -> Result<(), Box<dyn Error>> {
+    assert_eq!(
+        Mass::from_str("1.25 kg")?.to_grams().value(),
+        Decimal::from(1250)
+    );
+    assert_eq!(Mass::from_str("1250 mg")?.to_grams().value(), dec!(1.25));
+    assert_eq!(Mass::from_str("250000 µg")?.to_grams().value(), dec!(0.25));
+    assert_eq!(
+        Volume::from_str("1.25 l")?.to_millilitres().value(),
+        Decimal::from(1250)
+    );
+    assert_eq!(
+        Volume::from_str("250 ml")?.to_millilitres().value(),
+        Decimal::from(250)
+    );
+    assert_eq!(
+        Energy::from_str("4.184 kJ")?.to_kilocalories().to_string(),
+        "1 kcal"
+    );
+    assert_eq!(
+        Energy::from_str("2 kcal")?.to_kilocalories().to_string(),
+        "2 kcal"
+    );
+
+    for input in ["1 kg", "1 l", "250 ml"] {
+        let quantity = MeasuredQuantity::from_str(input)?;
+        assert_eq!(quantity.to_string(), input);
+        let encoded = serde_json::to_string(&quantity)?;
+        assert_eq!(encoded, format!("\"{input}\""));
+        assert_eq!(
+            serde_json::from_str::<MeasuredQuantity>(&encoded)?,
+            quantity
+        );
+    }
+    let quantity = MeasuredQuantity::from_str("1 l")?;
+    assert_eq!(
+        quantity.volume(),
+        Some(Volume::Litres(Litres::from_str("1 l")?))
+    );
+    assert!(MeasuredQuantity::from_str("1 oz").is_err());
+    Ok(())
+}
+
+#[test]
+fn arithmetic_preserves_units_and_qualifiers_and_rounds() -> Result<(), Box<dyn Error>> {
+    let mass = Mass::from_str("1.25 kg")? * dec!(2);
+    assert_eq!(mass.to_string(), "2.50 kg");
+    let volume = Volume::from_str("2 l")? * dec!(1.5);
+    assert_eq!(volume.to_string(), "3.0 l");
+    let energy = Energy::from_str("2 kJ")? * dec!(2);
+    assert_eq!(energy.to_string(), "4 kJ");
+
+    let source = Reported::<Mass>::from_str("< 2 mg")?;
+    let reported = Reported::new(source.qualifier(), source.amount() * dec!(3))?;
+    assert_eq!(reported.to_string(), "< 6 mg");
+    let quantity = MeasuredQuantity::from_str("2 ml")? * dec!(0.5);
+    assert_eq!(quantity.to_string(), "1.0 ml");
+    let half = Grams::from(9) / dec!(2);
+    assert_eq!(half.value(), dec!(4.5));
+    assert_eq!(half.unit_symbol(), "g");
+
+    let odd_tie = Grams::new(dec!(3e-28)) * dec!(0.5);
+    assert_eq!(odd_tie.value(), dec!(2e-28));
+    let even_tie = Grams::new(dec!(1e-28)) * dec!(0.5);
+    assert_eq!(even_tie.value(), Decimal::ZERO);
+    let strict_upper = Reported::new(Qualifier::LessThan, Grams::new(dec!(1e-28)))?;
+    assert!(matches!(
+        Reported::new(strict_upper.qualifier(), strict_upper.amount() * dec!(0.5)),
+        Err(QuantityError::ZeroStrictUpperBound)
+    ));
+    assert_eq!((Grams::ONE * dec!(-1)).value(), Decimal::NEGATIVE_ONE);
+    let exact = Reported::new(Qualifier::Exact, Grams::ONE)?;
+    assert!(matches!(
+        Reported::new(exact.qualifier(), exact.amount() * dec!(-1)),
+        Err(QuantityError::Negative)
+    ));
+    Ok(())
+}
+
+#[test]
 fn canonicalizes_inclusive_unicode_qualifiers() -> Result<(), Box<dyn Error>> {
     for (input, expected) in [("≤ 0.5 g", "<= 0.5 g"), ("≥ 15 mg", ">= 15 mg")] {
         let parsed = Reported::<Mass>::from_str(input)?;

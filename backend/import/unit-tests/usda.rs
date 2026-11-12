@@ -568,7 +568,7 @@ fn sanitizes_malformed_optional_category_types() -> Result<(), Box<dyn StdError>
             food.parsed_data
                 .nutrition
                 .as_ref()
-                .and_then(|profile| profile.protein.as_ref())
+                .and_then(|profile| profile.nutrients.protein.as_ref())
                 .map(ToString::to_string),
             Some("1 g".to_owned())
         );

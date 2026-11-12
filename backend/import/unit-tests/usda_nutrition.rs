@@ -35,42 +35,63 @@ fn maps_all_supported_usda_nutrient_categories() -> Result<(), Box<dyn Error>> {
         .as_ref()
         .ok_or_else(|| io::Error::other("nutrition profile is missing"))?;
     assert_eq!(profile.per, NutritionBasis::Per100Grams);
-    assert_eq!(amount_text(&profile.protein), Some("7 g".to_owned()));
-    assert_eq!(amount_text(&profile.fat.total), Some("8 g".to_owned()));
     assert_eq!(
-        amount_text(&profile.carbohydrates.including_fibre),
+        amount_text(&profile.nutrients.protein),
+        Some("7 g".to_owned())
+    );
+    assert_eq!(
+        amount_text(&profile.nutrients.fat.total),
+        Some("8 g".to_owned())
+    );
+    assert_eq!(
+        amount_text(&profile.nutrients.carbohydrates.including_fibre),
         Some("9 g".to_owned())
     );
     assert_eq!(
-        amount_text(&profile.carbohydrates.starch),
+        amount_text(&profile.nutrients.carbohydrates.starch),
         Some("10 mg".to_owned())
     );
     assert_eq!(
-        amount_text(&profile.carbohydrates.sugars.lactose),
+        amount_text(&profile.nutrients.carbohydrates.sugars.lactose),
         Some("11 g".to_owned())
     );
     assert_eq!(
-        amount_text(&profile.carbohydrates.sugars.total),
+        amount_text(&profile.nutrients.carbohydrates.sugars.total),
         Some("12 mg".to_owned())
     );
-    assert_eq!(amount_text(&profile.fibre), Some("14 g".to_owned()));
-    assert_eq!(amount_text(&profile.sodium), Some("15 µg".to_owned()));
     assert_eq!(
-        amount_text(&profile.carbohydrates.sugars.added),
+        amount_text(&profile.nutrients.fibre),
+        Some("14 g".to_owned())
+    );
+    assert_eq!(
+        amount_text(&profile.nutrients.sodium),
+        Some("15 µg".to_owned())
+    );
+    assert_eq!(
+        amount_text(&profile.nutrients.carbohydrates.sugars.added),
         Some("16 g".to_owned())
     );
-    assert_eq!(amount_text(&profile.cholesterol), Some("17 mg".to_owned()));
-    assert_eq!(amount_text(&profile.fat.trans), Some("18 g".to_owned()));
-    assert_eq!(amount_text(&profile.fat.saturated), Some("19 g".to_owned()));
     assert_eq!(
-        amount_text(&profile.fat.monounsaturated),
+        amount_text(&profile.nutrients.cholesterol),
+        Some("17 mg".to_owned())
+    );
+    assert_eq!(
+        amount_text(&profile.nutrients.fat.trans),
+        Some("18 g".to_owned())
+    );
+    assert_eq!(
+        amount_text(&profile.nutrients.fat.saturated),
+        Some("19 g".to_owned())
+    );
+    assert_eq!(
+        amount_text(&profile.nutrients.fat.monounsaturated),
         Some("20 g".to_owned())
     );
     assert_eq!(
-        amount_text(&profile.fat.polyunsaturated),
+        amount_text(&profile.nutrients.fat.polyunsaturated),
         Some("21 g".to_owned())
     );
-    assert_eq!(profile.carbohydrates.excluding_fibre, None);
+    assert_eq!(profile.nutrients.carbohydrates.excluding_fibre, None);
     Ok(())
 }
 
@@ -247,8 +268,8 @@ fn sanitizes_negative_nutrients_and_falls_back_from_negative_energy() -> Result<
         .nutrition
         .as_ref()
         .ok_or_else(|| io::Error::other("fallback energy profile is missing"))?;
-    assert_eq!(profile.carbohydrates.including_fibre, None);
-    assert_eq!(profile.protein, None);
+    assert_eq!(profile.nutrients.carbohydrates.including_fibre, None);
+    assert_eq!(profile.nutrients.protein, None);
     assert_eq!(
         profile.energy.as_ref().map(ToString::to_string),
         Some("20 kcal".to_owned())
@@ -278,10 +299,16 @@ fn unavailable_or_negative_loq_does_not_invent_a_bound_or_restore_a_negative_amo
         .nutrition
         .as_ref()
         .ok_or_else(|| io::Error::other("nutrition profile is missing"))?;
-    assert_eq!(amount_text(&profile.fibre), Some("0.2 g".to_owned()));
-    assert_eq!(profile.protein, None);
-    assert_eq!(amount_text(&profile.fat.total), Some("3 mg".to_owned()));
-    assert_eq!(profile.carbohydrates.including_fibre, None);
+    assert_eq!(
+        amount_text(&profile.nutrients.fibre),
+        Some("0.2 g".to_owned())
+    );
+    assert_eq!(profile.nutrients.protein, None);
+    assert_eq!(
+        amount_text(&profile.nutrients.fat.total),
+        Some("3 mg".to_owned())
+    );
+    assert_eq!(profile.nutrients.carbohydrates.including_fibre, None);
     assert_eq!(parsed.sanitizations.len(), 4);
     assert!(
         parsed
@@ -310,14 +337,17 @@ fn preserves_exact_decimal_lexemes_and_source_qualifiers() -> Result<(), Box<dyn
         .as_ref()
         .ok_or_else(|| io::Error::other("nutrition profile is missing"))?;
     assert_eq!(
-        amount_text(&profile.protein),
+        amount_text(&profile.nutrients.protein),
         Some("0.1000000000000000000000000001 g".to_owned())
     );
     assert_eq!(
-        profile.sodium.as_ref().map(Reported::qualifier),
+        profile.nutrients.sodium.as_ref().map(Reported::qualifier),
         Some(Qualifier::LessThan)
     );
-    assert_eq!(amount_text(&profile.sodium), Some("< 0.5 mg".to_owned()));
+    assert_eq!(
+        amount_text(&profile.nutrients.sodium),
+        Some("< 0.5 mg".to_owned())
+    );
 
     let loq = parse_data(
         r#"{"foodNutrients":[{"nutrient":{"id":1079,"unitName":"µg"},"amount":0,"loq":0.55}]}"#,
@@ -326,7 +356,7 @@ fn preserves_exact_decimal_lexemes_and_source_qualifiers() -> Result<(), Box<dyn
     let fibre = loq
         .nutrition
         .as_ref()
-        .and_then(|profile| profile.fibre.as_ref())
+        .and_then(|profile| profile.nutrients.fibre.as_ref())
         .ok_or_else(|| io::Error::other("LOQ fibre value is missing"))?;
     assert_eq!(fibre.qualifier(), Qualifier::LessThan);
     assert_eq!(fibre.to_string(), "< 0.55 µg");
@@ -339,7 +369,7 @@ fn preserves_exact_decimal_lexemes_and_source_qualifiers() -> Result<(), Box<dyn
         measured
             .nutrition
             .as_ref()
-            .and_then(|profile| profile.fibre.as_ref())
+            .and_then(|profile| profile.nutrients.fibre.as_ref())
             .map(ToString::to_string),
         Some("0.2 g".to_owned())
     );
@@ -362,8 +392,11 @@ fn missing_zero_and_partial_nutrients_remain_distinct() -> Result<(), Box<dyn Er
         .nutrition
         .as_ref()
         .ok_or_else(|| io::Error::other("partial profile is missing"))?;
-    assert_eq!(amount_text(&profile.protein), Some("0 g".to_owned()));
-    assert_eq!(profile.carbohydrates.sugars.lactose, None);
+    assert_eq!(
+        amount_text(&profile.nutrients.protein),
+        Some("0 g".to_owned())
+    );
+    assert_eq!(profile.nutrients.carbohydrates.sugars.lactose, None);
     Ok(())
 }
 
@@ -414,10 +447,13 @@ fn invalid_nutrients_are_omitted_without_losing_valid_siblings() -> Result<(), B
         .nutrition
         .as_ref()
         .ok_or_else(|| io::Error::other("valid sibling nutrients were lost"))?;
-    assert_eq!(profile.protein, None);
-    assert_eq!(profile.fat.total, None);
-    assert_eq!(profile.carbohydrates.including_fibre, None);
-    assert_eq!(amount_text(&profile.fibre), Some("4 g".to_owned()));
+    assert_eq!(profile.nutrients.protein, None);
+    assert_eq!(profile.nutrients.fat.total, None);
+    assert_eq!(profile.nutrients.carbohydrates.including_fibre, None);
+    assert_eq!(
+        amount_text(&profile.nutrients.fibre),
+        Some("4 g".to_owned())
+    );
     assert_eq!(parsed.sanitizations.len(), 3);
     Ok(())
 }
@@ -452,13 +488,13 @@ fn ambiguous_duplicates_are_omitted_and_energy_and_sugar_fall_back() -> Result<(
         .nutrition
         .as_ref()
         .ok_or_else(|| io::Error::other("fallback nutrient values are missing"))?;
-    assert_eq!(profile.protein, None);
+    assert_eq!(profile.nutrients.protein, None);
     assert_eq!(
         profile.energy.as_ref().map(ToString::to_string),
         Some("20 kcal".to_owned())
     );
     assert_eq!(
-        amount_text(&profile.carbohydrates.sugars.total),
+        amount_text(&profile.nutrients.carbohydrates.sugars.total),
         Some("5 g".to_owned())
     );
     for field in ["nutrient[2048]", "nutrient[1063]", "nutrient[1003]"] {
@@ -504,7 +540,7 @@ fn invalid_duplicate_nutrients_do_not_make_valid_values_ambiguous() -> Result<()
                         .food_data
                         .nutrition
                         .as_ref()
-                        .and_then(|profile| profile.protein.as_ref())
+                        .and_then(|profile| profile.nutrients.protein.as_ref())
                         .map(ToString::to_string)
                         .as_deref(),
                     expected
@@ -546,10 +582,13 @@ fn malformed_optional_arrays_and_entries_do_not_lose_valid_siblings() -> Result<
         .as_ref()
         .ok_or_else(|| io::Error::other("valid nutrient entries were lost"))?;
     assert_eq!(
-        amount_text(&profile.protein),
+        amount_text(&profile.nutrients.protein),
         Some("0.1000000000000000000000000001 g".to_owned())
     );
-    assert_eq!(amount_text(&profile.fibre), Some("0.5 g".to_owned()));
+    assert_eq!(
+        amount_text(&profile.nutrients.fibre),
+        Some("0.5 g".to_owned())
+    );
     assert_eq!(parsed.food_data.serving_sizes.len(), 1);
     assert_eq!(
         parsed.food_data.serving_sizes[0].quantity().to_string(),
@@ -576,7 +615,7 @@ fn accepts_numeric_escaped_and_whitespace_source_scalars() -> Result<(), Box<dyn
     let numeric_amount = numeric
         .nutrition
         .as_ref()
-        .and_then(|profile| profile.protein.as_ref())
+        .and_then(|profile| profile.nutrients.protein.as_ref())
         .map(ToString::to_string);
     assert_eq!(numeric_amount, Some("0.5 g".to_owned()));
 
@@ -587,7 +626,7 @@ fn accepts_numeric_escaped_and_whitespace_source_scalars() -> Result<(), Box<dyn
     let escaped_amount = escaped
         .nutrition
         .as_ref()
-        .and_then(|profile| profile.sodium.as_ref())
+        .and_then(|profile| profile.nutrients.sodium.as_ref())
         .map(ToString::to_string);
     assert_eq!(escaped_amount, Some("< 0.500 mg".to_owned()));
 
@@ -598,7 +637,7 @@ fn accepts_numeric_escaped_and_whitespace_source_scalars() -> Result<(), Box<dyn
     let whitespace_amount = whitespace
         .nutrition
         .as_ref()
-        .and_then(|profile| profile.protein.as_ref())
+        .and_then(|profile| profile.nutrients.protein.as_ref())
         .map(ToString::to_string);
     assert_eq!(whitespace_amount, Some("~ 0.500 g".to_owned()));
 
