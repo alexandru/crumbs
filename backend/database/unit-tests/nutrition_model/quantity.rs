@@ -49,6 +49,32 @@ fn daily_energy_arithmetic_and_coefficients_use_typed_values() -> Result<(), Box
 }
 
 #[test]
+fn weekly_measurements_preserve_precision_sign_and_units() -> Result<(), Box<dyn Error>> {
+    let value = PerWeek::<Kilograms>::from_str("0.1234567890123456789012345678 kg/week")?;
+    assert_eq!(value.amount().value(), dec!(0.1234567890123456789012345678));
+    assert_eq!(value.unit_symbol(), "kg/week");
+    assert!(value.is_positive());
+    assert!(!value.is_negative());
+    assert!(!value.is_zero());
+
+    let negative = PerWeek::<Kilograms>::from_str("-0.5 kg/week")?;
+    let zero = PerWeek::from(Kilograms::from(0));
+    assert!(negative.is_negative());
+    assert!(zero.is_zero());
+    for rate in [value, negative, zero] {
+        assert_eq!(
+            serde_json::from_str::<PerWeek<Kilograms>>(&serde_json::to_string(&rate)?)?,
+            rate
+        );
+    }
+    assert_eq!(negative.to_string(), "-0.5 kg/week");
+    assert!(PerWeek::<Kilograms>::from_str("0.5 kg/day").is_err());
+    assert!(PerWeek::<Kilograms>::from_str("0.5 g/week").is_err());
+    assert!(serde_json::from_str::<PerWeek<Kilograms>>("\"0.5 kg/day\"").is_err());
+    Ok(())
+}
+
+#[test]
 fn ratios_preserve_compound_units_and_multiply_by_denominator() -> Result<(), Box<dyn Error>> {
     let density = Ratio::<Grams, Millilitres>::from_str("-1.5 g/ml")?;
     assert_eq!(density.unit_symbol(), "g/ml");

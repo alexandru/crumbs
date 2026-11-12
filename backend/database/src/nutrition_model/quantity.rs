@@ -401,6 +401,87 @@ impl<N: std::ops::Neg<Output = N>, D> std::ops::Neg for Ratio<N, D> {
     }
 }
 
+/// A quantity expressed per week.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PerWeek<T>(T);
+
+impl<T> PerWeek<T> {
+    /// Creates a weekly rate from its weekly amount.
+    pub const fn new(value: T) -> Self {
+        Self(value)
+    }
+    /// Returns the amount for one week.
+    pub fn amount(self) -> T {
+        self.0
+    }
+}
+
+impl<T: Measurement> PerWeek<T> {
+    /// Returns whether the amount is zero.
+    pub fn is_zero(self) -> bool {
+        self.0.is_zero()
+    }
+    /// Returns whether the amount is negative.
+    pub fn is_negative(self) -> bool {
+        self.0.is_negative()
+    }
+    /// Returns whether the amount is positive.
+    pub fn is_positive(self) -> bool {
+        self.0.is_positive()
+    }
+}
+
+impl<T> From<T> for PerWeek<T> {
+    fn from(value: T) -> Self {
+        Self(value)
+    }
+}
+impl<T: Measurement> sealed::Sealed for PerWeek<T> {}
+
+impl<T: Measurement> Measurement for PerWeek<T> {
+    fn value(self) -> Decimal {
+        self.0.value()
+    }
+
+    fn unit_symbol(self) -> Cow<'static, str> {
+        Cow::Owned(format!("{}/week", self.0.unit_symbol()))
+    }
+
+    fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
+        let base = unit
+            .strip_suffix("/week")
+            .ok_or_else(|| QuantityError::Unit(unit.to_owned()))?;
+        T::parse_with_unit(value, base).map(Self)
+    }
+}
+
+impl<T: Measurement> FromStr for PerWeek<T> {
+    type Err = QuantityError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (number, unit) = split_quantity(value)?;
+        Self::parse_with_unit(number, unit)
+    }
+}
+impl<T: Measurement> fmt::Display for PerWeek<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}/week", self.0.value(), self.0.unit_symbol())
+    }
+}
+
+impl<T: Measurement> Serialize for PerWeek<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de, T: Measurement> Deserialize<'de> for PerWeek<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 /// A quantity expressed per day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PerDay<T>(T);

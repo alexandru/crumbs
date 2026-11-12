@@ -60,6 +60,15 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
         .ok_or("create_profile schema is missing")?;
     assert_eq!(create_tool["inputSchema"]["required"], json!(["profile"]));
     assert_eq!(
+        create_tool["inputSchema"]["$defs"]["create_settings"]["properties"]["weekly_weight_loss"]
+            ["anyOf"][0]["$ref"],
+        "#/$defs/weekly_weight_loss"
+    );
+    assert_eq!(
+        create_tool["inputSchema"]["$defs"]["weekly_weight_loss"]["type"],
+        "string"
+    );
+    assert_eq!(
         create_tool["inputSchema"]["$defs"]["create_profile"]["properties"]["settings"]["anyOf"][0]
             ["$ref"],
         "#/$defs/create_settings"
@@ -81,6 +90,15 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
         "Null resets BMR to calculated mode."
     );
     assert_eq!(update_tool["annotations"]["destructiveHint"], true);
+    assert_eq!(
+        update_tool["inputSchema"]["$defs"]["patch_profile"]["properties"]["weekly_weight_loss"]["anyOf"]
+            [0]["$ref"],
+        "#/$defs/weekly_weight_loss"
+    );
+    assert_eq!(
+        update_tool["inputSchema"]["$defs"]["weekly_weight_loss"]["type"],
+        "string"
+    );
 
     let denied_create = mcp_call_router_with_token(
         &app.router,
@@ -118,6 +136,7 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
             "profile": {
                 "name": "Amalia",
                 "settings": {
+                    "weekly_weight_loss": "0.5 kg/week",
                     "bmr": {"mode":"custom", "value":"1650 kcal/day"},
                     "baseline_activity": {"mode":"preset", "level":"sedentary"}
                 }
@@ -130,6 +149,14 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
     assert_eq!(created.json["result"]["isError"], false);
     let profile = &created.json["result"]["structuredContent"];
     let profile_id = profile["id"].as_i64().ok_or("profile has no ID")?;
+    assert_eq!(
+        profile["data"]["settings"]["weekly_weight_loss"],
+        "0.5 kg/week"
+    );
+    crate::profiles::tests::assert_deficit(
+        &profile["derived"]["daily_calorie_deficit"],
+        "550 kcal/day",
+    )?;
     assert_eq!(profile["data"]["settings"]["bmr"]["mode"], "custom");
     assert_eq!(profile["derived"]["bmr"], "1650 kcal/day");
     assert_eq!(profile["derived"]["baseline_activity"], "330.0 kcal/day");
@@ -158,6 +185,10 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
     )
     .await?;
     assert_eq!(updated.json["result"]["isError"], false);
+    assert_eq!(
+        updated.json["result"]["structuredContent"]["data"]["settings"]["weekly_weight_loss"],
+        "0.5 kg/week"
+    );
     assert_eq!(
         updated.json["result"]["structuredContent"]["data"]["settings"]["weight_goal"],
         "64 kg"
@@ -209,6 +240,71 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
             .as_array()
             .map(Vec::len),
         Some(1)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_weekly_weight_loss_handles_zero_clear_and_invalid_values() -> Result<(), Box<dyn Error>>
+{
+    let app = TestApplication::new().await?;
+    crate::profiles::tests::routes::seed_profile_account(&app).await?;
+    crate::tests::mcp_initialize(&app).await?;
+    let created = mcp_call_router_with_token(
+        &app.router,
+        1,
+        "create_profile",
+        json!({"profile":{"name":"Rate","settings":{"weekly_weight_loss":"0.5 kg/week"}}}),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(
+        created.json["result"]["isError"], false,
+        "{:?}",
+        created.json
+    );
+    let profile = &created.json["result"]["structuredContent"];
+    assert!(profile["derived"]["maintenance_calories"].is_null());
+    crate::profiles::tests::assert_deficit(
+        &profile["derived"]["daily_calorie_deficit"],
+        "550 kcal/day",
+    )?;
+    let id = profile["id"].as_i64().ok_or("profile has no ID")?;
+    for invalid in ["-1 kg/week", "1 kg/day"] {
+        let response = mcp_call_router_with_token(
+            &app.router,
+            2,
+            "update_profile",
+            json!({"id":id,"patch":{"weekly_weight_loss":invalid}}),
+            TEST_MCP_WRITE_ACCESS_TOKEN,
+        )
+        .await?;
+        assert_eq!(response.json["result"]["isError"], true);
+    }
+    let zero = mcp_call_router_with_token(
+        &app.router,
+        3,
+        "update_profile",
+        json!({"id":id,"patch":{"weekly_weight_loss":"0 kg/week"}}),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(zero.json["result"]["isError"], false, "{:?}", zero.json);
+    crate::profiles::tests::assert_deficit(
+        &zero.json["result"]["structuredContent"]["derived"]["daily_calorie_deficit"],
+        "0 kcal/day",
+    )?;
+    let clear = mcp_call_router_with_token(
+        &app.router,
+        4,
+        "update_profile",
+        json!({"id":id,"patch":{"weekly_weight_loss":null}}),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(clear.json["result"]["isError"], false);
+    assert!(
+        clear.json["result"]["structuredContent"]["derived"]["daily_calorie_deficit"].is_null()
     );
     Ok(())
 }

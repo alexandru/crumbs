@@ -54,3 +54,18 @@ pub(in crate::profiles) fn profile_error_cases() -> [ProfileErrorCase; 6] {
         },
     ]
 }
+
+pub(in crate::profiles) fn assert_deficit(
+    actual: &serde_json::Value,
+    expected: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crumbs_database::nutrition_model::{Kcal, PerDay};
+
+    let actual = actual
+        .as_str()
+        .ok_or("missing deficit")?
+        .parse::<PerDay<Kcal>>()?;
+    let expected = expected.parse::<PerDay<Kcal>>()?;
+    assert_eq!(actual, expected);
+    Ok(())
+}

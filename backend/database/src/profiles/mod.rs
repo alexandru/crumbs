@@ -11,6 +11,7 @@ pub use model::{
     BodyHeight, BodyWeight, CreateProfile, CreateProfileSettings, CustomBmr, IanaTimezone,
     NullablePatch, Patch, PatchProfile, Profile, ProfileCache, ProfileData, ProfileDerived,
     ProfileId, ProfileLimit, ProfileList, ProfileListQuery, ProfileName, ProfileSettings, Sex,
+    WeeklyWeightLoss,
 };
 pub use store::Profiles;
 

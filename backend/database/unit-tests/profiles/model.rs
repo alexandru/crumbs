@@ -4,7 +4,7 @@ use std::str::FromStr;
 use chrono::{NaiveDate, TimeZone, Utc};
 use rust_decimal::Decimal;
 
-use crate::nutrition_model::{Kcal, Kilograms, PerDay};
+use crate::nutrition_model::{Kcal, Kilograms, Measurement, PerDay};
 use crate::profiles::model::ProfileData;
 use crate::profiles::*;
 
@@ -483,4 +483,87 @@ fn create_and_patch_reject_bare_energy_for_daily_rates() {
         assert!(serde_json::from_value::<CreateProfile>(create).is_err());
         assert!(serde_json::from_value::<PatchProfile>(settings).is_err());
     }
+}
+
+#[test]
+fn weekly_weight_loss_validates_units_and_calculates_deficit() -> Result<(), Box<dyn Error>> {
+    let half: WeeklyWeightLoss = serde_json::from_str("\"0.5 kg/week\"")?;
+    assert_eq!(half.daily_calorie_deficit().value(), Decimal::from(550));
+    assert_eq!(WeeklyWeightLoss::new("0.5 kg/week".parse()?)?, half);
+    assert!(WeeklyWeightLoss::new("-0.5 kg/week".parse()?).is_err());
+    assert_eq!(serde_json::to_string(&half)?, "\"0.5 kg/week\"");
+    let precise: WeeklyWeightLoss = serde_json::from_str("\"0.123 kg/week\"")?;
+    assert_eq!(
+        precise.daily_calorie_deficit().value(),
+        Decimal::from_str_exact("135.3")?
+    );
+    let zero: WeeklyWeightLoss = serde_json::from_str("\"0 kg/week\"")?;
+    assert_eq!(zero.daily_calorie_deficit().value(), Decimal::ZERO);
+    for value in ["-0.5 kg/week", "0.5 kg/day", "0.5 kg", "0.5"] {
+        assert!(serde_json::from_value::<WeeklyWeightLoss>(serde_json::json!(value)).is_err());
+        assert!(
+            serde_json::from_value::<CreateProfile>(
+                serde_json::json!({"name":"Alex","settings":{"weekly_weight_loss":value}})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<PatchProfile>(serde_json::json!({"weekly_weight_loss":value}))
+                .is_err()
+        );
+    }
+    let legacy: ProfileSettings = serde_json::from_value(serde_json::json!({}))?;
+    assert_eq!(legacy.weekly_weight_loss, None);
+    let unset_derived = ProfileDerived::calculate(&legacy, &ProfileCache::default(), 1_000)?;
+    assert_eq!(unset_derived.daily_calorie_deficit(), None);
+    let zero_settings: ProfileSettings =
+        serde_json::from_value(serde_json::json!({"weekly_weight_loss": "0 kg/week"}))?;
+    let zero_derived = ProfileDerived::calculate(&zero_settings, &ProfileCache::default(), 1_000)?;
+    assert_eq!(
+        zero_derived
+            .daily_calorie_deficit()
+            .map(|value| value.value()),
+        Some(Decimal::ZERO)
+    );
+    for settings in [
+        serde_json::json!({}),
+        serde_json::json!({"weekly_weight_loss": null}),
+    ] {
+        let create: CreateProfile =
+            serde_json::from_value(serde_json::json!({"name": "Alex", "settings": settings}))?;
+        assert_eq!(
+            create
+                .settings
+                .ok_or("missing settings")?
+                .weekly_weight_loss,
+            None
+        );
+    }
+    let clear: PatchProfile = serde_json::from_str(r#"{"weekly_weight_loss":null}"#)?;
+    assert_eq!(clear.weekly_weight_loss, NullablePatch::Clear);
+    let keep: PatchProfile = serde_json::from_str("{}")?;
+    assert_eq!(keep.weekly_weight_loss, NullablePatch::Unchanged);
+    let settings: ProfileSettings =
+        serde_json::from_value(serde_json::json!({"weekly_weight_loss":"0.5 kg/week"}))?;
+    assert_eq!(
+        serde_json::from_value::<ProfileSettings>(serde_json::to_value(&settings)?)?,
+        settings
+    );
+    let derived = ProfileDerived::calculate(&settings, &ProfileCache::default(), 1_000)?;
+    assert_eq!(derived.bmr(), None);
+    assert_eq!(derived.maintenance_calories(), None);
+    assert_eq!(
+        derived.daily_calorie_deficit().map(|value| value.value()),
+        Some(Decimal::from(550))
+    );
+    assert_eq!(
+        serde_json::from_value::<ProfileDerived>(serde_json::to_value(derived)?)?,
+        derived
+    );
+    let legacy_derived: ProfileDerived = serde_json::from_str(
+        r#"{"bmr":null,"baseline_activity":null,"maintenance_calories":null}"#,
+    )?;
+    assert_eq!(legacy_derived.daily_calorie_deficit(), None);
+    assert!(serde_json::from_str::<ProfileDerived>(r#"{"bmr":null,"baseline_activity":null,"maintenance_calories":null,"daily_calorie_deficit":"-1 kcal/day"}"#).is_err());
+    Ok(())
 }

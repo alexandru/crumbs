@@ -116,6 +116,7 @@ Example arguments:
       "height": "175 cm",
       "timezone": "Europe/Bucharest",
       "weight_goal": "70 kg",
+      "weekly_weight_loss": "0.5 kg/week",
       "bmr": {"mode": "custom", "value": "1700 kcal/day"},
       "baseline_activity": {"mode": "preset", "level": "sedentary"}
     }
@@ -124,7 +125,8 @@ Example arguments:
 ```
 
 - Place settings inside profile.settings. Omitted settings use profile defaults; settings may be null.
-- Use unit-bearing strings for height, weight goal, and custom energy values.
+- Use unit-bearing strings for height, weight goal, weekly weight loss, and custom energy values.
+- Weekly weight loss is nonnegative and independent of weight goal. It determines the daily calorie deficit.
 - BMR is `{"mode":"calculated"}` or `{"mode":"custom","value":"1700 kcal/day"}`.
 - Baseline activity is `{"mode":"preset","level":"sedentary"}` or `{"mode":"custom","value":"400 kcal/day"}`.
 - Requires crumbs:write."#
@@ -139,6 +141,7 @@ Example arguments:
   "patch": {
     "height": "175 cm",
     "weight_goal": "70 kg",
+    "weekly_weight_loss": "0.5 kg/week",
     "bmr": {"mode": "custom", "value": "1700 kcal/day"},
     "baseline_activity": {"mode": "preset", "level": "sedentary"}
   }
@@ -147,7 +150,8 @@ Example arguments:
 
 - Place settings directly inside patch, not inside settings.
 - Omitted fields remain unchanged; null clears nullable settings and resets BMR to calculated. Name and timezone cannot be null.
-- Use unit-bearing strings for height, weight goal, and custom energy values.
+- Use unit-bearing strings for height, weight goal, weekly weight loss, and custom energy values.
+- Weekly weight loss is nonnegative and independent of weight goal. Null clears it.
 - BMR is `{"mode":"calculated"}` or `{"mode":"custom","value":"1700 kcal/day"}`.
 - Baseline activity is `{"mode":"preset","level":"sedentary"}` or `{"mode":"custom","value":"400 kcal/day"}`.
 - Requires crumbs:write."#
@@ -363,6 +367,7 @@ fn definitions() -> Value {
                 "height": {"anyOf": [{"$ref": "#/$defs/height"}, {"type": "null"}]},
                 "timezone": {"type": ["string", "null"], "description": "IANA timezone name. Defaults to UTC."},
                 "weight_goal": {"anyOf": [{"$ref": "#/$defs/weight"}, {"type": "null"}]},
+                "weekly_weight_loss": {"anyOf": [{"$ref": "#/$defs/weekly_weight_loss"}, {"type": "null"}]},
                 "bmr": {"anyOf": [{"$ref": "#/$defs/bmr"}, {"type": "null"}]},
                 "baseline_activity": {"anyOf": [{"$ref": "#/$defs/baseline_activity"}, {"type": "null"}]}
             }
@@ -377,6 +382,7 @@ fn definitions() -> Value {
                 "height": {"anyOf": [{"$ref": "#/$defs/height"}, {"type": "null"}]},
                 "timezone": {"type": "string", "description": "IANA timezone name."},
                 "weight_goal": {"anyOf": [{"$ref": "#/$defs/weight"}, {"type": "null"}]},
+                "weekly_weight_loss": {"anyOf": [{"$ref": "#/$defs/weekly_weight_loss"}, {"type": "null"}], "description": "Omit to preserve the rate; null clears it."},
                 "bmr": {"anyOf": [{"$ref": "#/$defs/bmr"}, {"type": "null"}], "description": "Null resets BMR to calculated mode."},
                 "baseline_activity": {"anyOf": [{"$ref": "#/$defs/baseline_activity"}, {"type": "null"}]}
             }
@@ -385,6 +391,7 @@ fn definitions() -> Value {
         "sex": {"type": "string", "enum": ["male", "female"]},
         "height": {"type": "string", "description": "Positive height in centimetres, for example 175 cm."},
         "weight": {"type": "string", "description": "Positive body weight with the kg unit, for example 70 kg."},
+        "weekly_weight_loss": {"type": "string", "description": "Nonnegative requested weight loss with the kg/week unit, for example 0.5 kg/week. The derived daily_calorie_deficit uses an estimate of 7,700 kcal/kg over seven days."},
         "bmr": {
             "description": "Tagged object: calculated mode, or custom mode with a unit-bearing kcal/day value.",
             "oneOf": [
