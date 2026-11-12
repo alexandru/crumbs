@@ -4,8 +4,8 @@ mod model;
 mod quantity;
 
 pub use model::{
-    Carbohydrates, ConsumedNutrition, Fat, FoodData, Nutrients, NutritionBasis, NutritionProfile,
-    ServingName, ServingSize, Sugars,
+    Carbohydrates, ConsumedNutrition, Fat, FoodData, Minerals, Nutrients, NutritionBasis,
+    NutritionProfile, ServingName, ServingSize, Sugars, Vitamins,
 };
 pub use quantity::{
     Centimetres, Energy, FixedUnit, Grams, Kcal, Kilograms, Kilojoules, Litres, Mass,

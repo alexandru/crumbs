@@ -863,6 +863,9 @@ async fn food_logs_scale_mass_and_volume_profiles_and_keep_all_nutrients()
                 },
                 "fibre": "1 g",
                 "protein": "<= 8 g",
+                "water": "50 g",
+                "minerals": {"magnesium": "4 mg"},
+                "vitamins": {"vitamin_a": "8 µg"},
                 "sodium": "5 mg",
                 "salt": "6 mg",
                 "cholesterol": "7 mg"
@@ -926,6 +929,9 @@ async fn food_logs_scale_mass_and_volume_profiles_and_keep_all_nutrients()
     assert_eq!(nutrients.carbohydrates.starch, Some("10 g".parse()?));
     assert_eq!(nutrients.fibre, Some("2.5 g".parse()?));
     assert_eq!(nutrients.protein, Some("<= 20 g".parse()?));
+    assert_eq!(nutrients.water, Some("125 g".parse()?));
+    assert_eq!(nutrients.minerals.magnesium, Some("10 mg".parse()?));
+    assert_eq!(nutrients.vitamins.vitamin_a, Some("20 µg".parse()?));
     assert_eq!(nutrients.sodium, Some("12.5 mg".parse()?));
     assert_eq!(nutrients.salt, Some("15 mg".parse()?));
     assert_eq!(nutrients.cholesterol, Some("17.5 mg".parse()?));
@@ -1266,7 +1272,7 @@ async fn food_snapshots_survive_source_changes_deletion_and_metadata_patch()
         &database,
         "Original label",
         serde_json::json!({
-            "nutrition":{"per":"100 g","energy":"100 kcal","protein":"10 g"},
+            "nutrition":{"per":"100 g","energy":"100 kcal","protein":"10 g","minerals":{"magnesium":"4 mg"},"vitamins":{"vitamin_a":"8 µg"}},
             "serving_sizes":[{"name":"portion","quantity":"50 g"}]
         }),
     )
@@ -1294,7 +1300,7 @@ async fn food_snapshots_survive_source_changes_deletion_and_metadata_patch()
     let changed_food: CustomFoodInput = serde_json::from_value(serde_json::json!({
         "description":"Fresh label",
         "parsed_data":{
-            "nutrition":{"per":"100 g","energy":"300 kcal","protein":"20 g"},
+            "nutrition":{"per":"100 g","energy":"300 kcal","protein":"20 g","minerals":{"magnesium":"6 mg"},"vitamins":{"vitamin_a":"10 µg"}},
             "serving_sizes":[{"name":"portion","quantity":"50 g"}]
         }
     }))?;
@@ -1349,6 +1355,14 @@ async fn food_snapshots_survive_source_changes_deletion_and_metadata_patch()
         Decimal::from(450)
     );
     assert_eq!(refreshed_entry.description(), "Fresh label");
+    assert_eq!(
+        refreshed_entry.nutrition().nutrients.minerals.magnesium,
+        Some("9 mg".parse()?)
+    );
+    assert_eq!(
+        refreshed_entry.nutrition().nutrients.vitamins.vitamin_a,
+        Some("15 µg".parse()?)
+    );
     assert_eq!(
         log_state(&database, original.id).await?.updated_at,
         Some(2_000)

@@ -287,6 +287,30 @@ fn parse_array<T: serde::de::DeserializeOwned>(
         .collect()
 }
 
+const WATER: NutrientId = 1051;
+const CAFFEINE: NutrientId = 1057;
+const CHOLINE: NutrientId = 1180;
+const CALCIUM: NutrientId = 1087;
+const IRON: NutrientId = 1089;
+const MAGNESIUM: NutrientId = 1090;
+const PHOSPHORUS: NutrientId = 1091;
+const POTASSIUM: NutrientId = 1092;
+const ZINC: NutrientId = 1095;
+const COPPER: NutrientId = 1098;
+const MANGANESE: NutrientId = 1101;
+const SELENIUM: NutrientId = 1103;
+const VITAMIN_A: NutrientId = 1106;
+const VITAMIN_C: NutrientId = 1162;
+const VITAMIN_D: NutrientId = 1114;
+const VITAMIN_E: NutrientId = 1109;
+const VITAMIN_K1: NutrientId = 1185;
+const VITAMIN_B1: NutrientId = 1165;
+const VITAMIN_B2: NutrientId = 1166;
+const VITAMIN_B3: NutrientId = 1167;
+const VITAMIN_B5: NutrientId = 1170;
+const VITAMIN_B6: NutrientId = 1175;
+const VITAMIN_B9: NutrientId = 1177;
+const VITAMIN_B12: NutrientId = 1178;
 const PROTEIN: NutrientId = 1003;
 const TOTAL_FAT: NutrientId = 1004;
 const CARBOHYDRATE_BY_DIFFERENCE: NutrientId = 1005;
@@ -323,6 +347,30 @@ impl ClassifiedNutrient {
             ENERGY_KILOJOULES => Some(Self::Energy(EnergyMethod::FoodEnergyKj)),
             SUGARS_TOTAL_NLEA => Some(Self::TotalSugar(SugarMethod::TotalNlea)),
             SUGARS_TOTAL => Some(Self::TotalSugar(SugarMethod::Total)),
+            WATER => Some(Self::Mass(MassNutrient::Water)),
+            CAFFEINE => Some(Self::Mass(MassNutrient::Caffeine)),
+            CHOLINE => Some(Self::Mass(MassNutrient::Choline)),
+            CALCIUM => Some(Self::Mass(MassNutrient::Calcium)),
+            IRON => Some(Self::Mass(MassNutrient::Iron)),
+            MAGNESIUM => Some(Self::Mass(MassNutrient::Magnesium)),
+            PHOSPHORUS => Some(Self::Mass(MassNutrient::Phosphorus)),
+            POTASSIUM => Some(Self::Mass(MassNutrient::Potassium)),
+            ZINC => Some(Self::Mass(MassNutrient::Zinc)),
+            COPPER => Some(Self::Mass(MassNutrient::Copper)),
+            MANGANESE => Some(Self::Mass(MassNutrient::Manganese)),
+            SELENIUM => Some(Self::Mass(MassNutrient::Selenium)),
+            VITAMIN_A => Some(Self::Mass(MassNutrient::VitaminA)),
+            VITAMIN_C => Some(Self::Mass(MassNutrient::VitaminC)),
+            VITAMIN_D => Some(Self::Mass(MassNutrient::VitaminD)),
+            VITAMIN_E => Some(Self::Mass(MassNutrient::VitaminE)),
+            VITAMIN_K1 => Some(Self::Mass(MassNutrient::VitaminK1)),
+            VITAMIN_B1 => Some(Self::Mass(MassNutrient::VitaminB1)),
+            VITAMIN_B2 => Some(Self::Mass(MassNutrient::VitaminB2)),
+            VITAMIN_B3 => Some(Self::Mass(MassNutrient::VitaminB3)),
+            VITAMIN_B5 => Some(Self::Mass(MassNutrient::VitaminB5)),
+            VITAMIN_B6 => Some(Self::Mass(MassNutrient::VitaminB6)),
+            VITAMIN_B9 => Some(Self::Mass(MassNutrient::VitaminB9)),
+            VITAMIN_B12 => Some(Self::Mass(MassNutrient::VitaminB12)),
             PROTEIN => Some(Self::Mass(MassNutrient::Protein)),
             TOTAL_FAT => Some(Self::Mass(MassNutrient::TotalFat)),
             CARBOHYDRATE_BY_DIFFERENCE => Some(Self::Mass(MassNutrient::CarbohydrateByDifference)),
@@ -368,6 +416,30 @@ enum SugarMethod {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum MassNutrient {
+    Water,
+    Caffeine,
+    Choline,
+    Calcium,
+    Iron,
+    Magnesium,
+    Phosphorus,
+    Potassium,
+    Zinc,
+    Copper,
+    Manganese,
+    Selenium,
+    VitaminA,
+    VitaminC,
+    VitaminD,
+    VitaminE,
+    VitaminK1,
+    VitaminB1,
+    VitaminB2,
+    VitaminB3,
+    VitaminB5,
+    VitaminB6,
+    VitaminB9,
+    VitaminB12,
     Protein,
     TotalFat,
     CarbohydrateByDifference,
@@ -386,6 +458,30 @@ enum MassNutrient {
 impl MassNutrient {
     fn field(self) -> &'static str {
         match self {
+            Self::Water => "water",
+            Self::Caffeine => "caffeine",
+            Self::Choline => "choline",
+            Self::Calcium => "minerals.calcium",
+            Self::Iron => "minerals.iron",
+            Self::Magnesium => "minerals.magnesium",
+            Self::Phosphorus => "minerals.phosphorus",
+            Self::Potassium => "minerals.potassium",
+            Self::Zinc => "minerals.zinc",
+            Self::Copper => "minerals.copper",
+            Self::Manganese => "minerals.manganese",
+            Self::Selenium => "minerals.selenium",
+            Self::VitaminA => "vitamins.vitamin_a",
+            Self::VitaminC => "vitamins.vitamin_c",
+            Self::VitaminD => "vitamins.vitamin_d",
+            Self::VitaminE => "vitamins.vitamin_e",
+            Self::VitaminK1 => "vitamins.vitamin_k1",
+            Self::VitaminB1 => "vitamins.vitamin_b1",
+            Self::VitaminB2 => "vitamins.vitamin_b2",
+            Self::VitaminB3 => "vitamins.vitamin_b3",
+            Self::VitaminB5 => "vitamins.vitamin_b5",
+            Self::VitaminB6 => "vitamins.vitamin_b6",
+            Self::VitaminB9 => "vitamins.vitamin_b9",
+            Self::VitaminB12 => "vitamins.vitamin_b12",
             Self::Protein => "protein",
             Self::TotalFat => "fat.total",
             Self::CarbohydrateByDifference => "carbohydrates.including_fibre",
@@ -678,6 +774,30 @@ fn normalize_mass_unit(unit: &str) -> Option<&'static str> {
 
 fn assign_nutrient(profile: &mut NutritionProfile, nutrient: MassNutrient, amount: Reported<Mass>) {
     let slot = match nutrient {
+        MassNutrient::Water => &mut profile.nutrients.water,
+        MassNutrient::Caffeine => &mut profile.nutrients.caffeine,
+        MassNutrient::Choline => &mut profile.nutrients.choline,
+        MassNutrient::Calcium => &mut profile.nutrients.minerals.calcium,
+        MassNutrient::Iron => &mut profile.nutrients.minerals.iron,
+        MassNutrient::Magnesium => &mut profile.nutrients.minerals.magnesium,
+        MassNutrient::Phosphorus => &mut profile.nutrients.minerals.phosphorus,
+        MassNutrient::Potassium => &mut profile.nutrients.minerals.potassium,
+        MassNutrient::Zinc => &mut profile.nutrients.minerals.zinc,
+        MassNutrient::Copper => &mut profile.nutrients.minerals.copper,
+        MassNutrient::Manganese => &mut profile.nutrients.minerals.manganese,
+        MassNutrient::Selenium => &mut profile.nutrients.minerals.selenium,
+        MassNutrient::VitaminA => &mut profile.nutrients.vitamins.vitamin_a,
+        MassNutrient::VitaminC => &mut profile.nutrients.vitamins.vitamin_c,
+        MassNutrient::VitaminD => &mut profile.nutrients.vitamins.vitamin_d,
+        MassNutrient::VitaminE => &mut profile.nutrients.vitamins.vitamin_e,
+        MassNutrient::VitaminK1 => &mut profile.nutrients.vitamins.vitamin_k1,
+        MassNutrient::VitaminB1 => &mut profile.nutrients.vitamins.vitamin_b1,
+        MassNutrient::VitaminB2 => &mut profile.nutrients.vitamins.vitamin_b2,
+        MassNutrient::VitaminB3 => &mut profile.nutrients.vitamins.vitamin_b3,
+        MassNutrient::VitaminB5 => &mut profile.nutrients.vitamins.vitamin_b5,
+        MassNutrient::VitaminB6 => &mut profile.nutrients.vitamins.vitamin_b6,
+        MassNutrient::VitaminB9 => &mut profile.nutrients.vitamins.vitamin_b9,
+        MassNutrient::VitaminB12 => &mut profile.nutrients.vitamins.vitamin_b12,
         MassNutrient::Protein => &mut profile.nutrients.protein,
         MassNutrient::TotalFat => &mut profile.nutrients.fat.total,
         MassNutrient::CarbohydrateByDifference => {

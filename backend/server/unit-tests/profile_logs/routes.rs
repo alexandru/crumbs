@@ -263,7 +263,7 @@ async fn rest_profile_logs_resolve_food_inputs_and_list_mixed_entries() -> Resul
         &app,
         "Oat bar",
         json!({
-            "nutrition": {"per":"100 g", "energy":"180 kcal", "protein":"10 g", "fat":{"total":"8 g"}},
+            "nutrition": {"per":"100 g", "energy":"180 kcal", "protein":"10 g", "fat":{"total":"8 g"}, "water":"30 g", "minerals":{"magnesium":"20 mg"}, "vitamins":{"vitamin_a":"10 µg"}},
             "serving_sizes": [{"name":"one bar", "quantity":"50 g"}]
         }),
     )
@@ -325,6 +325,16 @@ async fn rest_profile_logs_resolve_food_inputs_and_list_mixed_entries() -> Resul
     assert_eq!(grams.json["data"]["quantity"], "250 g");
     assert_calories(&grams.json["data"]["nutrition"]["calories"], "450 kcal")?;
     assert_mass(&grams.json["data"]["nutrition"]["protein"], "25 g")?;
+    assert_mass(&grams.json["data"]["nutrition"]["water"], "75 g")?;
+    assert_mass(
+        &grams.json["data"]["nutrition"]["minerals"]["magnesium"],
+        "50 mg",
+    )?;
+    assert_mass(
+        &grams.json["data"]["nutrition"]["vitamins"]["vitamin_a"],
+        "25 µg",
+    )?;
+    assert!(grams.json["data"]["nutrition"]["vitamins"]["vitamin_b12"].is_null());
     assert_mass(&grams.json["data"]["nutrition"]["fat"]["total"], "20 g")?;
     assert_eq!(grams.json["data"]["input"]["amount"], "250");
     assert_eq!(grams.json["data"]["input"]["serving_size"]["name"], "g");
@@ -457,7 +467,7 @@ async fn rest_profile_log_food_snapshots_survive_food_changes_and_deletion()
         &app,
         "Original wings",
         json!({
-            "nutrition": {"per":"100 g", "energy":"200 kcal", "protein":"20 g"},
+            "nutrition": {"per":"100 g", "energy":"200 kcal", "protein":"20 g", "minerals":{"iron":"4 mg"}, "vitamins":{"vitamin_c":"5 mg"}},
             "serving_sizes": [{"name":"four wings", "quantity":"200 g"}]
         }),
     )
@@ -477,6 +487,11 @@ async fn rest_profile_log_food_snapshots_survive_food_changes_and_deletion()
     let original_snapshot = created.json["data"].clone();
     assert_eq!(original_snapshot["description"], "Original wings");
     assert_calories(&original_snapshot["nutrition"]["calories"], "400 kcal")?;
+    assert_mass(&original_snapshot["nutrition"]["minerals"]["iron"], "8 mg")?;
+    assert_mass(
+        &original_snapshot["nutrition"]["vitamins"]["vitamin_c"],
+        "10 mg",
+    )?;
     let null_input_patch = app
         .request(http_json_request(
             "PATCH",

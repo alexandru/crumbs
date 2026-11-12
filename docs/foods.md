@@ -83,6 +83,54 @@ for `update_custom_food`. `get_custom_food` and `delete_custom_food` take `{"id"
 
 Management reads and writes only address foods whose source and dataset are both `custom`. Missing IDs and imported-food IDs produce HTTP 404 or an MCP tool error. Invalid input produces HTTP 400 or an MCP tool error. Storage failures produce a generic HTTP 500 or MCP tool error without storage details. REST and MCP operations without the required permission receive HTTP 403 with a Bearer `WWW-Authenticate` challenge identifying `insufficient_scope`, the required scope, and the protected resource metadata URI. MCP clients can request the additional permission through OAuth and retry the operation.
 
+## Nutrition
+
+Nutrition uses the same fields for imported and custom foods. Water, caffeine, and choline are optional mass amounts at the same level as protein. Minerals and vitamins have separate groups:
+
+```json
+{
+  "per": "100 g",
+  "water": "75 g",
+  "caffeine": "0 mg",
+  "choline": "20 mg",
+  "minerals": {
+    "magnesium": "25 mg",
+    "potassium": "200 mg"
+  },
+  "vitamins": {
+    "vitamin_a": "50 µg",
+    "vitamin_b9": "30 µg"
+  }
+}
+```
+
+The example shows the structure only. It does not describe a specific food. Each amount can be omitted or null when unknown. Omitted groups contain no known amounts. Amounts retain their mass units and qualifiers, such as `< 1 mg` or `~ 20 µg`. Existing fields, including sodium, keep their locations.
+
+The mineral fields are `calcium`, `iron`, `magnesium`, `phosphorus`, `potassium`, `zinc`, `copper`, `manganese`, and `selenium`.
+
+The vitamin fields have these meanings:
+
+| Field | Measured form |
+| --- | --- |
+| `vitamin_a` | Retinol activity equivalents |
+| `vitamin_c` | Total ascorbic acid |
+| `vitamin_d` | Total vitamin D2 and D3 |
+| `vitamin_e` | Alpha-tocopherol |
+| `vitamin_k1` | Phylloquinone |
+| `vitamin_b1` | Thiamin |
+| `vitamin_b2` | Riboflavin |
+| `vitamin_b3` | Niacin |
+| `vitamin_b5` | Pantothenic acid |
+| `vitamin_b6` | Vitamin B6 |
+| `vitamin_b9` | Total folate |
+| `vitamin_b12` | Vitamin B12 |
+
+Vitamin amounts use mass units. Values in international units, dietary folate equivalents, or niacin equivalents must not be entered as mass amounts without a valid conversion to the specified form. Choline means total choline.
+
+USDA imports map the specific nutrient forms from the [USDA nutrient catalog](https://fdc.nal.usda.gov/download-datasets/). To add available amounts to foods imported before these fields were supported, run the existing `db import-usda` command again with the USDA JSON file. Reimport preserves food IDs and updates food nutrition. It does not change stored food-log snapshots. New food-log entries include the available nutrients, scaled to the consumed quantity.
+
+Custom-food `notes` can contain ingredients and recipe instructions as free text. Notes do not define structured ingredients or calculate nutrition.
+
 ## Rust API
 
 The `crumbs_database::foods` module exposes `Dataset`, `Food`, `SearchResults`, and `CustomFoodInput`. `FoodSearch::search_foods` returns the three dataset arrays. `CustomFoodStore` exposes `create_custom_food`, `custom_food`, `list_custom_foods`, `update_custom_food`, and `delete_custom_food` with the same management boundaries and replacement semantics as HTTP. These traits keep storage-specific errors behind associated types.

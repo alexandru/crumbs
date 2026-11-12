@@ -364,12 +364,35 @@ fn food_definitions() -> Value {
                 "carbohydrates": {"$ref": "#/$defs/carbohydrates", "description": "Object with optional mass fields and a sugars object; each mass value is a unit-bearing string."},
                 "fibre": {"$ref": "#/$defs/mass"},
                 "protein": {"$ref": "#/$defs/mass"},
+                "water": {"$ref": "#/$defs/mass"},
+                "caffeine": {"$ref": "#/$defs/mass"},
+                "choline": {"$ref": "#/$defs/mass", "description": "Total choline."},
+                "minerals": {"$ref": "#/$defs/minerals"},
+                "vitamins": {"$ref": "#/$defs/vitamins"},
                 "sodium": {"$ref": "#/$defs/mass"},
                 "salt": {"$ref": "#/$defs/mass"},
                 "cholesterol": {"$ref": "#/$defs/mass"}
             }
         },
         "fat": mass_properties(&["total", "saturated", "monounsaturated", "polyunsaturated", "trans"]),
+        "minerals": mass_properties(&["calcium", "iron", "magnesium", "phosphorus", "potassium", "zinc", "copper", "manganese", "selenium"]),
+        "vitamins": {
+            "type": "object",
+            "properties": {
+                "vitamin_a": {"$ref": "#/$defs/mass", "description": "Vitamin A as retinol activity equivalents."},
+                "vitamin_c": {"$ref": "#/$defs/mass", "description": "Total ascorbic acid."},
+                "vitamin_d": {"$ref": "#/$defs/mass", "description": "Vitamin D2 and D3 combined."},
+                "vitamin_e": {"$ref": "#/$defs/mass", "description": "Alpha-tocopherol."},
+                "vitamin_k1": {"$ref": "#/$defs/mass", "description": "Phylloquinone."},
+                "vitamin_b1": {"$ref": "#/$defs/mass", "description": "Thiamin."},
+                "vitamin_b2": {"$ref": "#/$defs/mass", "description": "Riboflavin."},
+                "vitamin_b3": {"$ref": "#/$defs/mass", "description": "Niacin."},
+                "vitamin_b5": {"$ref": "#/$defs/mass", "description": "Pantothenic acid."},
+                "vitamin_b6": {"$ref": "#/$defs/mass", "description": "Total vitamin B6."},
+                "vitamin_b9": {"$ref": "#/$defs/mass", "description": "Total folate."},
+                "vitamin_b12": {"$ref": "#/$defs/mass", "description": "Vitamin B12."}
+            }
+        },
         "carbohydrates": {
             "type": "object",
             "properties": {

@@ -17,7 +17,7 @@ async fn rest_custom_foods_support_full_crud_and_search_notes_are_not_indexed()
         "category": "Breakfast",
         "notes": "Mozzarella, basil, and shallot",
         "parsed_data": {
-            "nutrition": { "per": "100 g", "energy": "280 kcal", "protein": "14 g" },
+            "nutrition": { "per": "100 g", "energy": "280 kcal", "protein": "14 g", "water": "10 g", "minerals": {"magnesium": "30 mg"}, "vitamins": {"vitamin_a": "15 µg"} },
             "serving_sizes": [{ "name": "one slice", "quantity": "90 g" }]
         }
     });
@@ -37,6 +37,15 @@ async fn rest_custom_foods_support_full_crud_and_search_notes_are_not_indexed()
     assert_eq!(created.json["dataset"], "custom");
     assert_eq!(created.json["notes"], "Mozzarella, basil, and shallot");
     assert_eq!(created.json["parsed_data"]["nutrition"]["protein"], "14 g");
+    assert_eq!(created.json["parsed_data"]["nutrition"]["water"], "10 g");
+    assert_eq!(
+        created.json["parsed_data"]["nutrition"]["minerals"]["magnesium"],
+        "30 mg"
+    );
+    assert_eq!(
+        created.json["parsed_data"]["nutrition"]["vitamins"]["vitamin_a"],
+        "15 µg"
+    );
     assert_eq!(
         created
             .headers

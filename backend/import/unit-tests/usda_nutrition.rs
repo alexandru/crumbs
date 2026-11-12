@@ -649,6 +649,117 @@ fn accepts_numeric_escaped_and_whitespace_source_scalars() -> Result<(), Box<dyn
     Ok(())
 }
 
+#[test]
+fn maps_extended_nutrients_to_their_source_independent_fields() -> Result<(), Box<dyn Error>> {
+    let nutrients = [
+        (1051, "G", "water"),
+        (1057, "MG", "caffeine"),
+        (1180, "MG", "choline"),
+        (1087, "MG", "minerals.calcium"),
+        (1089, "MG", "minerals.iron"),
+        (1090, "MG", "minerals.magnesium"),
+        (1091, "MG", "minerals.phosphorus"),
+        (1092, "MG", "minerals.potassium"),
+        (1095, "MG", "minerals.zinc"),
+        (1098, "MG", "minerals.copper"),
+        (1101, "MG", "minerals.manganese"),
+        (1103, "UG", "minerals.selenium"),
+        (1106, "UG", "vitamins.vitamin_a"),
+        (1162, "MG", "vitamins.vitamin_c"),
+        (1114, "UG", "vitamins.vitamin_d"),
+        (1109, "MG", "vitamins.vitamin_e"),
+        (1185, "UG", "vitamins.vitamin_k1"),
+        (1165, "MG", "vitamins.vitamin_b1"),
+        (1166, "MG", "vitamins.vitamin_b2"),
+        (1167, "MG", "vitamins.vitamin_b3"),
+        (1170, "MG", "vitamins.vitamin_b5"),
+        (1175, "MG", "vitamins.vitamin_b6"),
+        (1177, "UG", "vitamins.vitamin_b9"),
+        (1178, "UG", "vitamins.vitamin_b12"),
+    ];
+    for (id, unit, field) in nutrients {
+        let input = format!(
+            r#"{{"foodNutrients":[{{"nutrient":{{"id":{id},"unitName":"{unit}"}},"amount":1}}]}}"#
+        );
+        let data = parse_data(&input, FoodKind::Foundation)?;
+        let profile = data
+            .nutrition
+            .ok_or_else(|| io::Error::other("nutrition profile is missing"))?;
+        let value = serde_json::to_value(profile)?;
+        let actual = field.split('.').fold(&value, |value, part| &value[part]);
+        let expected_unit = match unit {
+            "G" => "g",
+            "MG" => "mg",
+            _ => "µg",
+        };
+        assert_eq!(
+            actual.as_str(),
+            Some(format!("1 {expected_unit}").as_str()),
+            "nutrient {id}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn extended_nutrients_keep_missing_zero_limits_and_invalid_values_distinct()
+-> Result<(), Box<dyn Error>> {
+    let parsed = super::parse_food_data(
+        r#"{"foodNutrients":[
+        {"nutrient":{"id":1051,"unitName":"g"},"amount":0},
+        {"nutrient":{"id":1057,"unitName":"mg"},"amount":null},
+        {"nutrient":{"id":1090,"unitName":"mg"},"amount":0,"loq":0.5},
+        {"nutrient":{"id":1092,"unitName":"mg"},"amount":-1},
+        {"nutrient":{"id":1106,"unitName":"ug"},"amount":"bad"},
+        {"nutrient":{"id":1162,"unitName":"mg"},"amount":1},
+        {"nutrient":{"id":1162,"unitName":"mg"},"amount":2}
+    ]}"#,
+        FoodKind::Foundation,
+    )?;
+    let profile = parsed
+        .food_data
+        .nutrition
+        .ok_or_else(|| io::Error::other("nutrition profile is missing"))?;
+    assert_eq!(
+        amount_text(&profile.nutrients.water).as_deref(),
+        Some("0 g")
+    );
+    assert_eq!(profile.nutrients.caffeine, None);
+    assert_eq!(
+        amount_text(&profile.nutrients.minerals.magnesium).as_deref(),
+        Some("< 0.5 mg")
+    );
+    assert_eq!(profile.nutrients.minerals.potassium, None);
+    assert_eq!(profile.nutrients.vitamins.vitamin_a, None);
+    assert_eq!(profile.nutrients.vitamins.vitamin_c, None);
+    for field in ["minerals.potassium", "nutrient[1106]", "nutrient[1162]"] {
+        assert!(
+            parsed
+                .sanitizations
+                .iter()
+                .any(|entry| entry.field == field),
+            "missing diagnostic for {field}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn does_not_conflate_other_vitamin_forms() -> Result<(), Box<dyn Error>> {
+    for id in [1104, 1110, 1190, 2067, 2068] {
+        let input = format!(
+            r#"{{"foodNutrients":[{{"nutrient":{{"id":{id},"unitName":"ug"}},"amount":1}}]}}"#
+        );
+        let parsed = super::parse_food_data(&input, FoodKind::Foundation)?;
+        assert_eq!(
+            parsed.food_data.nutrition, None,
+            "unexpected mapping for nutrient {id}"
+        );
+        assert!(parsed.sanitizations.is_empty());
+    }
+    Ok(())
+}
+
 fn parse_error(input: &str) -> Result<NutritionError, Box<dyn Error>> {
     parse_data(input, FoodKind::Foundation)
         .err()

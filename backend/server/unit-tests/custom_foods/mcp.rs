@@ -75,7 +75,7 @@ async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Resul
             "description": "MCP sesame noodles",
             "notes": "Noodles, sesame paste, lime",
             "parsed_data": {
-                "nutrition": { "per": "100 g", "energy": "315 kcal", "protein": "9 g" },
+                "nutrition": { "per": "100 g", "energy": "315 kcal", "protein": "9 g", "caffeine": "20 mg", "minerals": {"potassium": "100 mg"}, "vitamins": {"vitamin_b12": "1 µg"} },
                 "serving_sizes": []
             }
         }
@@ -122,6 +122,18 @@ async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Resul
     assert_eq!(created.status, StatusCode::OK, "{:?}", created.json);
     assert_eq!(created.json["result"]["isError"], false);
     let created_food = &created.json["result"]["structuredContent"];
+    assert_eq!(
+        created_food["parsed_data"]["nutrition"]["caffeine"],
+        "20 mg"
+    );
+    assert_eq!(
+        created_food["parsed_data"]["nutrition"]["minerals"]["potassium"],
+        "100 mg"
+    );
+    assert_eq!(
+        created_food["parsed_data"]["nutrition"]["vitamins"]["vitamin_b12"],
+        "1 µg"
+    );
     let id = created_food["id"].as_i64().ok_or("MCP food has no ID")?;
     assert_eq!(created_food["source"], "custom");
     assert_eq!(created_food["dataset"], "custom");

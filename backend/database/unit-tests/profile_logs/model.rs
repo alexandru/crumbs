@@ -334,7 +334,21 @@ fn food_snapshot_union_is_self_describing_and_validated() -> Result<(), Box<dyn 
                 "protein": "5 g",
                 "sodium": null,
                 "salt": null,
-                "cholesterol": null
+                "cholesterol": null,
+                "water": null,
+                "caffeine": null,
+                "choline": null,
+                "minerals": {
+                    "calcium": null, "iron": null, "magnesium": null,
+                    "phosphorus": null, "potassium": null, "zinc": null,
+                    "copper": null, "manganese": null, "selenium": null
+                },
+                "vitamins": {
+                    "vitamin_a": null, "vitamin_c": null, "vitamin_d": null,
+                    "vitamin_e": null, "vitamin_k1": null, "vitamin_b1": null,
+                    "vitamin_b2": null, "vitamin_b3": null, "vitamin_b5": null,
+                    "vitamin_b6": null, "vitamin_b9": null, "vitamin_b12": null
+                }
             },
             "description": "source label",
             "input": {
