@@ -4,6 +4,14 @@
 
 A self-hosted nutrition tracker for ChatGPT, Mistral, and Claude. Search USDA foods, add your own, and track meals, calories, nutrients, and weight through conversation.
 
+## What you can do
+
+- Search USDA foods or add your own custom foods and recipes.
+- Log meals and track calories and nutrients.
+- Record weight and keep a journal.
+- Set weight goals and estimate calorie needs.
+- Keep separate profiles for your household.
+
 ## Get started
 
 <details>
