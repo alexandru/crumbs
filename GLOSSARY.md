@@ -73,6 +73,12 @@ The weight from a profile’s most recent recorded weight measurement. It is unk
 **Weight goal**:
 An optional body weight that a person wants to reach.
 
+**Weight change goal**:
+The change in body mass that a person wants over time. Negative values mean weight loss, positive values mean weight gain, and zero means no weight change.
+
+**Calorie balance goal**:
+The desired difference between calorie intake and maintenance calories for a person's weight change goal. Negative values mean a deficit, and positive values mean a surplus.
+
 **Basal metabolic rate (BMR)**:
 The estimated daily energy expenditure at rest, calculated from profile information or supplied as a custom value.
 

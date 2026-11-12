@@ -6,6 +6,7 @@ use sqlx::FromRow;
 use super::open_database;
 use crate::clock::UnixMillis;
 use crate::identity::UserId;
+use crate::nutrition_model::Measurement;
 use crate::profiles::*;
 use crate::runtime::Database;
 
@@ -336,5 +337,99 @@ async fn malformed_stored_profile_data_is_reported_as_domain_corruption()
         Err(ProfileError::InvalidStoredData)
     ));
     database.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn weight_change_goal_persists_and_recalculates_without_changing_other_values()
+-> Result<(), Box<dyn Error>> {
+    let (directory, database, clock) = open_database(1_000).await?;
+    let user = insert_user(&database, 1).await?;
+    let created = database.create_profile(user, &create_input(r#"{"name":"Alex","settings":{"weight_change_goal":"-0.5 kg/week","weight_goal":"70 kg","bmr":{"mode":"custom","value":"1200 kcal/day"},"baseline_activity":{"mode":"custom","value":"300 kcal/day"}}}"#)?).await?;
+    assert_eq!(
+        created.derived.calorie_balance_goal().map(|v| v.value()),
+        Some(rust_decimal::Decimal::from(-550))
+    );
+    assert_eq!(
+        created.derived.maintenance_calories().map(|v| v.value()),
+        Some(rust_decimal::Decimal::from(1500))
+    );
+    assert_eq!(created.data.cache.current_weight, None);
+    let id = created.id;
+    clock.store(2_000, Ordering::SeqCst);
+    let patch: PatchProfile = serde_json::from_str(r#"{"weight_change_goal":"-0.25 kg/week"}"#)?;
+    let updated = database
+        .patch_profile(user, id, &patch)
+        .await?
+        .ok_or("missing profile")?;
+    assert_eq!(
+        updated.derived.calorie_balance_goal().map(|v| v.value()),
+        Some(rust_decimal::Decimal::from(-275))
+    );
+    assert_eq!(
+        updated.derived.maintenance_calories().map(|v| v.value()),
+        Some(rust_decimal::Decimal::from(1500))
+    );
+    assert_eq!(
+        updated.data.settings.weight_goal,
+        created.data.settings.weight_goal
+    );
+    assert_eq!(updated.data.cache, created.data.cache);
+    clock.store(3_000, Ordering::SeqCst);
+    let noop: PatchProfile = serde_json::from_str("{}")?;
+    let unchanged = database
+        .patch_profile(user, id, &noop)
+        .await?
+        .ok_or("missing profile")?;
+    assert_eq!(
+        unchanged.data.settings.weight_change_goal,
+        updated.data.settings.weight_change_goal
+    );
+    assert_eq!(timestamps(&database, id).await?.updated_at, Some(2_000));
+    database.close().await;
+    drop(database);
+    let reopened = Database::open(crate::DatabaseConfig {
+        path: directory.path().join("crumbs.db"),
+    })
+    .await?;
+    let stored = reopened.profile(user, id).await?.ok_or("missing profile")?;
+    assert_eq!(
+        stored.data.settings.weight_change_goal,
+        updated.data.settings.weight_change_goal
+    );
+    assert_eq!(
+        stored.derived.calorie_balance_goal().map(|v| v.value()),
+        Some(rust_decimal::Decimal::from(-275))
+    );
+    let gain: PatchProfile = serde_json::from_str(r#"{"weight_change_goal":"0.5 kg/week"}"#)?;
+    let gained = reopened
+        .patch_profile(user, id, &gain)
+        .await?
+        .ok_or("missing profile")?;
+    assert_eq!(
+        gained.derived.calorie_balance_goal().map(|v| v.value()),
+        Some(rust_decimal::Decimal::from(550))
+    );
+    assert_eq!(
+        gained.derived.maintenance_calories().map(|v| v.value()),
+        Some(rust_decimal::Decimal::from(1500))
+    );
+    assert_eq!(
+        gained.data.settings.weight_goal,
+        created.data.settings.weight_goal
+    );
+    assert_eq!(gained.data.cache, created.data.cache);
+    let clear: PatchProfile = serde_json::from_str(r#"{"weight_change_goal":null}"#)?;
+    let cleared = reopened
+        .patch_profile(user, id, &clear)
+        .await?
+        .ok_or("missing profile")?;
+    assert_eq!(cleared.data.settings.weight_change_goal, None);
+    assert_eq!(cleared.derived.calorie_balance_goal(), None);
+    assert_eq!(
+        cleared.data.settings.weight_goal,
+        created.data.settings.weight_goal
+    );
+    reopened.close().await;
     Ok(())
 }

@@ -14,7 +14,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::clock::UnixMillis;
 use crate::nutrition_model::{
-    Centimetres, Kcal, KcalPerCm, KcalPerKg, Kilograms, PerDay, QuantityError,
+    Centimetres, Kcal, KcalPerCm, KcalPerKg, Kilograms, PerDay, PerWeek, QuantityError,
 };
 
 use super::ProfileError;
@@ -421,6 +421,28 @@ impl<'de> Deserialize<'de> for BodyWeight {
     }
 }
 
+/// A requested signed weight change in kilograms per week.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WeightChangeGoal(PerWeek<Kilograms>);
+
+impl WeightChangeGoal {
+    /// Creates a goal: negative for loss, positive for gain, or zero for no change.
+    pub const fn new(value: PerWeek<Kilograms>) -> Self {
+        Self(value)
+    }
+
+    /// Returns the requested rate in kilograms per week.
+    pub const fn value(self) -> PerWeek<Kilograms> {
+        self.0
+    }
+
+    /// Estimates the calorie balance goal using 7,700 kcal per kilogram over seven days.
+    pub fn calorie_balance_goal(self) -> PerDay<Kcal> {
+        PerDay::new(KcalPerKg::from(7700) * self.0.amount() / dec!(7))
+    }
+}
+
 /// A positive custom BMR value, stored as kcal/day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomBmr(PerDay<Kcal>);
@@ -538,6 +560,8 @@ pub struct ProfileSettings {
     pub timezone: IanaTimezone,
     /// Optional target body weight.
     pub weight_goal: Option<BodyWeight>,
+    /// Optional requested weight change in kilograms per week.
+    pub weight_change_goal: Option<WeightChangeGoal>,
     /// Selected BMR calculation mode.
     #[serde(default)]
     pub bmr: BmrSetting,
@@ -573,6 +597,8 @@ pub struct ProfileDerived {
     baseline_activity: Option<PerDay<Kcal>>,
     /// Effective BMR plus baseline activity, or None if either is absent.
     maintenance_calories: Option<PerDay<Kcal>>,
+    /// Estimated calorie balance for the weight change goal, or None when unset.
+    calorie_balance_goal: Option<PerDay<Kcal>>,
 }
 
 impl ProfileDerived {
@@ -590,6 +616,7 @@ impl ProfileDerived {
             bmr,
             baseline_activity,
             maintenance_calories,
+            calorie_balance_goal: None,
         }
     }
 
@@ -604,6 +631,11 @@ impl ProfileDerived {
     /// Returns the sum of BMR and activity, or None when either is absent.
     pub const fn maintenance_calories(&self) -> Option<PerDay<Kcal>> {
         self.maintenance_calories
+    }
+
+    /// Returns the estimated calorie balance, or None when the weight change goal is unset.
+    pub const fn calorie_balance_goal(&self) -> Option<PerDay<Kcal>> {
+        self.calorie_balance_goal
     }
 
     /// Calculates profile values from settings and cached weight at `timestamp`.
@@ -638,7 +670,12 @@ impl ProfileDerived {
             Some(activity) => activity.baseline_value(bmr),
             None => None,
         };
-        Ok(Self::from_components(bmr, baseline_activity))
+        let mut derived = Self::from_components(bmr, baseline_activity);
+        derived.calorie_balance_goal = settings
+            .weight_change_goal
+            .map(WeightChangeGoal::calorie_balance_goal);
+
+        Ok(derived)
     }
 }
 
@@ -650,15 +687,18 @@ impl<'de> Deserialize<'de> for ProfileDerived {
             bmr: Option<PerDay<Kcal>>,
             baseline_activity: Option<PerDay<Kcal>>,
             maintenance_calories: Option<PerDay<Kcal>>,
+            calorie_balance_goal: Option<PerDay<Kcal>>,
         }
         let fields = Fields::deserialize(deserializer)?;
 
-        let derived = Self::from_components(fields.bmr, fields.baseline_activity);
+        let mut derived = Self::from_components(fields.bmr, fields.baseline_activity);
         if derived.maintenance_calories != fields.maintenance_calories {
             return Err(D::Error::custom(
                 "maintenance calories do not match their components",
             ));
         }
+
+        derived.calorie_balance_goal = fields.calorie_balance_goal;
 
         Ok(derived)
     }
@@ -716,6 +756,8 @@ pub struct CreateProfileSettings {
     pub timezone: Option<IanaTimezone>,
     /// Optional target body weight.
     pub weight_goal: Option<BodyWeight>,
+    /// Optional requested weight change in kilograms per week.
+    pub weight_change_goal: Option<WeightChangeGoal>,
     /// BMR mode; defaults to calculated.
     pub bmr: Option<BmrSetting>,
     /// Optional baseline activity mode.
@@ -730,6 +772,7 @@ impl CreateProfileSettings {
             height: self.height,
             timezone: self.timezone.unwrap_or_default(),
             weight_goal: self.weight_goal,
+            weight_change_goal: self.weight_change_goal,
             bmr: self.bmr.unwrap_or_default(),
             baseline_activity: self.baseline_activity,
         }
@@ -801,6 +844,8 @@ pub struct PatchProfile {
     pub timezone: Patch<IanaTimezone>,
     /// Optional weight-goal update.
     pub weight_goal: NullablePatch<BodyWeight>,
+    /// Optional weight-change goal update; null clears the goal.
+    pub weight_change_goal: NullablePatch<WeightChangeGoal>,
     /// Optional BMR mode update; null resets to calculated mode.
     pub bmr: BmrPatch,
     /// Optional baseline activity update.
@@ -825,6 +870,8 @@ impl<'de> Deserialize<'de> for PatchProfile {
             #[serde(default, deserialize_with = "deserialize_present")]
             weight_goal: Option<Option<BodyWeight>>,
             #[serde(default, deserialize_with = "deserialize_present")]
+            weight_change_goal: Option<Option<WeightChangeGoal>>,
+            #[serde(default, deserialize_with = "deserialize_present")]
             bmr: Option<Option<BmrSetting>>,
             #[serde(default, deserialize_with = "deserialize_present")]
             baseline_activity: Option<Option<BaselineActivity>>,
@@ -848,6 +895,7 @@ impl<'de> Deserialize<'de> for PatchProfile {
             height: nullable_patch(fields.height),
             timezone,
             weight_goal: nullable_patch(fields.weight_goal),
+            weight_change_goal: nullable_patch(fields.weight_change_goal),
             bmr: match fields.bmr {
                 None => BmrPatch::Unchanged,
                 Some(Some(bmr)) => BmrPatch::Set(bmr),
@@ -947,6 +995,8 @@ pub(crate) fn apply_patch(
         settings.timezone = value;
     }
     settings.weight_goal = patched_optional(settings.weight_goal, &patch.weight_goal);
+    settings.weight_change_goal =
+        patched_optional(settings.weight_change_goal, &patch.weight_change_goal);
     match patch.bmr {
         BmrPatch::Unchanged => {}
         BmrPatch::Set(value) => settings.bmr = value,

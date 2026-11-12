@@ -69,20 +69,29 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
                 "name": " Alex ",
                 "settings": {
                     "weight_goal": "60 kg",
+                    "weight_change_goal": "-0.5 kg/week",
                     "bmr": {"mode": "custom", "value": "1700 kcal/day"},
                     "baseline_activity": {"mode": "custom", "value": "400 kcal/day"}
                 }
             }),
         )?)
         .await?;
-    assert_eq!(created.status, StatusCode::CREATED, "{:?}", created.json);
+    assert_eq!(created.status, StatusCode::CREATED, "{:?}", created.json,);
     let profile_id = created.json["id"].as_i64().ok_or("profile has no ID")?;
     assert_eq!(created.json["name"], "Alex");
     assert_eq!(created.json["data"]["settings"]["timezone"], "UTC");
     assert_eq!(created.json["data"]["settings"]["weight_goal"], "60 kg");
     assert_eq!(
+        created.json["data"]["settings"]["weight_change_goal"],
+        "-0.5 kg/week"
+    );
+    crate::profiles::tests::assert_calorie_balance_goal(
+        &created.json["derived"]["calorie_balance_goal"],
+        "-550 kcal/day",
+    )?;
+    assert_eq!(
         created.json["data"]["settings"]["bmr"],
-        json!({"mode": "custom", "value": "1700 kcal/day"})
+        json!({"mode": "custom", "value": "1700 kcal/day"}),
     );
     assert_eq!(
         created.json["data"]["settings"]["baseline_activity"],
@@ -135,6 +144,10 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
     );
     assert_eq!(omitted_patch.json["name"], "Alex");
     assert_eq!(
+        omitted_patch.json["data"]["settings"]["weight_change_goal"],
+        "-0.5 kg/week"
+    );
+    assert_eq!(
         omitted_patch.json["data"]["settings"]["weight_goal"],
         Value::Null
     );
@@ -161,9 +174,13 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
         json!({"mode": "calculated"})
     );
     assert_eq!(reset_bmr.json["derived"]["bmr"], Value::Null);
+    crate::profiles::tests::assert_calorie_balance_goal(
+        &reset_bmr.json["derived"]["calorie_balance_goal"],
+        "-550 kcal/day",
+    )?;
     assert_eq!(
         reset_bmr.json["derived"]["maintenance_calories"],
-        Value::Null
+        Value::Null,
     );
 
     let null_name = app
@@ -196,11 +213,16 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
         Value::Null
     );
     assert_eq!(defaults.json["derived"]["bmr"], Value::Null);
+    assert!(defaults.json["derived"]["calorie_balance_goal"].is_null());
 
     let listed = app.request(http_request("/profiles?limit=1")?).await?;
     assert_eq!(listed.status, StatusCode::OK, "{:?}", listed.json);
     assert_eq!(listed.json["items"].as_array().map(Vec::len), Some(1));
     assert_eq!(listed.json["items"][0]["id"], profile_id);
+    assert_eq!(
+        listed.json["items"][0]["data"]["settings"]["weight_change_goal"],
+        "-0.5 kg/week"
+    );
     let cursor = listed.json["last_id"]
         .as_i64()
         .ok_or("list has no cursor")?;
@@ -387,4 +409,80 @@ async fn seed_other_user_access(
 
 fn credential_hash(value: &str) -> CredentialHash {
     CredentialHash::new(Sha256::digest(value.as_bytes()).into())
+}
+
+#[tokio::test]
+async fn rest_weight_change_goal_validates_and_clears() -> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    seed_profile_account(&app).await?;
+    let created = app
+        .request(http_json_request(
+            "POST",
+            "/profiles",
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"name":"Rate", "settings":{"weight_change_goal":"-0.5 kg/week"}}),
+        )?)
+        .await?;
+    assert_eq!(created.status, StatusCode::CREATED, "{:?}", created.json);
+    assert!(created.json["derived"]["maintenance_calories"].is_null());
+    crate::profiles::tests::assert_calorie_balance_goal(
+        &created.json["derived"]["calorie_balance_goal"],
+        "-550 kcal/day",
+    )?;
+    let id = created.json["id"].as_i64().ok_or("profile has no ID")?;
+    let uri = format!("/profiles/{id}");
+    for invalid in ["1 kg/day", "1 kg", "abc"] {
+        let response = app
+            .request(http_json_request(
+                "PATCH",
+                &uri,
+                TEST_REST_WRITE_ACCESS_TOKEN,
+                json!({"weight_change_goal":invalid}),
+            )?)
+            .await?;
+        assert_eq!(
+            response.status,
+            StatusCode::BAD_REQUEST,
+            "{invalid}: {:?}",
+            response.json
+        );
+    }
+    let gain = app
+        .request(http_json_request(
+            "PATCH",
+            &uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"weight_change_goal":"0.5 kg/week"}),
+        )?)
+        .await?;
+    assert_eq!(gain.status, StatusCode::OK, "{:?}", gain.json);
+    crate::profiles::tests::assert_calorie_balance_goal(
+        &gain.json["derived"]["calorie_balance_goal"],
+        "550 kcal/day",
+    )?;
+    let zero = app
+        .request(http_json_request(
+            "PATCH",
+            &uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"weight_change_goal":"0 kg/week"}),
+        )?)
+        .await?;
+    assert_eq!(zero.status, StatusCode::OK, "{:?}", zero.json);
+    crate::profiles::tests::assert_calorie_balance_goal(
+        &zero.json["derived"]["calorie_balance_goal"],
+        "0 kcal/day",
+    )?;
+    let clear = app
+        .request(http_json_request(
+            "PATCH",
+            &uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"weight_change_goal":null}),
+        )?)
+        .await?;
+    assert_eq!(clear.status, StatusCode::OK, "{:?}", clear.json);
+    assert!(clear.json["data"]["settings"]["weight_change_goal"].is_null());
+    assert!(clear.json["derived"]["calorie_balance_goal"].is_null());
+    Ok(())
 }
