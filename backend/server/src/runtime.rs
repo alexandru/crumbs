@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crumbs_database::foods::{CustomFoodStore, FoodSearch};
 use crumbs_database::identity::{OAuthStore, Users};
+use crumbs_database::profile_logs::ProfileLogs;
 use crumbs_database::profiles::Profiles;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{Signal, SignalKind, signal};
@@ -56,7 +57,15 @@ pub enum Error {
 /// message cannot be written to standard output, or the HTTP server fails.
 pub async fn start<S>(reader: Arc<S>, config: HttpConfig) -> Result<(), Error>
 where
-    S: FoodSearch + CustomFoodStore + Profiles + Users + OAuthStore + Send + Sync + 'static,
+    S: FoodSearch
+        + CustomFoodStore
+        + Profiles
+        + ProfileLogs
+        + Users
+        + OAuthStore
+        + Send
+        + Sync
+        + 'static,
 {
     if !config.oauth.issuer.secure() && !config.bind.is_loopback() {
         return Err(Error::InsecureOAuthBind);

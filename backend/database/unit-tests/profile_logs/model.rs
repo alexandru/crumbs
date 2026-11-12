@@ -1,0 +1,217 @@
+use std::error::Error;
+
+use crate::profile_logs::*;
+use crate::profiles::{BodyWeight, Patch};
+
+#[test]
+fn log_day_validates_calendar_days_and_preserves_iso_form() -> Result<(), Box<dyn Error>> {
+    for value in ["0001-01-01", "0012-01-02", "2024-02-29", "9999-12-31"] {
+        let day: LogDay = serde_json::from_str(&format!("\"{value}\""))?;
+        assert_eq!(serde_json::to_string(&day)?, format!("\"{value}\""));
+    }
+    for value in [
+        "0000-01-01",
+        "10000-01-01",
+        "2023-02-29",
+        "2024-13-01",
+        "2024-00-01",
+        "2024-01-00",
+        "2024-1-01",
+        "+024-01-01",
+        "-001-01-01",
+        "2024/+1-01",
+        "2024/01/01",
+        "２０24-01-01",
+        "2024-０1-01",
+        "2024-01-01T00:00:00Z",
+    ] {
+        assert!(
+            serde_json::from_str::<LogDay>(&format!("\"{value}\"")).is_err(),
+            "accepted invalid log day {value}"
+        );
+    }
+    assert!(LogDay::new(10000, 1, 1).is_err());
+    assert!(LogDay::parse("2024-01-01\n").is_err());
+    Ok(())
+}
+
+#[test]
+fn local_time_accepts_supported_forms_and_serializes_canonically() -> Result<(), Box<dyn Error>> {
+    for (input, expected) in [
+        ("00:00", "00:00:00.000"),
+        ("23:59", "23:59:00.000"),
+        ("08:07:06", "08:07:06.000"),
+        ("08:07:06.1", "08:07:06.100"),
+        ("08:07:06.12", "08:07:06.120"),
+        ("08:07:06.123", "08:07:06.123"),
+        ("01:02:03.004", "01:02:03.004"),
+    ] {
+        let time = LocalTime::parse(input)?;
+        assert_eq!(time.to_string(), expected);
+        assert_eq!(serde_json::to_string(&time)?, format!("\"{expected}\""));
+        assert_eq!(
+            serde_json::from_str::<LocalTime>(&serde_json::to_string(&time)?)?,
+            time
+        );
+    }
+    for input in [
+        "24:00",
+        "12:60",
+        "12:00:60",
+        "23:59:60",
+        "12:00:00.",
+        "12:00.1",
+        "12:00:",
+        "12-00",
+        "+2:00",
+        "12:+0",
+        "１２:00",
+        "12:00:00.1x",
+        "12:00:00.001Z",
+        "12:00:00\n",
+        "12:00:60.1",
+        "12:00:00.1234",
+        "12:00:00.1Z",
+        "12:00+01:00",
+        "12:0",
+    ] {
+        assert!(
+            LocalTime::parse(input).is_err(),
+            "accepted invalid local time {input}"
+        );
+    }
+    assert!(LocalTime::new(23, 59, 59, 1000).is_err());
+    Ok(())
+}
+
+#[test]
+fn ids_payload_union_and_create_input_validate_strictly() -> Result<(), Box<dyn Error>> {
+    assert_eq!(ProfileLogId::new(9)?.get(), 9);
+    assert_eq!(serde_json::to_string(&ProfileLogId::new(9)?)?, "9");
+    assert!(ProfileLogId::new(0).is_err());
+    assert!(serde_json::from_str::<ProfileLogId>("-1").is_err());
+
+    let expected = r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg"}}"#;
+    let data: ProfileLogData = serde_json::from_str(expected)?;
+    assert_eq!(serde_json::to_string(&data)?, expected);
+    let input: LogInput = serde_json::from_str(
+        r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg"}}"#,
+    )?;
+    assert_eq!(serde_json::to_string(&input.into_data())?, expected);
+    assert_eq!(
+        serde_json::to_value(data)?,
+        serde_json::to_value(ProfileLogData::Biometric(BiometricLogEntry {
+            measurement: BiometricEntry::Weight(WeightMeasurement {
+                value: BodyWeight::new("70 kg".parse()?)?,
+            }),
+        }))?
+    );
+
+    for invalid in [
+        r#"{"type":"biometric","measurement":{"type":"weight","value":"0 kg"}}"#,
+        r#"{"type":"biometric","measurement":{"type":"weight","value":"-1 kg"}}"#,
+        r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg","extra":true}}"#,
+        r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg"},"current_weight":"1 kg"}"#,
+        r#"{"type":"exercise"}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<ProfileLogData>(invalid).is_err(),
+            "accepted invalid profile-log payload {invalid}"
+        );
+    }
+
+    let create: CreateLog = serde_json::from_str(
+        r#"{"day":"2024-01-01","time":null,"entry":{"type":"biometric","measurement":{"type":"weight","value":"70 kg"}}}"#,
+    )?;
+    assert_eq!(create.time, None);
+    assert!(serde_json::from_str::<CreateLog>(
+        r#"{"time":"12:00","entry":{"type":"biometric","measurement":{"type":"weight","value":"70 kg"}}}"#
+    )
+    .is_err());
+    assert!(serde_json::from_str::<CreateLog>(
+        r#"{"day":"2024-01-01","entry":{"type":"biometric","measurement":{"type":"weight","value":"70 kg"}},"profile_id":2}"#
+    )
+    .is_err());
+    assert!(
+        serde_json::from_str::<LogInput>(
+            r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg"},"extra":true}"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<BiometricLogEntry>(
+            r#"{"measurement":{"type":"weight","value":"70 kg"},"extra":true}"#
+        )
+        .is_err()
+    );
+
+    let measurement = BodyWeight::new("70 kg".parse()?)?;
+    assert_eq!(serde_json::to_string(&measurement)?, "\"70 kg\"");
+    Ok(())
+}
+
+#[test]
+fn patch_fields_preserve_omission_and_reject_nulls() -> Result<(), Box<dyn Error>> {
+    let empty: PatchLog = serde_json::from_str("{}")?;
+    assert_eq!(empty, PatchLog::default());
+    let patch: PatchLog = serde_json::from_str(
+        r#"{"day":"2024-02-29","time":"12:13","entry":{"type":"biometric","measurement":{"type":"weight","value":"75 kg"}}}"#,
+    )?;
+    assert_eq!(patch.day, Patch::Set(LogDay::new(2024, 2, 29)?));
+    assert_eq!(patch.time, Patch::Set(LocalTime::parse("12:13")?));
+    assert!(matches!(
+        patch.entry,
+        Patch::Set(LogEntryPatch::Biometric(_))
+    ));
+    let patch_entry: LogEntryPatch = serde_json::from_str(
+        r#"{"type":"biometric","measurement":{"type":"weight","value":"75 kg"}}"#,
+    )?;
+    let patch_data = match patch_entry {
+        LogEntryPatch::Biometric(entry) => ProfileLogData::Biometric(entry),
+    };
+    assert_eq!(
+        serde_json::to_value(patch_data)?,
+        serde_json::json!({"type":"biometric","measurement":{"type":"weight","value":"75 kg"}})
+    );
+    for invalid in [
+        r#"{"day":null}"#,
+        r#"{"time":null}"#,
+        r#"{"entry":null}"#,
+        r#"{"entry":{"type":"food"}}"#,
+        r#"{"entry":{"type":"biometric","measurement":{"type":"weight","value":"0 kg"}}}"#,
+        r#"{"log_id":4}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<PatchLog>(invalid).is_err(),
+            "accepted invalid patch {invalid}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn log_filters_validate_date_ranges_subtypes_and_wire_fields() -> Result<(), Box<dyn Error>> {
+    let from = LogDay::new(2024, 1, 1)?;
+    let to = LogDay::new(2024, 2, 1)?;
+    assert!(LogFilter::new(Some(to), Some(from), None, None, None).is_err());
+    assert!(LogFilter::new(None, None, None, Some(BiometricType::Weight), None).is_err());
+
+    let filter: LogFilter = serde_json::from_str(
+        r#"{"from":"2024-01-01","to":"2024-02-01","entry_type":"biometric","subtype":"weight","last_id":10}"#,
+    )?;
+    assert_eq!(filter.from(), Some(from));
+    assert_eq!(filter.to(), Some(to));
+    assert_eq!(filter.entry_type(), Some(LogEntryType::Biometric));
+    assert_eq!(filter.subtype(), Some(BiometricType::Weight));
+    assert_eq!(filter.last_id(), Some(ProfileLogId::new(10)?));
+    assert_eq!(
+        LogFilter::default(),
+        LogFilter::new(None, None, None, None, None)?
+    );
+    assert!(
+        serde_json::from_str::<LogFilter>(r#"{"from":"2024-02-01","to":"2024-01-01"}"#).is_err()
+    );
+    assert!(serde_json::from_str::<LogFilter>(r#"{"subtype":"weight"}"#).is_err());
+    assert!(serde_json::from_str::<LogFilter>(r#"{"unknown":true}"#).is_err());
+    Ok(())
+}
