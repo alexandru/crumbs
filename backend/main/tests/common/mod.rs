@@ -206,7 +206,8 @@ const READINESS_PREFIX: &str = "Listening on http://";
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const CONFIGURATION_ENVIRONMENT: [&str; 7] = [
+const CONFIGURATION_ENVIRONMENT: [&str; 8] = [
+    "RUST_LOG",
     "CRUMBS_DATABASE_PATH",
     "CRUMBS_HTTP_BIND",
     "CRUMBS_HTTP_PORT",

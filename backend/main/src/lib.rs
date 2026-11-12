@@ -4,6 +4,7 @@
 //! Server argument types are composed with the application-owned database
 //! commands in this hierarchy.
 
+use std::error::Error as StdError;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use crumbs_import::{FoodCount, ImportDiagnostic, ImportError, ImportReport};
 use crumbs_server::HttpConfig;
 
 mod cli;
+mod logging;
 mod users;
 
 pub use cli::{DatabaseArgs, DbArgs, DbCommand, HttpArgs, ServerArgs, ServerCommand};
@@ -39,6 +41,9 @@ pub enum Command {
 /// Errors produced while running the executable.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// Logging could not be initialized.
+    #[error("failed to initialize logging: {0}")]
+    Logging(#[source] Box<dyn StdError + Send + Sync>),
     /// The async runtime could not be created.
     #[error("failed to create the async runtime: {0}")]
     Runtime(#[source] io::Error),
@@ -66,11 +71,13 @@ pub enum Error {
 ///
 /// # Errors
 ///
-/// Returns an error if the runtime cannot be created, the database cannot be
+/// Returns an error if logging or the runtime cannot be initialized, the database cannot be
 /// opened or migrated, an import fails, user creation fails, or server startup
 /// fails.
 pub fn run() -> Result<(), Error> {
     let cli = Cli::parse();
+    logging::init().map_err(Error::Logging)?;
+
     run_cli(cli)
 }
 
@@ -120,9 +127,18 @@ fn runtime() -> Result<tokio::runtime::Runtime, Error> {
 }
 
 async fn run_server(database: DatabaseConfig, http: HttpConfig) -> Result<(), Error> {
+    tracing::info!("server_starting");
     let database = Arc::new(Database::open(database).await?);
+    tracing::info!("server_database_ready");
+
     let result = crumbs_server::start(Arc::clone(&database), http).await;
     database.close().await;
+    if result.is_ok() {
+        tracing::info!("server_stopped");
+    } else {
+        tracing::error!("server_failed");
+    }
+
     result?;
     Ok(())
 }
@@ -132,7 +148,10 @@ async fn run_import_usda(
     file: PathBuf,
     verbose: bool,
 ) -> Result<(), Error> {
+    tracing::info!(file = %file.display(), "import_command_started");
     let database = Database::open(config).await?;
+    tracing::info!("import_database_ready");
+
     let import_result = crumbs_import::import_usda_with_diagnostics(
         &database,
         &file,
