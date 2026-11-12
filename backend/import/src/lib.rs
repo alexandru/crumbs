@@ -5,6 +5,7 @@
 //! remain separate even when their descriptions or GTINs match. Rows absent
 //! from an input remain untouched, so USDA archive subsets coexist.
 
+mod progress;
 mod usda;
 
 use std::fmt;
@@ -151,13 +152,44 @@ pub async fn import_usda<S: FoodWriter + ?Sized>(
 pub async fn import_usda_with_diagnostics<S, F>(
     store: &S,
     path: impl AsRef<Path>,
-    mut on_diagnostic: F,
+    on_diagnostic: F,
 ) -> Result<ImportReport, ImportError>
 where
     S: FoodWriter + ?Sized,
     F: FnMut(&ImportDiagnostic) -> io::Result<()>,
 {
     let path = path.as_ref();
+    let mut progress = progress::Progress::new(path);
+    let result = import_inner(store, path, on_diagnostic, &mut progress).await;
+    progress.finish(&result);
+    result
+}
+
+impl ImportError {
+    /// Returns import counts completed before the failure.
+    pub const fn report(&self) -> ImportReport {
+        self.report
+    }
+
+    fn new(path: &Path, report: ImportReport, failure: ImportFailure) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            report,
+            failure: Box::new(failure),
+        }
+    }
+}
+
+async fn import_inner<S, F>(
+    store: &S,
+    path: &Path,
+    mut on_diagnostic: F,
+    progress: &mut progress::Progress,
+) -> Result<ImportReport, ImportError>
+where
+    S: FoodWriter + ?Sized,
+    F: FnMut(&ImportDiagnostic) -> io::Result<()>,
+{
     let file = tokio::fs::File::open(path).await.map_err(|source| {
         ImportError::new(
             path,
@@ -172,7 +204,7 @@ where
         usda::stream_foods(reader, &sender)
     });
 
-    let consumer_result = consume(store, receiver, path, &mut on_diagnostic).await;
+    let consumer_result = consume(store, receiver, path, &mut on_diagnostic, progress).await;
     let producer_result = producer.await;
     let report = consumer_result?;
 
@@ -188,21 +220,6 @@ where
             report,
             ImportFailure::Worker { source },
         )),
-    }
-}
-
-impl ImportError {
-    /// Returns import counts completed before the failure.
-    pub const fn report(&self) -> ImportReport {
-        self.report
-    }
-
-    fn new(path: &Path, report: ImportReport, failure: ImportFailure) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            report,
-            failure: Box::new(failure),
-        }
     }
 }
 
@@ -242,30 +259,37 @@ async fn consume<S, F>(
     mut receiver: mpsc::Receiver<StreamItem>,
     path: &Path,
     on_diagnostic: &mut F,
+    progress: &mut progress::Progress,
 ) -> Result<ImportReport, ImportError>
 where
     S: FoodWriter + ?Sized,
     F: FnMut(&ImportDiagnostic) -> io::Result<()>,
 {
     let mut report = ImportReport::default();
-    while let Some(item) = receiver.recv().await {
+    while let Some(item) = progress
+        .observe(receiver.recv(), report, progress::Phase::WaitingForRecord)
+        .await
+    {
         match item {
             Ok(prepared) => {
                 let mut prepared = prepared;
                 let position = prepared.position;
                 let sanitizations = std::mem::take(&mut prepared.sanitizations);
                 let food = prepared.into_food();
-                store.upsert_food(&food).await.map_err(|source| {
-                    ImportError::new(
-                        path,
-                        report,
-                        ImportFailure::Write {
-                            fdc_id: food.source_food_id.clone(),
-                            position,
-                            source: Box::new(source),
-                        },
-                    )
-                })?;
+                progress
+                    .observe(store.upsert_food(&food), report, progress::Phase::Writing)
+                    .await
+                    .map_err(|source| {
+                        ImportError::new(
+                            path,
+                            report,
+                            ImportFailure::Write {
+                                fdc_id: food.source_food_id.clone(),
+                                position,
+                                source: Box::new(source),
+                            },
+                        )
+                    })?;
                 report.committed.increment();
                 if !sanitizations.is_empty() {
                     report.sanitized.increment();

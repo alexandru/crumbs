@@ -41,6 +41,7 @@ where
         .merge(oauth::routes(authorization))
         .merge(assets::routes())
         .layer(axum::middleware::from_fn(oauth::security_headers))
+        .layer(axum::middleware::from_fn(crate::observability::http))
 }
 
 const MCP_INSTRUCTIONS: &str = "Search foods using Crumbs full-text expressions. Results provide the best matches independently in common, branded, and custom datasets, including nutrition data and optional notes. Choose which foods to use. Manage custom foods with the custom-food tools, account-owned profiles with profile tools, and profile logs with profile-log tools; changes require crumbs:write.";

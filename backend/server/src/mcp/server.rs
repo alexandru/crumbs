@@ -14,6 +14,9 @@ use rmcp::transport::streamable_http_server::{
 };
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::json;
+use tracing::Instrument;
+
+use crate::observability::ToolOutcome;
 
 use super::{McpAuthorization, ToolRegistration};
 
@@ -58,34 +61,59 @@ where
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let Some(registered_tool) = self.tools.get(request.name.as_ref()) else {
-            return Err(ErrorData::new(
-                ErrorCode::METHOD_NOT_FOUND,
-                "unknown tool",
-                None,
-            ));
-        };
+        let registered_tool = self.tools.get(request.name.as_ref());
+        let tool = registered_tool.map_or("<unknown>", |tool| {
+            tool.registration.route.attr.name.as_ref()
+        });
+        let span = tracing::info_span!("mcp_tool", tool);
+        let instrument_span = span.clone();
+        async move {
+            let lifecycle = crate::observability::Lifecycle::start(span);
+            let Some(registered_tool) = registered_tool else {
+                lifecycle.finish(ToolOutcome::UnknownTool, tool);
+                return Err(ErrorData::new(
+                    ErrorCode::METHOD_NOT_FOUND,
+                    "unknown tool",
+                    None,
+                ));
+            };
 
-        let required_scope = registered_tool.registration.required_scope;
-        let authorization = context
-            .extensions
-            .get::<axum::http::request::Parts>()
-            .and_then(|parts| parts.extensions.get::<McpAuthorization>());
-        let permitted =
-            authorization.is_some_and(|authorization| authorization.permits(required_scope));
-        if !permitted {
-            return Ok(rmcp::model::CallToolResult::structured_error(json!({
-                "error": "insufficient_scope",
-                "required_scope": required_scope.as_str(),
-            }))
-            .into());
+            let required_scope = registered_tool.registration.required_scope;
+            let authorization = context
+                .extensions
+                .get::<axum::http::request::Parts>()
+                .and_then(|parts| parts.extensions.get::<McpAuthorization>());
+            let permitted =
+                authorization.is_some_and(|authorization| authorization.permits(required_scope));
+            if !permitted {
+                lifecycle.finish(ToolOutcome::InsufficientScope, tool);
+                return Ok(rmcp::model::CallToolResult::structured_error(json!({
+                    "error": "insufficient_scope",
+                    "required_scope": required_scope.as_str(),
+                }))
+                .into());
+            }
+
+            let result = (registered_tool.registration.route.call)(ToolCallContext::new(
+                &self.reader,
+                request,
+                context,
+            ))
+            .await;
+            let outcome = match &result {
+                Ok(CallToolResponse::Complete(result)) if result.is_error == Some(true) => {
+                    ToolOutcome::Error
+                }
+                Ok(CallToolResponse::Complete(_)) => ToolOutcome::Success,
+                Ok(CallToolResponse::InputRequired(_)) => ToolOutcome::InputRequired,
+                Ok(CallToolResponse::Task(_)) => ToolOutcome::TaskAccepted,
+                Ok(_) => ToolOutcome::Other,
+                Err(_) => ToolOutcome::ProtocolError,
+            };
+            lifecycle.finish(outcome, tool);
+            result
         }
-
-        (registered_tool.registration.route.call)(ToolCallContext::new(
-            &self.reader,
-            request,
-            context,
-        ))
+        .instrument(instrument_span)
         .await
     }
 }

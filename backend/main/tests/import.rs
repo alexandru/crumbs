@@ -40,6 +40,21 @@ fn imports_foundation_fixture_without_http_configuration() -> Result<(), Box<dyn
         String::from_utf8_lossy(&output.stdout),
         "Imported 2 foods (0 sanitized); rejected 0 foods\n"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("import_started"),
+        "missing import start event: {stderr}"
+    );
+    let completed = stderr
+        .lines()
+        .find(|line| line.contains("import_completed"))
+        .ok_or_else(|| io::Error::other(format!("missing import completion event: {stderr}")))?;
+    for count in ["committed=2", "sanitized=0", "rejected=0"] {
+        assert!(
+            completed.contains(count),
+            "missing {count} in completion event: {completed}"
+        );
+    }
     assert!(
         database_path.is_file(),
         "import did not create {}",
@@ -132,6 +147,16 @@ fn malformed_input_fails_with_committed_progress() -> Result<(), Box<dyn Error>>
         "Imported 1 foods (0 sanitized); rejected 0 foods\n"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let failed = stderr
+        .lines()
+        .find(|line| line.contains("import_failed"))
+        .ok_or_else(|| io::Error::other(format!("missing import failure event: {stderr}")))?;
+    for count in ["committed=1", "sanitized=0", "rejected=0"] {
+        assert!(
+            failed.contains(count),
+            "missing {count} in failure event: {failed}"
+        );
+    }
     assert!(
         stderr.contains("committed 1 foods"),
         "failure did not report committed progress: {stderr}"
@@ -279,7 +304,28 @@ fn sanitized_foods_are_successful_without_verbose_output() -> Result<(), Box<dyn
         String::from_utf8_lossy(&output.stdout),
         "Imported 1 foods (1 sanitized); rejected 0 foods\n"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("import_completed"));
+    assert!(!stderr.contains("food source="));
+    Ok(())
+}
+
+#[test]
+fn warning_filter_suppresses_import_info_events() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let fixture = directory.path().join("foundation.json");
+    let database_path = directory.path().join("crumbs.db");
+    fs::write(&fixture, FOUNDATION_JSON)?;
+    let output = import_with(&fixture, &database_path, &[], &[("RUST_LOG", "warn")])?;
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Imported 2 foods (0 sanitized); rejected 0 foods\n"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("import_started"), "{stderr}");
+    assert!(!stderr.contains("import_completed"), "{stderr}");
+    assert!(!stderr.contains("import_progress"), "{stderr}");
     Ok(())
 }
 
