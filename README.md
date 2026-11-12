@@ -4,6 +4,14 @@
 
 A self-hosted nutrition tracker for ChatGPT, Mistral, and Claude. Search foods, add your own, and track meals, calories, nutrients, and weight through conversation.
 
+<p align="center">
+  <a href="docs/images/chatgpt-demo.jpeg">
+    <img src="docs/images/chatgpt-demo.jpeg" alt="Crumbs in ChatGPT: a daily food summary with calories consumed, calories remaining, and progress toward the daily target." width="440">
+  </a>
+  <br>
+  <em>Your day in Crumbs, at a glance.</em>
+</p>
+
 ## What you can do
 
 - Search foods or add your own custom foods and recipes.
