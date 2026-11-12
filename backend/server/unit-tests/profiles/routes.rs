@@ -69,7 +69,7 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
                 "name": " Alex ",
                 "settings": {
                     "weight_goal": "60 kg",
-                    "weekly_weight_loss": "0.5 kg/week",
+                    "weight_change_goal": "-0.5 kg/week",
                     "bmr": {"mode": "custom", "value": "1700 kcal/day"},
                     "baseline_activity": {"mode": "custom", "value": "400 kcal/day"}
                 }
@@ -82,12 +82,12 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
     assert_eq!(created.json["data"]["settings"]["timezone"], "UTC");
     assert_eq!(created.json["data"]["settings"]["weight_goal"], "60 kg");
     assert_eq!(
-        created.json["data"]["settings"]["weekly_weight_loss"],
-        "0.5 kg/week"
+        created.json["data"]["settings"]["weight_change_goal"],
+        "-0.5 kg/week"
     );
-    crate::profiles::tests::assert_deficit(
-        &created.json["derived"]["daily_calorie_deficit"],
-        "550 kcal/day",
+    crate::profiles::tests::assert_calorie_balance_goal(
+        &created.json["derived"]["calorie_balance_goal"],
+        "-550 kcal/day",
     )?;
     assert_eq!(
         created.json["data"]["settings"]["bmr"],
@@ -144,8 +144,8 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
     );
     assert_eq!(omitted_patch.json["name"], "Alex");
     assert_eq!(
-        omitted_patch.json["data"]["settings"]["weekly_weight_loss"],
-        "0.5 kg/week"
+        omitted_patch.json["data"]["settings"]["weight_change_goal"],
+        "-0.5 kg/week"
     );
     assert_eq!(
         omitted_patch.json["data"]["settings"]["weight_goal"],
@@ -174,9 +174,9 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
         json!({"mode": "calculated"})
     );
     assert_eq!(reset_bmr.json["derived"]["bmr"], Value::Null);
-    crate::profiles::tests::assert_deficit(
-        &reset_bmr.json["derived"]["daily_calorie_deficit"],
-        "550 kcal/day",
+    crate::profiles::tests::assert_calorie_balance_goal(
+        &reset_bmr.json["derived"]["calorie_balance_goal"],
+        "-550 kcal/day",
     )?;
     assert_eq!(
         reset_bmr.json["derived"]["maintenance_calories"],
@@ -213,15 +213,15 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
         Value::Null
     );
     assert_eq!(defaults.json["derived"]["bmr"], Value::Null);
-    assert!(defaults.json["derived"]["daily_calorie_deficit"].is_null());
+    assert!(defaults.json["derived"]["calorie_balance_goal"].is_null());
 
     let listed = app.request(http_request("/profiles?limit=1")?).await?;
     assert_eq!(listed.status, StatusCode::OK, "{:?}", listed.json);
     assert_eq!(listed.json["items"].as_array().map(Vec::len), Some(1));
     assert_eq!(listed.json["items"][0]["id"], profile_id);
     assert_eq!(
-        listed.json["items"][0]["data"]["settings"]["weekly_weight_loss"],
-        "0.5 kg/week"
+        listed.json["items"][0]["data"]["settings"]["weight_change_goal"],
+        "-0.5 kg/week"
     );
     let cursor = listed.json["last_id"]
         .as_i64()
@@ -412,7 +412,7 @@ fn credential_hash(value: &str) -> CredentialHash {
 }
 
 #[tokio::test]
-async fn rest_weekly_weight_loss_validates_and_clears() -> Result<(), Box<dyn Error>> {
+async fn rest_weight_change_goal_validates_and_clears() -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
     seed_profile_account(&app).await?;
     let created = app
@@ -420,20 +420,24 @@ async fn rest_weekly_weight_loss_validates_and_clears() -> Result<(), Box<dyn Er
             "POST",
             "/profiles",
             TEST_REST_WRITE_ACCESS_TOKEN,
-            json!({"name":"Rate", "settings":{"weekly_weight_loss":"0.5 kg/week"}}),
+            json!({"name":"Rate", "settings":{"weight_change_goal":"-0.5 kg/week"}}),
         )?)
         .await?;
     assert_eq!(created.status, StatusCode::CREATED, "{:?}", created.json);
     assert!(created.json["derived"]["maintenance_calories"].is_null());
+    crate::profiles::tests::assert_calorie_balance_goal(
+        &created.json["derived"]["calorie_balance_goal"],
+        "-550 kcal/day",
+    )?;
     let id = created.json["id"].as_i64().ok_or("profile has no ID")?;
     let uri = format!("/profiles/{id}");
-    for invalid in ["-1 kg/week", "1 kg/day", "1 kg", "abc"] {
+    for invalid in ["1 kg/day", "1 kg", "abc"] {
         let response = app
             .request(http_json_request(
                 "PATCH",
                 &uri,
                 TEST_REST_WRITE_ACCESS_TOKEN,
-                json!({"weekly_weight_loss":invalid}),
+                json!({"weight_change_goal":invalid}),
             )?)
             .await?;
         assert_eq!(
@@ -443,17 +447,30 @@ async fn rest_weekly_weight_loss_validates_and_clears() -> Result<(), Box<dyn Er
             response.json
         );
     }
+    let gain = app
+        .request(http_json_request(
+            "PATCH",
+            &uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"weight_change_goal":"0.5 kg/week"}),
+        )?)
+        .await?;
+    assert_eq!(gain.status, StatusCode::OK, "{:?}", gain.json);
+    crate::profiles::tests::assert_calorie_balance_goal(
+        &gain.json["derived"]["calorie_balance_goal"],
+        "550 kcal/day",
+    )?;
     let zero = app
         .request(http_json_request(
             "PATCH",
             &uri,
             TEST_REST_WRITE_ACCESS_TOKEN,
-            json!({"weekly_weight_loss":"0 kg/week"}),
+            json!({"weight_change_goal":"0 kg/week"}),
         )?)
         .await?;
     assert_eq!(zero.status, StatusCode::OK, "{:?}", zero.json);
-    crate::profiles::tests::assert_deficit(
-        &zero.json["derived"]["daily_calorie_deficit"],
+    crate::profiles::tests::assert_calorie_balance_goal(
+        &zero.json["derived"]["calorie_balance_goal"],
         "0 kcal/day",
     )?;
     let clear = app
@@ -461,11 +478,11 @@ async fn rest_weekly_weight_loss_validates_and_clears() -> Result<(), Box<dyn Er
             "PATCH",
             &uri,
             TEST_REST_WRITE_ACCESS_TOKEN,
-            json!({"weekly_weight_loss":null}),
+            json!({"weight_change_goal":null}),
         )?)
         .await?;
     assert_eq!(clear.status, StatusCode::OK, "{:?}", clear.json);
-    assert!(clear.json["data"]["settings"]["weekly_weight_loss"].is_null());
-    assert!(clear.json["derived"]["daily_calorie_deficit"].is_null());
+    assert!(clear.json["data"]["settings"]["weight_change_goal"].is_null());
+    assert!(clear.json["derived"]["calorie_balance_goal"].is_null());
     Ok(())
 }

@@ -486,48 +486,69 @@ fn create_and_patch_reject_bare_energy_for_daily_rates() {
 }
 
 #[test]
-fn weekly_weight_loss_validates_units_and_calculates_deficit() -> Result<(), Box<dyn Error>> {
-    let half: WeeklyWeightLoss = serde_json::from_str("\"0.5 kg/week\"")?;
-    assert_eq!(half.daily_calorie_deficit().value(), Decimal::from(550));
-    assert_eq!(WeeklyWeightLoss::new("0.5 kg/week".parse()?)?, half);
-    assert!(WeeklyWeightLoss::new("-0.5 kg/week".parse()?).is_err());
+fn weight_change_goal_validates_units_and_calculates_balance() -> Result<(), Box<dyn Error>> {
+    let half: WeightChangeGoal = serde_json::from_str("\"0.5 kg/week\"")?;
+    assert_eq!(half.calorie_balance_goal().value(), Decimal::from(550));
+    assert_eq!(WeightChangeGoal::new("0.5 kg/week".parse()?), half);
     assert_eq!(serde_json::to_string(&half)?, "\"0.5 kg/week\"");
-    let precise: WeeklyWeightLoss = serde_json::from_str("\"0.123 kg/week\"")?;
+    let precise: WeightChangeGoal = serde_json::from_str("\"0.123 kg/week\"")?;
     assert_eq!(
-        precise.daily_calorie_deficit().value(),
+        precise.calorie_balance_goal().value(),
         Decimal::from_str_exact("135.3")?
     );
-    let zero: WeeklyWeightLoss = serde_json::from_str("\"0 kg/week\"")?;
-    assert_eq!(zero.daily_calorie_deficit().value(), Decimal::ZERO);
-    for value in ["-0.5 kg/week", "0.5 kg/day", "0.5 kg", "0.5"] {
-        assert!(serde_json::from_value::<WeeklyWeightLoss>(serde_json::json!(value)).is_err());
+    let zero: WeightChangeGoal = serde_json::from_str("\"0 kg/week\"")?;
+    assert_eq!(zero.calorie_balance_goal().value(), Decimal::ZERO);
+    for (value, expected) in [
+        ("-0.5 kg/week", -550),
+        ("0 kg/week", 0),
+        ("0.5 kg/week", 550),
+    ] {
+        let goal: WeightChangeGoal = serde_json::from_value(serde_json::json!(value))?;
+        assert_eq!(goal.calorie_balance_goal().value(), Decimal::from(expected));
+        assert_eq!(serde_json::to_value(goal)?, serde_json::json!(value));
+        let create: CreateProfile = serde_json::from_value(
+            serde_json::json!({"name":"Alex","settings":{"weight_change_goal":value}}),
+        )?;
+        assert_eq!(
+            create
+                .settings
+                .ok_or("missing settings")?
+                .weight_change_goal,
+            Some(goal)
+        );
+        let patch: PatchProfile =
+            serde_json::from_value(serde_json::json!({"weight_change_goal":value}))?;
+        assert_eq!(patch.weight_change_goal, NullablePatch::Set(goal));
+    }
+    for value in ["0.5 kg/day", "0.5 kg", "0.5"] {
+        assert!(serde_json::from_value::<WeightChangeGoal>(serde_json::json!(value)).is_err());
         assert!(
             serde_json::from_value::<CreateProfile>(
-                serde_json::json!({"name":"Alex","settings":{"weekly_weight_loss":value}})
+                serde_json::json!({"name":"Alex","settings":{"weight_change_goal":value}})
             )
             .is_err()
         );
         assert!(
-            serde_json::from_value::<PatchProfile>(serde_json::json!({"weekly_weight_loss":value}))
+            serde_json::from_value::<PatchProfile>(serde_json::json!({"weight_change_goal":value}))
                 .is_err()
         );
     }
     let legacy: ProfileSettings = serde_json::from_value(serde_json::json!({}))?;
-    assert_eq!(legacy.weekly_weight_loss, None);
+    assert_eq!(legacy.weight_change_goal, None);
     let unset_derived = ProfileDerived::calculate(&legacy, &ProfileCache::default(), 1_000)?;
-    assert_eq!(unset_derived.daily_calorie_deficit(), None);
+    assert_eq!(unset_derived.calorie_balance_goal(), None);
     let zero_settings: ProfileSettings =
-        serde_json::from_value(serde_json::json!({"weekly_weight_loss": "0 kg/week"}))?;
+        serde_json::from_value(serde_json::json!({"weight_change_goal": "0 kg/week"}))?;
     let zero_derived = ProfileDerived::calculate(&zero_settings, &ProfileCache::default(), 1_000)?;
     assert_eq!(
         zero_derived
-            .daily_calorie_deficit()
+            .calorie_balance_goal()
             .map(|value| value.value()),
         Some(Decimal::ZERO)
     );
     for settings in [
         serde_json::json!({}),
-        serde_json::json!({"weekly_weight_loss": null}),
+        serde_json::json!({"weight_change_goal": null}),
     ] {
         let create: CreateProfile =
             serde_json::from_value(serde_json::json!({"name": "Alex", "settings": settings}))?;
@@ -535,16 +556,16 @@ fn weekly_weight_loss_validates_units_and_calculates_deficit() -> Result<(), Box
             create
                 .settings
                 .ok_or("missing settings")?
-                .weekly_weight_loss,
+                .weight_change_goal,
             None
         );
     }
-    let clear: PatchProfile = serde_json::from_str(r#"{"weekly_weight_loss":null}"#)?;
-    assert_eq!(clear.weekly_weight_loss, NullablePatch::Clear);
+    let clear: PatchProfile = serde_json::from_str(r#"{"weight_change_goal":null}"#)?;
+    assert_eq!(clear.weight_change_goal, NullablePatch::Clear);
     let keep: PatchProfile = serde_json::from_str("{}")?;
-    assert_eq!(keep.weekly_weight_loss, NullablePatch::Unchanged);
+    assert_eq!(keep.weight_change_goal, NullablePatch::Unchanged);
     let settings: ProfileSettings =
-        serde_json::from_value(serde_json::json!({"weekly_weight_loss":"0.5 kg/week"}))?;
+        serde_json::from_value(serde_json::json!({"weight_change_goal":"0.5 kg/week"}))?;
     assert_eq!(
         serde_json::from_value::<ProfileSettings>(serde_json::to_value(&settings)?)?,
         settings
@@ -553,7 +574,7 @@ fn weekly_weight_loss_validates_units_and_calculates_deficit() -> Result<(), Box
     assert_eq!(derived.bmr(), None);
     assert_eq!(derived.maintenance_calories(), None);
     assert_eq!(
-        derived.daily_calorie_deficit().map(|value| value.value()),
+        derived.calorie_balance_goal().map(|value| value.value()),
         Some(Decimal::from(550))
     );
     assert_eq!(
@@ -563,7 +584,17 @@ fn weekly_weight_loss_validates_units_and_calculates_deficit() -> Result<(), Box
     let legacy_derived: ProfileDerived = serde_json::from_str(
         r#"{"bmr":null,"baseline_activity":null,"maintenance_calories":null}"#,
     )?;
-    assert_eq!(legacy_derived.daily_calorie_deficit(), None);
-    assert!(serde_json::from_str::<ProfileDerived>(r#"{"bmr":null,"baseline_activity":null,"maintenance_calories":null,"daily_calorie_deficit":"-1 kcal/day"}"#).is_err());
+    assert_eq!(legacy_derived.calorie_balance_goal(), None);
+    let negative: ProfileDerived = serde_json::from_str(
+        r#"{"bmr":null,"baseline_activity":null,"maintenance_calories":null,"calorie_balance_goal":"-1 kcal/day"}"#,
+    )?;
+    assert_eq!(
+        negative.calorie_balance_goal().map(|value| value.value()),
+        Some(Decimal::from(-1))
+    );
+    assert_eq!(
+        serde_json::from_value::<ProfileDerived>(serde_json::to_value(negative)?)?,
+        negative
+    );
     Ok(())
 }

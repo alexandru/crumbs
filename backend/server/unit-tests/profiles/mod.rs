@@ -55,7 +55,7 @@ pub(in crate::profiles) fn profile_error_cases() -> [ProfileErrorCase; 6] {
     ]
 }
 
-pub(in crate::profiles) fn assert_deficit(
+pub(in crate::profiles) fn assert_calorie_balance_goal(
     actual: &serde_json::Value,
     expected: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -63,7 +63,7 @@ pub(in crate::profiles) fn assert_deficit(
 
     let actual = actual
         .as_str()
-        .ok_or("missing deficit")?
+        .ok_or("missing calorie balance goal")?
         .parse::<PerDay<Kcal>>()?;
     let expected = expected.parse::<PerDay<Kcal>>()?;
     assert_eq!(actual, expected);
