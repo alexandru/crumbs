@@ -77,4 +77,4 @@ Lists contain at most 100 entries in descending ID order. This is creation order
 
 ## Existing databases
 
-The forward migration adds the journal entry type. Existing log content, IDs, timestamps, indexes, and the ID counter are preserved. Journal create, edit, and delete operations do not change the profile's cached current weight.
+The forward migration removes the database's fixed list of entry types through a schema-only update. Existing log content, IDs, timestamps, indexes, and the ID counter are preserved. An index supports filtering and pagination by entry type. Supported entry types are validated by the Rust and API models. Journal create, edit, and delete operations do not change the profile's cached current weight.

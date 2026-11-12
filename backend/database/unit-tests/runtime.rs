@@ -843,9 +843,29 @@ async fn journal_migration_preserves_rows_indexes_and_deleted_high_water_mark()
     .execute(&mut connection)
     .await?;
 
+    let schema_version: i64 = query_scalar("PRAGMA schema_version")
+        .fetch_one(&mut connection)
+        .await?;
+    let roots: Vec<(String, i64)> = sqlx::query_as("SELECT name, rootpage FROM sqlite_schema WHERE name IN ('profile_logs', 'profile_logs_profile_id_id', 'profile_logs_profile_day_id', 'profile_logs_latest_weight') ORDER BY name").fetch_all(&mut connection).await?;
+
     sqlx::raw_sql(include_str!("../migrations/0009_add_journal_logs.sql"))
         .execute(&mut connection)
         .await?;
+
+    let updated_version: i64 = query_scalar("PRAGMA schema_version")
+        .fetch_one(&mut connection)
+        .await?;
+    assert_eq!(updated_version, schema_version + 1);
+    let updated_roots: Vec<(String, i64)> = sqlx::query_as("SELECT name, rootpage FROM sqlite_schema WHERE name IN ('profile_logs', 'profile_logs_profile_id_id', 'profile_logs_profile_day_id', 'profile_logs_latest_weight') ORDER BY name").fetch_all(&mut connection).await?;
+    assert_eq!(roots, updated_roots);
+    let writable: i64 = query_scalar("PRAGMA writable_schema")
+        .fetch_one(&mut connection)
+        .await?;
+    assert_eq!(writable, 0);
+    let integrity: String = query_scalar("PRAGMA integrity_check")
+        .fetch_one(&mut connection)
+        .await?;
+    assert_eq!(integrity, "ok");
 
     type LogRow = (
         i64,
@@ -890,6 +910,10 @@ async fn journal_migration_preserves_rows_indexes_and_deleted_high_water_mark()
         .fetch_one(&mut connection)
         .await?;
     assert_eq!(indexes, 3);
+    let new_index: i64 = query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'profile_logs_profile_entry_type_id'")
+        .fetch_one(&mut connection)
+        .await?;
+    assert_eq!(new_index, 1);
     let id: i64 = query_scalar(
         r#"INSERT INTO profile_logs (profile_id, day, time, data_json, created_at)
            VALUES (1, '2026-11-12', '15:00:00.000', '{"type":"journal","text":"hello"}', 14)
@@ -904,9 +928,89 @@ async fn journal_migration_preserves_rows_indexes_and_deleted_high_water_mark()
             .await
             .is_err()
     );
-    assert!(query(r#"INSERT INTO profile_logs (profile_id, day, time, data_json, created_at) VALUES (1, '2026-11-12', '15:00:00.000', '{"type":"unknown"}', 15)"#)
+    query(r#"INSERT INTO profile_logs (profile_id, day, time, data_json, created_at) VALUES (1, '2026-11-12', '15:00:00.000', '{"type":"unknown"}', 15)"#)
+        .execute(&mut connection)
+        .await?;
+    assert!(query(r#"INSERT INTO profile_logs (profile_id, day, time, data_json, created_at) VALUES (1, '2026-11-12', '15:00:00.000', '{}', 15)"#)
         .execute(&mut connection)
         .await
         .is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn journal_schema_change_rolls_back_and_refreshes_other_connections()
+-> Result<(), Box<dyn StdError>> {
+    use sqlx::Connection;
+    use sqlx::sqlite::SqliteConnectOptions;
+
+    let directory = tempfile::tempdir()?;
+    let options = SqliteConnectOptions::new()
+        .filename(directory.path().join("migration.sqlite"))
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut first = SqliteConnection::connect_with(&options).await?;
+    let mut second = SqliteConnection::connect_with(&options).await?;
+    sqlx::raw_sql(
+        "CREATE TABLE profiles (id INTEGER PRIMARY KEY); INSERT INTO profiles VALUES (1);",
+    )
+    .execute(&mut first)
+    .await?;
+    sqlx::raw_sql(include_str!("../migrations/0008_create_profile_logs.sql"))
+        .execute(&mut first)
+        .await?;
+    let insert = r#"INSERT INTO profile_logs (profile_id, day, time, data_json, created_at) VALUES (1, '2026-11-12', '15:00:00.000', '{"type":"future"}', 15)"#;
+    assert!(query(insert).execute(&mut second).await.is_err());
+    let schema_before: String =
+        query_scalar("SELECT sql FROM sqlite_schema WHERE name = 'profile_logs'")
+            .fetch_one(&mut first)
+            .await?;
+    let version_before: i64 = query_scalar("PRAGMA schema_version")
+        .fetch_one(&mut first)
+        .await?;
+
+    query("BEGIN").execute(&mut first).await?;
+    sqlx::raw_sql(include_str!("../migrations/0009_add_journal_logs.sql"))
+        .execute(&mut first)
+        .await?;
+    query("ROLLBACK").execute(&mut first).await?;
+    let schema_after: String =
+        query_scalar("SELECT sql FROM sqlite_schema WHERE name = 'profile_logs'")
+            .fetch_one(&mut first)
+            .await?;
+    assert_eq!(schema_before, schema_after);
+    let version_after: i64 = query_scalar("PRAGMA schema_version")
+        .fetch_one(&mut first)
+        .await?;
+    assert_eq!(version_before, version_after);
+    let indexes: i64 = query_scalar(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'profile_logs_profile_entry_type_id'",
+    )
+    .fetch_one(&mut first)
+    .await?;
+    assert_eq!(indexes, 0);
+    assert!(query(insert).execute(&mut first).await.is_err());
+    assert!(query(insert).execute(&mut second).await.is_err());
+    let integrity: String = query_scalar("PRAGMA integrity_check")
+        .fetch_one(&mut first)
+        .await?;
+    assert_eq!(integrity, "ok");
+
+    query("BEGIN").execute(&mut first).await?;
+    sqlx::raw_sql(include_str!("../migrations/0009_add_journal_logs.sql"))
+        .execute(&mut first)
+        .await?;
+    query("COMMIT").execute(&mut first).await?;
+    query(insert).execute(&mut second).await?;
+    let stored: String = query_scalar("SELECT entry_type FROM profile_logs WHERE id = 1")
+        .fetch_one(&mut second)
+        .await?;
+    assert_eq!(stored, "future");
+    second.close().await?;
+    let mut reopened = SqliteConnection::connect_with(&options).await?;
+    let stored: String = query_scalar("SELECT entry_type FROM profile_logs WHERE id = 1")
+        .fetch_one(&mut reopened)
+        .await?;
+    assert_eq!(stored, "future");
     Ok(())
 }

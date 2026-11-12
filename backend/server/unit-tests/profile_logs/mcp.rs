@@ -61,10 +61,13 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
         "update_profile_log",
         "delete_profile_log",
     ] {
-        assert!(
-            tools.iter().any(|tool| tool["name"] == name),
-            "missing {name}"
-        );
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .ok_or_else(|| format!("missing {name}"))?;
+        let schema = &tool["inputSchema"];
+        assert!(schema.is_object(), "missing inputSchema for {name}");
+        assert_local_references(schema, schema)?;
     }
 
     let create_tool = tools
@@ -389,6 +392,35 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
         profile_after_delete.json["derived"]["bmr"],
         serde_json::Value::Null
     );
+    Ok(())
+}
+
+fn assert_local_references(
+    root: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Result<(), Box<dyn Error>> {
+    match value {
+        serde_json::Value::Object(fields) => {
+            if let Some(reference) = fields.get("$ref") {
+                let reference = reference.as_str().ok_or("non-string schema reference")?;
+                let pointer = reference
+                    .strip_prefix('#')
+                    .ok_or_else(|| format!("non-local schema reference: {reference}"))?;
+                if root.pointer(pointer).is_none() {
+                    return Err(format!("unresolved schema reference: {reference}").into());
+                }
+            }
+            for child in fields.values() {
+                assert_local_references(root, child)?;
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for child in values {
+                assert_local_references(root, child)?;
+            }
+        }
+        _ => {}
+    }
     Ok(())
 }
 

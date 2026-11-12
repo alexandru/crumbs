@@ -119,6 +119,7 @@ fn ids_payload_union_and_create_input_validate_strictly() -> Result<(), Box<dyn 
         r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg","extra":true}}"#,
         r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg"},"current_weight":"1 kg"}"#,
         r#"{"type":"exercise"}"#,
+        r#"{"type":"future"}"#,
     ] {
         assert!(
             serde_json::from_str::<ProfileLogData>(invalid).is_err(),
