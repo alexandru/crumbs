@@ -35,12 +35,14 @@ docker compose up -d
 <details>
 <summary><b>2. Import USDA foods</b></summary>
 
-Download [USDA Foundation Foods (JSON)](https://fdc.nal.usda.gov/download-datasets/), unzip it, and save the JSON file as `~/Downloads/usda.json`.
+Download all [USDA FoodData Central datasets](https://fdc.nal.usda.gov/download-datasets/) in JSON format and extract the JSON files to `~/Downloads/usda/`.
 
 ```sh
-docker compose run --rm --no-deps \
-  --volume "$HOME/Downloads/usda.json:/imports/usda.json:ro" \
-  crumbs db import-usda /imports/usda.json
+for file in "$HOME"/Downloads/usda/*.json; do
+  docker compose run --rm --no-deps \
+    --volume "$file:/imports/usda.json:ro" \
+    crumbs db import-usda /imports/usda.json
+done
 ```
 
 </details>
@@ -61,6 +63,7 @@ docker compose run --rm --no-deps crumbs db create-user --username alice
 
 - [**ChatGPT**](https://developers.openai.com/api/docs/guides/custom-mcp-server): **Plugins → + → Add custom MCP server**.
 - [**Mistral**](https://docs.mistral.ai/vibe/work/connectors/mcp-connectors): **Connectors → + Add Connector → Custom MCP Connector**.
+- [**Claude**](https://support.claude.com/en/articles/11176164-use-connectors-to-extend-claude-s-capabilities): **Customize → Connectors → Add → Custom → Web** (OAuth client: **Register automatically**).
 
 Enter `https://crumbs.example.com/mcp` (with your domain), use OAuth, and sign in with your Crumbs account.
 
