@@ -61,10 +61,13 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
         "update_profile_log",
         "delete_profile_log",
     ] {
-        assert!(
-            tools.iter().any(|tool| tool["name"] == name),
-            "missing {name}"
-        );
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .ok_or_else(|| format!("missing {name}"))?;
+        let schema = &tool["inputSchema"];
+        assert!(schema.is_object(), "missing inputSchema for {name}");
+        assert_local_references(schema, schema)?;
     }
 
     let create_tool = tools
@@ -147,7 +150,7 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
     );
     assert_eq!(
         log_filter["properties"]["entry_type"]["anyOf"][0]["enum"],
-        json!(["food", "biometric"])
+        json!(["food", "biometric", "journal"])
     );
     let update_tool = tools
         .iter()
@@ -392,6 +395,35 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
     Ok(())
 }
 
+fn assert_local_references(
+    root: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Result<(), Box<dyn Error>> {
+    match value {
+        serde_json::Value::Object(fields) => {
+            if let Some(reference) = fields.get("$ref") {
+                let reference = reference.as_str().ok_or("non-string schema reference")?;
+                let pointer = reference
+                    .strip_prefix('#')
+                    .ok_or_else(|| format!("non-local schema reference: {reference}"))?;
+                if root.pointer(pointer).is_none() {
+                    return Err(format!("unresolved schema reference: {reference}").into());
+                }
+            }
+            for child in fields.values() {
+                assert_local_references(root, child)?;
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for child in values {
+                assert_local_references(root, child)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn mcp_profile_logs_create_and_patch_food_snapshots() -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
@@ -623,5 +655,95 @@ async fn mcp_profile_logs_create_and_patch_food_snapshots() -> Result<(), Box<dy
         profile_after_food.json["data"]["cache"]["current_weight"],
         "65 kg"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn journal_mcp_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    seed_profile_owner(&app).await?;
+    let (profile_id, _) =
+        create_test_profile(&app, "Journal", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    mcp_initialize(&app).await?;
+    let original = "  café\n水  ";
+    let created = mcp_call_router_with_token(&app.router, 1, "create_profile_log",
+        json!({"profile_id":profile_id,"log":{"day":"2025-06-01","entry":{"type":"journal","text":original}}}),
+        TEST_MCP_WRITE_ACCESS_TOKEN).await?;
+    assert_eq!(
+        created.json["result"]["isError"], false,
+        "{:?}",
+        created.json
+    );
+    let log = &created.json["result"]["structuredContent"];
+    let id = log["id"].as_i64().ok_or("journal ID is missing")?;
+    assert_eq!(log["data"]["text"], original);
+    let blank = mcp_call_router_with_token(&app.router, 2, "create_profile_log",
+        json!({"profile_id":profile_id,"log":{"day":"2025-06-01","entry":{"type":"journal","text":"  "}}}),
+        TEST_MCP_WRITE_ACCESS_TOKEN).await?;
+    assert_eq!(blank.json["result"]["isError"], true);
+    let fetched = mcp_call_router_with_token(
+        &app.router,
+        3,
+        "get_profile_log",
+        json!({"profile_id":profile_id,"id":id}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(
+        fetched.json["result"]["structuredContent"]["data"]["text"],
+        original
+    );
+    let listed = mcp_call_router_with_token(
+        &app.router,
+        4,
+        "list_profile_logs",
+        json!({"profile_id":profile_id,"filter":{"entry_type":"journal"}}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(
+        listed.json["result"]["structuredContent"]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    let updated = mcp_call_router_with_token(&app.router, 5, "update_profile_log",
+        json!({"profile_id":profile_id,"id":id,"patch":{"entry":{"type":"journal","text":"Changed"}}}),
+        TEST_MCP_WRITE_ACCESS_TOKEN).await?;
+    assert_eq!(
+        updated.json["result"]["structuredContent"]["data"]["text"],
+        "Changed"
+    );
+    let denied = mcp_call_router_with_token(
+        &app.router,
+        6,
+        "delete_profile_log",
+        json!({"profile_id":profile_id,"id":id}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(denied.json["result"]["isError"], true);
+    let deleted = mcp_call_router_with_token(
+        &app.router,
+        7,
+        "delete_profile_log",
+        json!({"profile_id":profile_id,"id":id}),
+        TEST_MCP_WRITE_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(
+        deleted.json["result"]["isError"], false,
+        "{:?}",
+        deleted.json
+    );
+    let missing = mcp_call_router_with_token(
+        &app.router,
+        8,
+        "get_profile_log",
+        json!({"profile_id":profile_id,"id":id}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(missing.json["result"]["isError"], true);
     Ok(())
 }

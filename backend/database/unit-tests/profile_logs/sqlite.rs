@@ -1488,6 +1488,7 @@ async fn migration_has_generated_projection_columns_indexes_and_profile_restrict
         "profile_logs_profile_id_id",
         "profile_logs_profile_day_id",
         "profile_logs_latest_weight",
+        "profile_logs_profile_entry_type_id",
     ] {
         let found: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name = ?",
@@ -1503,6 +1504,142 @@ async fn migration_has_generated_projection_columns_indexes_and_profile_restrict
             .execute(&database.pool)
             .await
             .is_err()
+    );
+    database.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn journal_entries_support_crud_and_type_filtering() -> Result<(), Box<dyn Error>> {
+    let instant =
+        chrono::DateTime::parse_from_rfc3339("2024-01-02T03:04:05.123Z")?.timestamp_millis();
+    let (_directory, database, _) = open_database(u64::try_from(instant)?).await?;
+    let owner = insert_user(&database, 1).await?;
+    let other = insert_user(&database, 2).await?;
+    let profile = create_profile(
+        &database,
+        owner,
+        serde_json::json!({"name":"Alex", "settings":{"timezone":"America/Los_Angeles"}}),
+    )
+    .await?;
+    let weight = create_weight_log(
+        &database,
+        owner,
+        profile.id,
+        "2024-01-01",
+        Some("12:00"),
+        "70 kg",
+    )
+    .await?;
+    let input: CreateLog = serde_json::from_value(
+        serde_json::json!({"day":"2024-01-01", "entry":{"type":"journal", "text":"  feeling good 🌱\n today  "}}),
+    )?;
+    let first = database
+        .create_profile_log(owner, profile.id, &input)
+        .await?
+        .ok_or("missing journal")?;
+    let second = database
+        .create_profile_log(owner, profile.id, &input)
+        .await?
+        .ok_or("missing journal")?;
+    assert_ne!(first.id, second.id);
+    let all = database
+        .list_profile_logs(owner, profile.id, &LogFilter::default())
+        .await?
+        .ok_or("missing mixed log page")?;
+    assert_eq!(
+        all.items.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![second.id, first.id, weight.id]
+    );
+
+    assert_eq!(first.time.to_string(), "19:04:05.123");
+    assert_eq!(
+        serde_json::to_value(&first.data)?["text"],
+        "  feeling good 🌱\n today  "
+    );
+    assert_eq!(
+        database.profile_log(other, profile.id, first.id).await?,
+        None
+    );
+    let filter = LogFilter::new(
+        Some(LogDay::parse("2024-01-01")?),
+        Some(LogDay::parse("2024-01-01")?),
+        Some(LogEntryType::Journal),
+        None,
+        None,
+    )?;
+    let page = database
+        .list_profile_logs(owner, profile.id, &filter)
+        .await?
+        .ok_or("missing page")?;
+    assert_eq!(
+        page.items.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![second.id, first.id]
+    );
+    let older = LogFilter::new(
+        None,
+        None,
+        Some(LogEntryType::Journal),
+        None,
+        Some(second.id),
+    )?;
+    let page = database
+        .list_profile_logs(owner, profile.id, &older)
+        .await?
+        .ok_or("missing page")?;
+    assert_eq!(
+        page.items.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![first.id]
+    );
+    let biometric = LogFilter::new(
+        None,
+        None,
+        Some(LogEntryType::Biometric),
+        Some(BiometricType::Weight),
+        None,
+    )?;
+    let page = database
+        .list_profile_logs(owner, profile.id, &biometric)
+        .await?
+        .ok_or("missing page")?;
+    assert_eq!(
+        page.items.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![weight.id]
+    );
+    let metadata: PatchLog = serde_json::from_value(serde_json::json!({"day":"2024-01-02"}))?;
+    let updated = database
+        .patch_profile_log(owner, profile.id, first.id, &metadata)
+        .await?
+        .ok_or("missing journal")?;
+    assert_eq!(
+        serde_json::to_value(&updated.data)?["text"],
+        "  feeling good 🌱\n today  "
+    );
+    let patch: PatchLog =
+        serde_json::from_value(serde_json::json!({"entry":{"type":"journal", "text":"changed"}}))?;
+    let updated = database
+        .patch_profile_log(owner, profile.id, first.id, &patch)
+        .await?
+        .ok_or("missing journal")?;
+    assert_eq!(serde_json::to_value(&updated.data)?["text"], "changed");
+    assert!(
+        database
+            .patch_profile_log(owner, profile.id, weight.id, &patch)
+            .await
+            .is_err()
+    );
+    assert!(
+        database
+            .delete_profile_log(owner, profile.id, first.id)
+            .await?
+    );
+    assert_eq!(
+        database.profile_log(owner, profile.id, first.id).await?,
+        None
+    );
+    assert_eq!(
+        current_weight(&get_profile(&database, owner, profile.id).await?),
+        Some(Decimal::from(70))
     );
     database.close().await;
     Ok(())

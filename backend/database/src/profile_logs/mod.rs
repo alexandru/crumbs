@@ -8,10 +8,10 @@ mod store;
 pub use error::ProfileLogError;
 pub use model::{
     Amount, BiometricEntry, BiometricLogEntry, BiometricType, CreateLog, FoodInputSnapshot,
-    FoodLogEntry, FoodLogInput, FoodLogPatch, LocalTime, LogDay, LogEntryPatch, LogEntryType,
-    LogFilter, LogInput, LogPage, MassUnit, MeasurementUnit, PatchLog, ProfileLog, ProfileLogData,
-    ProfileLogId, SelectedServingName, ServingSelector, ServingSnapshot, VolumeUnit,
-    WeightMeasurement,
+    FoodLogEntry, FoodLogInput, FoodLogPatch, JournalLogEntry, JournalText, LocalTime, LogDay,
+    LogEntryPatch, LogEntryType, LogFilter, LogInput, LogPage, MassUnit, MeasurementUnit, PatchLog,
+    ProfileLog, ProfileLogData, ProfileLogId, SelectedServingName, ServingSelector,
+    ServingSnapshot, VolumeUnit, WeightMeasurement,
 };
 pub use store::ProfileLogs;
 

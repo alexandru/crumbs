@@ -119,6 +119,7 @@ fn ids_payload_union_and_create_input_validate_strictly() -> Result<(), Box<dyn 
         r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg","extra":true}}"#,
         r#"{"type":"biometric","measurement":{"type":"weight","value":"70 kg"},"current_weight":"1 kg"}"#,
         r#"{"type":"exercise"}"#,
+        r#"{"type":"future"}"#,
     ] {
         assert!(
             serde_json::from_str::<ProfileLogData>(invalid).is_err(),
@@ -180,7 +181,7 @@ fn patch_fields_preserve_omission_and_reject_nulls() -> Result<(), Box<dyn Error
     ));
     let patch_data = match patch_entry {
         LogEntryPatch::Biometric(entry) => ProfileLogData::Biometric(entry),
-        LogEntryPatch::Food(_) => {
+        LogEntryPatch::Food(_) | LogEntryPatch::Journal(_) => {
             return Err(std::io::Error::other("expected biometric patch entry").into());
         }
     };
@@ -433,5 +434,45 @@ fn food_log_patch_keeps_missing_fields_and_rejects_null_or_invalid_ids()
     }
     let entry_patch: LogEntryPatch = serde_json::from_str(r#"{"type":"food"}"#)?;
     assert!(matches!(entry_patch, LogEntryPatch::Food(patch) if !patch.has_changes()));
+    Ok(())
+}
+
+#[test]
+fn journal_text_rejects_blank_and_preserves_original_content() -> Result<(), Box<dyn Error>> {
+    for value in ["", " \n\t", "\u{2003}"] {
+        assert!(JournalText::new(value).is_err());
+        assert!(serde_json::from_value::<JournalText>(serde_json::json!(value)).is_err());
+    }
+    let value = "  Salut, lume! 🌿\nA good day.  ";
+    let text = JournalText::new(value)?;
+    assert_eq!(text.as_str(), value);
+    assert_eq!(
+        serde_json::from_value::<JournalText>(serde_json::json!(value))?,
+        text
+    );
+    let entry: ProfileLogData =
+        serde_json::from_value(serde_json::json!({"type":"journal", "text":value}))?;
+    assert_eq!(
+        serde_json::to_value(entry)?,
+        serde_json::json!({"type":"journal", "text":value})
+    );
+    assert!(
+        serde_json::from_value::<LogInput>(serde_json::json!({"type":"journal", "text":"  "}))
+            .is_err()
+    );
+    assert!(
+        serde_json::from_value::<LogEntryPatch>(serde_json::json!({"type":"journal", "text":"\n"}))
+            .is_err()
+    );
+    assert!(
+        LogFilter::new(
+            None,
+            None,
+            Some(LogEntryType::Journal),
+            Some(BiometricType::Weight),
+            None
+        )
+        .is_err()
+    );
     Ok(())
 }

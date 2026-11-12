@@ -79,7 +79,7 @@ impl ProfileLogTool {
     fn tool(self) -> Tool {
         let description = match self {
             Self::List => {
-                r#"List food and biometric logs for one profile owned by the authenticated account.
+                r#"List food, biometric, and journal logs for one profile owned by the authenticated account.
 
 Example arguments:
 ```json
@@ -96,6 +96,7 @@ Example arguments:
 - All filter fields are optional. Omit filter to list all entry types.
 - Dates are inclusive YYYY-MM-DD strings.
 - For weight logs, set entry_type to "biometric" and subtype to "weight".
+- For journal entries, set entry_type to "journal".
 - Results contain at most 100 logs, ordered by ID descending.
 - For the next page, set filter.last_id to the last returned ID. Only smaller IDs are returned.
 
@@ -119,7 +120,7 @@ Example arguments:
 Requires crumbs:read."#
             }
             Self::Create => {
-                r#"Create one food or weight log for a profile owned by the authenticated account.
+                r#"Create one food, weight, or journal log for a profile owned by the authenticated account.
 
 Food arguments:
 ```json
@@ -165,6 +166,7 @@ Weight arguments:
 ```
 
 - Food amount is a positive decimal string without a unit.
+- A journal entry uses {"type":"journal","text":"..."} with nonblank text.
 - Put the unit or exact named serving in the separate serving_size string.
 - Use an existing food_id from food search or custom-food tools.
 - Units are kg, g, mg, µg, l, or ml and must match the food's nutrition basis.
@@ -228,6 +230,7 @@ Date/time arguments:
 - serving_size is a separate unit or exact named serving string.
 - food_id, amount, and serving_size are independently optional inside patch.entry.
 - type is required when entry is supplied.
+- For a journal entry, supply {"type":"journal","text":"..."} to replace its nonblank text.
 - Supplied food input fields rebuild the snapshot from the current food record.
 - Date/time-only changes preserve the snapshot.
 
@@ -487,7 +490,7 @@ fn definitions() -> Value {
             "properties": {
                 "day": {"$ref": "#/$defs/log_day", "description": "Replace the occurrence day. Omission preserves the stored day."},
                 "time": {"$ref": "#/$defs/local_time", "description": "Replace the occurrence time. Null is invalid; omission preserves the stored time."},
-                "entry": {"$ref": "#/$defs/log_entry_patch", "description": "Patch the weight measurement or food input without changing the entry category. Food input fields refresh the snapshot; an empty food patch preserves it."}
+                "entry": {"$ref": "#/$defs/log_entry_patch", "description": "Patch the weight measurement, food input, or journal text without changing the entry category. Food input fields refresh the snapshot; an empty food patch preserves it."}
             }
         },
         "log_filter": {
@@ -496,7 +499,7 @@ fn definitions() -> Value {
             "properties": {
                 "from": {"anyOf": [{"$ref": "#/$defs/log_day"}, {"type": "null"}], "description": "Inclusive lower day bound."},
                 "to": {"anyOf": [{"$ref": "#/$defs/log_day"}, {"type": "null"}], "description": "Inclusive upper day bound."},
-                "entry_type": {"anyOf": [{"type": "string", "enum": ["food", "biometric"]}, {"type": "null"}]},
+                "entry_type": {"anyOf": [{"type": "string", "enum": ["food", "biometric", "journal"]}, {"type": "null"}]},
                 "subtype": {"anyOf": [{"type": "string", "enum": ["weight"]}, {"type": "null"}], "description": "Biometric subtype; when set to weight, requires entry_type=biometric."},
                 "last_id": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}], "description": "Exclusive cursor. Results are ordered by ID descending; next page uses id < last_id."}
             },
@@ -513,14 +516,25 @@ fn definitions() -> Value {
         "log_entry": {
             "oneOf": [
                 {"$ref": "#/$defs/biometric_log_entry"},
-                {"$ref": "#/$defs/food_log_entry"}
+                {"$ref": "#/$defs/food_log_entry"},
+                {"$ref": "#/$defs/journal_log_entry"}
             ]
         },
         "log_entry_patch": {
             "oneOf": [
                 {"$ref": "#/$defs/biometric_log_entry"},
-                {"$ref": "#/$defs/food_log_entry_patch"}
+                {"$ref": "#/$defs/food_log_entry_patch"},
+                {"$ref": "#/$defs/journal_log_entry"}
             ]
+        },
+        "journal_log_entry": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "text"],
+            "properties": {
+                "type": {"const": "journal"},
+                "text": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank journal text. Whitespace and line breaks are preserved."}
+            }
         },
         "biometric_log_entry": {
             "type": "object",
