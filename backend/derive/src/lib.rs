@@ -18,21 +18,28 @@ pub fn derive_try_new(input: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_try_new(input: &DeriveInput) -> syn::Result<TokenStream2> {
-    let field = match &input.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Unnamed(fields) => {
-                let mut fields = fields.unnamed.iter();
-                match (fields.next(), fields.next()) {
-                    (Some(field), None) => Some(field),
-                    _ => None,
-                }
-            }
-            _ => None,
-        },
-        _ => None,
+/// Generates a borrowed `value(&self)` accessor for a single-field tuple struct.
+#[proc_macro_derive(Value)]
+pub fn derive_value(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as DeriveInput);
+    match expand_value(&input) {
+        Ok(output) => output.into(),
+        Err(error) => error.into_compile_error().into(),
     }
-    .ok_or_else(|| syn::Error::new_spanned(input, "TryNew requires a single-field tuple struct"))?;
+}
+
+/// Forwards formatting to the inner value of a single-field tuple struct.
+#[proc_macro_derive(Display)]
+pub fn derive_display(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as DeriveInput);
+    match expand_display(&input) {
+        Ok(output) => output.into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
+fn expand_try_new(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let field = newtype_field(input, "TryNew")?;
 
     let name = &input.ident;
     let inner = &field.ty;
@@ -61,6 +68,64 @@ fn expand_try_new(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 <#inner as ::core::convert::TryFrom<#parameter>>::try_from(value).map(Self)
             }
         }
+    })
+}
+
+fn expand_value(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let field = newtype_field(input, "Value")?;
+    let name = &input.ident;
+    let inner = &field.ty;
+    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics #name #type_generics #where_clause {
+            /// Borrows the wrapped value.
+            pub const fn value(&self) -> &#inner {
+                &self.0
+            }
+        }
+    })
+}
+
+fn expand_display(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let field = newtype_field(input, "Display")?;
+    let name = &input.ident;
+    let inner = &field.ty;
+    let mut generics = input.generics.clone();
+    generics
+        .make_where_clause()
+        .predicates
+        .push(syn::parse_quote!(#inner: ::core::fmt::Display));
+    let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics ::core::fmt::Display for #name #type_generics #where_clause {
+            fn fmt(&self, formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                ::core::fmt::Display::fmt(&self.0, formatter)
+            }
+        }
+    })
+}
+
+fn newtype_field<'a>(input: &'a DeriveInput, derive: &str) -> syn::Result<&'a syn::Field> {
+    match &input.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Unnamed(fields) => {
+                let mut fields = fields.unnamed.iter();
+                match (fields.next(), fields.next()) {
+                    (Some(field), None) => Some(field),
+                    _ => None,
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+    .ok_or_else(|| {
+        syn::Error::new_spanned(
+            input,
+            format!("{derive} requires a single-field tuple struct"),
+        )
     })
 }
 

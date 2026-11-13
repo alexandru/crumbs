@@ -396,3 +396,20 @@ fn canonicalizes_inclusive_unicode_qualifiers() -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
+
+#[test]
+fn nonnegative_kcal_validates_and_preserves_wire_value() -> Result<(), Box<dyn Error>> {
+    assert_eq!(
+        NonNegativeKcal::try_from(Kcal::from(-1)),
+        Err(QuantityError::Negative)
+    );
+    assert!(serde_json::from_str::<NonNegativeKcal>(r#""-1 kcal""#).is_err());
+    let zero = NonNegativeKcal::try_from(Kcal::ZERO)?;
+    assert_eq!(*zero.value(), Kcal::ZERO);
+    assert_eq!(serde_json::to_string(&zero)?, r#""0 kcal""#);
+    assert_eq!(
+        serde_json::from_str::<NonNegativeKcal>(r#""0 kcal""#)?,
+        zero
+    );
+    Ok(())
+}

@@ -301,6 +301,29 @@ measurement!(Kilojoules, "kJ");
 measurement!(Centimetres, "cm");
 measurement!(Kilograms, "kg");
 
+/// A nonnegative energy amount in kilocalories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, crumbs_derive::Value)]
+#[serde(transparent)]
+pub struct NonNegativeKcal(Kcal);
+
+impl TryFrom<Kcal> for NonNegativeKcal {
+    type Error = QuantityError;
+
+    fn try_from(value: Kcal) -> Result<Self, Self::Error> {
+        if value.is_negative() {
+            return Err(QuantityError::Negative);
+        }
+
+        Ok(Self(value))
+    }
+}
+
+impl<'de> Deserialize<'de> for NonNegativeKcal {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::try_from(Kcal::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
 /// A numerator quantity per one unit of the denominator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Ratio<N, D>(N, PhantomData<D>);

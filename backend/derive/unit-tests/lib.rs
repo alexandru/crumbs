@@ -1,4 +1,4 @@
-use super::expand_try_new;
+use super::{expand_display, expand_try_new, expand_value};
 
 #[test]
 fn rejects_unsupported_shapes() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,6 +17,22 @@ fn rejects_unsupported_shapes() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(
             error.to_string(),
             "TryNew requires a single-field tuple struct"
+        );
+        let error = match expand_value(&input) {
+            Ok(_) => return Err(format!("Value accepted {source}").into()),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "Value requires a single-field tuple struct"
+        );
+        let error = match expand_display(&input) {
+            Ok(_) => return Err(format!("Display accepted {source}").into()),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "Display requires a single-field tuple struct"
         );
     }
     Ok(())
