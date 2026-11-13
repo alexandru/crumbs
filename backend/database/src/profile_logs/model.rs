@@ -876,18 +876,38 @@ pub struct BiometricLogEntry {
     pub measurement: BiometricEntry,
 }
 
-crate::text::string_newtype! {
-    /// Nonblank journal text, preserved exactly as supplied.
-    pub struct JournalText;
+/// Nonblank journal text, preserved exactly as supplied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct JournalText(String);
+
+impl JournalText {
     /// Creates journal text without changing its content.
     ///
     /// # Errors
     ///
     /// Returns InvalidInput if the text is empty or contains only whitespace.
-    fn new -> ProfileLogError;
-    validate = |value: &str| crate::text::nonblank(value).map_err(|_| {
-        ProfileLogError::InvalidInput("journal text must not be blank".to_owned())
-    });
+    pub fn new(value: impl Into<String>) -> Result<Self, ProfileLogError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(ProfileLogError::InvalidInput(
+                "journal text must not be blank".to_owned(),
+            ));
+        }
+
+        Ok(Self(value))
+    }
+
+    /// Returns the text as supplied.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for JournalText {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(String::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
 }
 
 /// The free-text payload for an independent journal log.

@@ -6,8 +6,11 @@ use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use std::sync::LazyLock;
+use unicase::UniCase;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::clock::UnixMillis;
 use crate::nutrition_model::{
@@ -48,22 +51,72 @@ impl<'de> Deserialize<'de> for ProfileId {
     }
 }
 
-crate::text::name_newtype! {
-    /// A nonblank profile name, retaining its trimmed display spelling.
-    ///
-    /// Equality uses Unicode canonical caseless matching and preserves accents.
-    pub struct ProfileName;
+/// A nonblank profile name, retaining its trimmed display spelling.
+///
+/// Equality uses Unicode canonical caseless matching and preserves accents.
+#[derive(Debug, Clone)]
+pub struct ProfileName {
+    display: String,
+    key: String,
+}
+
+impl ProfileName {
     /// Creates a profile name and its account-scoped uniqueness key.
     ///
     /// # Errors
     ///
     /// Returns [ProfileError::InvalidInput] if trimming leaves the name blank.
-    fn new -> ProfileError;
-    blank = ProfileError::InvalidInput("profile name must not be blank".to_owned());
-    pub(crate) fn key;
+    pub fn new(value: impl AsRef<str>) -> Result<Self, ProfileError> {
+        let display = value.as_ref().trim();
+        if display.is_empty() {
+            return Err(ProfileError::InvalidInput(
+                "profile name must not be blank".to_owned(),
+            ));
+        }
+
+        let decomposed = display.nfd().collect::<String>();
+        let key = UniCase::new(decomposed).to_folded_case().nfd().collect();
+        Ok(Self {
+            display: display.to_owned(),
+            key,
+        })
+    }
+
+    /// Returns the trimmed display spelling.
+    pub fn as_str(&self) -> &str {
+        &self.display
+    }
+
+    pub(crate) fn key(&self) -> &str {
+        &self.key
+    }
 }
 
-crate::text::string_serde!(ProfileName);
+impl PartialEq for ProfileName {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for ProfileName {}
+
+impl Hash for ProfileName {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+    }
+}
+
+impl Serialize for ProfileName {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ProfileName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(String::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
 
 /// Precision retained for a partial or complete birth date.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

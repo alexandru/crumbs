@@ -10,18 +10,38 @@ use crate::profiles::{NullablePatch, Patch};
 
 use super::ProfileLogError;
 
-crate::text::string_newtype! {
-    /// The activity name as supplied, without a catalog reference.
-    pub struct ExerciseType;
+/// The activity name as supplied, without a catalog reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ExerciseType(String);
+
+impl ExerciseType {
     /// Creates an activity name and preserves its text.
     ///
     /// # Errors
     ///
     /// Returns InvalidInput if the name is blank.
-    fn new -> ProfileLogError;
-    validate = |value: &str| crate::text::nonblank(value).map_err(|_| {
-        ProfileLogError::InvalidInput("exercise type must not be blank".to_owned())
-    });
+    pub fn new(value: impl Into<String>) -> Result<Self, ProfileLogError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(ProfileLogError::InvalidInput(
+                "exercise type must not be blank".to_owned(),
+            ));
+        }
+
+        Ok(Self(value))
+    }
+
+    /// Returns the activity name as supplied.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ExerciseType {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(String::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
 }
 
 /// The reported effort for an exercise session.
