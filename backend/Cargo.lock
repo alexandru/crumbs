@@ -453,6 +453,7 @@ dependencies = [
  "bcrypt",
  "chrono",
  "chrono-tz",
+ "crumbs-derive",
  "futures-executor",
  "regex",
  "rust_decimal",
@@ -464,6 +465,15 @@ dependencies = [
  "tokio",
  "unicase",
  "unicode-normalization",
+]
+
+[[package]]
+name = "crumbs-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

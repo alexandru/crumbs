@@ -53,9 +53,11 @@ fn exercise_type_and_calories_constructors_validate() -> Result<(), Box<dyn Erro
     use crate::nutrition_model::Kcal;
     use crate::profile_logs::{ExerciseCalories, ExerciseType};
 
-    use crate::text::NonBlankString;
+    use crate::text::BlankStringError;
 
-    let exercise_type = ExerciseType(NonBlankString::new("  walking  ")?);
+    let exercise_type = ExerciseType::new("  walking  ")?;
+    assert_eq!(ExerciseType::new("  walking  ".to_owned())?, exercise_type);
+    assert_eq!(ExerciseType::new("  "), Err(BlankStringError));
     assert_eq!(
         serde_json::to_value(&exercise_type)?,
         serde_json::json!("  walking  ")

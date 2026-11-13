@@ -1,6 +1,7 @@
 use std::fmt;
 use std::time::Duration;
 
+use crumbs_derive::TryNew;
 use rust_decimal::Decimal;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -12,7 +13,7 @@ use crate::text::NonBlankString;
 use super::ProfileLogError;
 
 /// The activity name as supplied, without a catalog reference.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TryNew)]
 #[serde(transparent)]
 pub struct ExerciseType(pub NonBlankString);
 

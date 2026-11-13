@@ -34,6 +34,22 @@ impl NonBlankString {
     }
 }
 
+impl TryFrom<String> for NonBlankString {
+    type Error = BlankStringError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl TryFrom<&str> for NonBlankString {
+    type Error = BlankStringError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
 impl<'de> Deserialize<'de> for NonBlankString {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Self::new(String::deserialize(deserializer)?).map_err(D::Error::custom)
