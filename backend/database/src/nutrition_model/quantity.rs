@@ -297,6 +297,7 @@ measurement!(Micrograms, "µg");
 measurement!(Millilitres, "ml");
 measurement!(Litres, "l");
 measurement!(Kcal, "kcal");
+measurement!(Minutes, "min");
 measurement!(Kilojoules, "kJ");
 measurement!(Centimetres, "cm");
 measurement!(Kilograms, "kg");

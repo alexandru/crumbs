@@ -56,7 +56,7 @@ The association of a food with a tag. Assignments are managed by Crumbs and surv
 The personal context for one person. One user can have multiple profiles, whose names are unique within that user after ignoring case and surrounding whitespace.
 
 **Profile log entry**:
-A record of food consumed, a biometric measurement, or a journal entry for one profile.
+A record of food consumed, a biometric measurement, a journal entry, or an exercise session for one profile.
 
 **Journal entry**:
 A free-text record of a person's feelings, experiences, or observations for one profile. A person can record multiple journal entries on the same day.
@@ -66,6 +66,9 @@ A recorded value for a physical characteristic of a person, such as body weight.
 
 **Food log entry**:
 A record of food consumed, its quantity, calories and nutrition information, and a description retained from when it was recorded.
+
+**Exercise log entry**:
+A record of an exercise session with its activity type, intensity, duration, calories burned, and optional notes.
 
 **Current weight**:
 The weight from a profile’s most recent recorded weight measurement. It is unknown when the profile has no weight measurements.

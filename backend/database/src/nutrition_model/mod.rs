@@ -9,8 +9,8 @@ pub use model::{
 };
 pub use quantity::{
     Centimetres, Energy, FixedUnit, Grams, Kcal, Kilograms, Kilojoules, Litres, Mass,
-    MeasuredQuantity, Measurement, Micrograms, Milligrams, Millilitres, PerDay, PerWeek, Qualifier,
-    QuantityError, Ratio, Reported, Volume,
+    MeasuredQuantity, Measurement, Micrograms, Milligrams, Millilitres, Minutes, PerDay, PerWeek,
+    Qualifier, QuantityError, Ratio, Reported, Volume,
 };
 
 pub(crate) use quantity::{KcalPerCm, KcalPerKg};

@@ -14,7 +14,7 @@ use crate::nutrition_model::{
 };
 use crate::profiles::{BodyWeight, Patch, ProfileId};
 
-use super::ProfileLogError;
+use super::{ExerciseLogEntry, ExerciseLogPatch, ProfileLogError};
 
 /// A positive, stable identifier for one profile log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -931,6 +931,8 @@ pub enum ProfileLogData {
     Food(FoodLogEntry),
     /// A journal entry.
     Journal(JournalLogEntry),
+    /// An exercise session.
+    Exercise(ExerciseLogEntry),
 }
 
 impl ProfileLogData {
@@ -954,6 +956,8 @@ pub enum LogInput {
     Food(FoodLogInput),
     /// A journal entry.
     Journal(JournalLogEntry),
+    /// An exercise session.
+    Exercise(ExerciseLogEntry),
 }
 
 /// Input for creating a profile log.
@@ -964,7 +968,7 @@ pub struct CreateLog {
     pub day: LogDay,
     /// Optional local time. Omission resolves to the current profile-local time.
     pub time: Option<LocalTime>,
-    /// Biometric, food, or journal entry data.
+    /// Biometric, food, journal, or exercise entry data.
     pub entry: LogInput,
 }
 
@@ -978,6 +982,8 @@ pub enum LogEntryPatch {
     Food(FoodLogPatch),
     /// Replace the journal text.
     Journal(JournalLogEntry),
+    /// Update the supplied exercise fields.
+    Exercise(ExerciseLogPatch),
 }
 
 /// A partial patch for a profile log.
@@ -1005,6 +1011,8 @@ pub enum LogEntryType {
     Biometric,
     /// Free-text journal entries.
     Journal,
+    /// Exercise sessions.
+    Exercise,
 }
 
 impl LogEntryType {
@@ -1013,6 +1021,7 @@ impl LogEntryType {
             Self::Food => "food",
             Self::Biometric => "biometric",
             Self::Journal => "journal",
+            Self::Exercise => "exercise",
         }
     }
 }

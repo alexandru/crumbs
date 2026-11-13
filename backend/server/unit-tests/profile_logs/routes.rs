@@ -1046,3 +1046,67 @@ async fn journal_rest_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
     Ok(())
 }
+
+#[tokio::test]
+async fn exercise_rest_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    seed_profile_owner(&app).await?;
+    let (profile_id, _) =
+        create_test_profile(&app, "Exercise", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    let (other_id, _) = create_test_profile(&app, "Other", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    let uri = format!("/profiles/{profile_id}/logs");
+    let entry = json!({"type":"exercise", "exercise_type":"walking", "intensity":"moderate", "duration":"30.5 min", "calories_burned":"150 kcal", "notes":"Outside"});
+    let created = app
+        .request(http_json_request(
+            "POST",
+            &uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"day":"2025-06-01", "entry":entry}),
+        )?)
+        .await?;
+    assert_eq!(created.status, StatusCode::CREATED, "{:?}", created.json);
+    assert_eq!(created.json["data"], entry);
+    let id = created.json["id"]
+        .as_i64()
+        .ok_or("exercise ID is missing")?;
+    let item_uri = format!("{uri}/{id}");
+    let fetched = app.request(http_request(&item_uri)?).await?;
+    assert_eq!(fetched.json["data"], entry);
+    let wrong_profile = app
+        .request(http_request(&format!("/profiles/{other_id}/logs/{id}"))?)
+        .await?;
+    assert_eq!(wrong_profile.status, StatusCode::NOT_FOUND);
+    let listed = app
+        .request(http_request(&format!("{uri}?entry_type=exercise"))?)
+        .await?;
+    assert_eq!(listed.json["items"].as_array().map(Vec::len), Some(1));
+    let invalid_filter = app
+        .request(http_request(&format!(
+            "{uri}?entry_type=exercise&subtype=weight"
+        ))?)
+        .await?;
+    assert_eq!(invalid_filter.status, StatusCode::BAD_REQUEST);
+    let updated = app
+        .request(http_json_request(
+            "PATCH",
+            &item_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"entry":{"type":"exercise", "duration":"45 min", "notes":null}}),
+        )?)
+        .await?;
+    assert_eq!(updated.status, StatusCode::OK);
+    assert_eq!(
+        updated.json["data"],
+        json!({"type":"exercise", "exercise_type":"walking", "intensity":"moderate", "duration":"45 min", "calories_burned":"150 kcal", "notes":null})
+    );
+    let invalid = app
+        .request(http_json_request(
+            "PATCH",
+            &item_uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"entry":{"type":"exercise", "intensity":null}}),
+        )?)
+        .await?;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+    Ok(())
+}
