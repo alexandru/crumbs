@@ -6,7 +6,6 @@
 
 mod clock;
 mod config;
-pub mod duration;
 pub mod foods;
 pub mod identity;
 pub mod nutrition_model;

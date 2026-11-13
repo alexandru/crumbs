@@ -18,6 +18,18 @@ pub fn derive_alias_try_new(input: TokenStream) -> TokenStream {
     }
 }
 
+/// Generates an infallible `new(value)` constructor for a single-field tuple struct.
+///
+/// Construction delegates to the inner type's `From` implementation.
+#[proc_macro_derive(AliasNew)]
+pub fn derive_alias_new(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as DeriveInput);
+    match expand_alias_new(&input) {
+        Ok(output) => output.into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
 /// Generates a borrowed `value(&self)` accessor for a single-field tuple struct.
 #[proc_macro_derive(AliasValue)]
 pub fn derive_alias_value(input: TokenStream) -> TokenStream {
@@ -66,6 +78,33 @@ fn expand_alias_try_new(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 #inner: ::core::convert::TryFrom<#parameter>,
             {
                 <#inner as ::core::convert::TryFrom<#parameter>>::try_from(value).map(Self)
+            }
+        }
+    })
+}
+
+fn expand_alias_new(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let field = newtype_field(input, "AliasNew")?;
+    let name = &input.ident;
+    let inner = &field.ty;
+    let mut parameter = format_ident!("__CrumbsAliasNewInput");
+    while input.generics.params.iter().any(|generic| match generic {
+        GenericParam::Type(generic) => generic.ident == parameter,
+        GenericParam::Const(generic) => generic.ident == parameter,
+        GenericParam::Lifetime(_) => false,
+    }) {
+        parameter = format_ident!("{}Value", parameter);
+    }
+    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics #name #type_generics #where_clause {
+            /// Constructs the wrapper through the inner type's `From` implementation.
+            pub fn new<#parameter>(value: #parameter) -> Self
+            where
+                #inner: ::core::convert::From<#parameter>,
+            {
+                Self(<#inner as ::core::convert::From<#parameter>>::from(value))
             }
         }
     })

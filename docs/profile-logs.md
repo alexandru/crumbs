@@ -66,7 +66,7 @@ Create an entry with `POST /profiles/{profile_id}/logs`:
 }
 ```
 
-The activity name must not be blank. Intensity is `easy`, `moderate`, `hard`, or `very_hard`. Duration is a positive decimal with the `s`, `min`, or `h` unit and at most nanosecond precision. Responses use normalized decimal seconds, such as `1800 s`. Calories burned are a nonnegative decimal with the `kcal` unit. Both quantities use decimal strings. Calories are supplied with the entry. Notes can be omitted, null, or any string; text is preserved as supplied.
+The activity name must not be blank. Intensity is `easy`, `moderate`, `hard`, or `very_hard`. Duration accepts human-readable units, such as `30 min`, `0 s`, or `1 h 30 min`. Zero is valid. Responses use normalized decimal seconds, such as `1800 s`. Calories burned are a nonnegative decimal with the `kcal` unit. Both quantities use strings with units. Calories are supplied with the entry. Notes can be omitted, null, or any string; text is preserved as supplied.
 
 The response retains these fields in `data`. The existing occurrence day and time rules apply. REST and MCP use the same exercise fields.
 

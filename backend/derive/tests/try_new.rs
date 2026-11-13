@@ -1,4 +1,4 @@
-use crumbs_derive::AliasTryNew;
+use crumbs_derive::{AliasNew, AliasTryNew};
 
 #[derive(Debug, PartialEq, AliasTryNew)]
 struct Byte(u8);
@@ -19,6 +19,28 @@ fn forwards_success_and_failure() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(Generic::<u8>::new(42_u16)?, Generic(42));
     assert_eq!(Collision::<u8>::new(42_u16)?, Collision(42));
     Ok(())
+}
+
+#[derive(Debug, PartialEq, AliasNew)]
+struct Text(String);
+
+#[derive(Debug, PartialEq, AliasNew)]
+struct InfallibleGeneric<T>(T)
+where
+    T: PartialEq;
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, PartialEq, AliasNew)]
+struct InfallibleCollision<__CrumbsAliasNewInput>(__CrumbsAliasNewInput);
+
+#[test]
+fn forwards_infallible_conversions() {
+    assert_eq!(Text::new("walking"), Text(String::from("walking")));
+    assert_eq!(InfallibleGeneric::<u16>::new(42_u8), InfallibleGeneric(42));
+    assert_eq!(
+        InfallibleCollision::<u16>::new(42_u8),
+        InfallibleCollision(42)
+    );
 }
 
 mod values {

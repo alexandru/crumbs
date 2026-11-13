@@ -1720,6 +1720,21 @@ async fn exercise_entries_preserve_fields_and_weight() -> Result<(), Box<dyn Err
         database.profile_log(owner, profile.id, exercise.id).await?,
         Some(updated)
     );
+    let zero_patch: PatchLog =
+        serde_json::from_value(serde_json::json!({"entry":{"type":"exercise", "duration":"0 s"}}))?;
+    let zero = database
+        .patch_profile_log(owner, profile.id, exercise.id, &zero_patch)
+        .await?
+        .ok_or("missing exercise")?;
+    assert_eq!(serde_json::to_value(&zero.data)?["duration"], "0 s");
+    let zero_input: CreateLog = serde_json::from_value(
+        serde_json::json!({"day":"2024-01-01", "entry":{"type":"exercise", "exercise_type":"walking", "intensity":"easy", "duration":"0 min", "calories_burned":"0 kcal"}}),
+    )?;
+    let zero_created = database
+        .create_profile_log(owner, profile.id, &zero_input)
+        .await?
+        .ok_or("missing exercise")?;
+    assert_eq!(serde_json::to_value(&zero_created.data)?["duration"], "0 s");
     assert!(
         database
             .patch_profile_log(owner, profile.id, weight.id, &patch)

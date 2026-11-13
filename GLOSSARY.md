@@ -4,6 +4,12 @@ Crumbs manages food information from multiple sources.
 
 ## Language
 
+**Positive**:
+Greater than or equal to zero (`>= 0`). Includes zero.
+
+**Strictly positive**:
+Greater than zero (`> 0`). Excludes zero.
+
 **Food**:
 A food entry supplied by a source, whether an ordinary ingredient or a branded product.
 
@@ -77,10 +83,10 @@ The weight from a profile’s most recent recorded weight measurement. It is unk
 An optional body weight that a person wants to reach.
 
 **Weight change goal**:
-The change in body mass that a person wants over time. Negative values mean weight loss, positive values mean weight gain, and zero means no weight change.
+The change in body mass that a person wants over time. Negative values mean weight loss, strictly positive values mean weight gain, and zero means no weight change.
 
 **Calorie balance goal**:
-The desired difference between calorie intake and maintenance calories for a person's weight change goal. Negative values mean a deficit, and positive values mean a surplus.
+The desired difference between calorie intake and maintenance calories for a person's weight change goal. Negative values mean a deficit, and strictly positive values mean a surplus.
 
 **Basal metabolic rate (BMR)**:
 The estimated daily energy expenditure at rest, calculated from profile information or supplied as a custom value.

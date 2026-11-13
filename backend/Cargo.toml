@@ -30,6 +30,7 @@ crumbs-import = { path = "import" }
 crumbs-server = { path = "server" }
 futures-executor = "0.3"
 http = "1"
+humantime = "2.4.0"
 nix = { version = "0.31.3", features = ["process", "signal"] }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"

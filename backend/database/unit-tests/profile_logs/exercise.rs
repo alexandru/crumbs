@@ -5,18 +5,42 @@ use rust_decimal::Decimal;
 use crate::profile_logs::ExerciseDuration;
 
 #[test]
-fn exercise_duration_wraps_validated_duration() -> Result<(), Box<dyn Error>> {
+fn exercise_duration_parses_and_formats() -> Result<(), Box<dyn Error>> {
     use std::time::Duration;
 
-    use crate::duration::DurationError;
-
-    let duration = ExerciseDuration::new(Duration::from_secs(1800))?;
-    assert_eq!(*duration.value().value(), Duration::from_secs(1800));
-    assert_eq!(serde_json::to_value(duration)?, serde_json::json!("1800 s"));
+    let duration = ExerciseDuration::new(Duration::from_secs(1800));
+    assert_eq!(*duration.value(), Duration::from_secs(1800));
+    for value in ["1800 s", "30 min", "0.5 h", "30min", "20 min 10 min"] {
+        let parsed: ExerciseDuration = serde_json::from_value(serde_json::json!(value))?;
+        assert_eq!(parsed, duration);
+        assert_eq!(serde_json::to_value(parsed)?, serde_json::json!("1800 s"));
+        assert_eq!(parsed.to_string(), "1800 s");
+    }
+    for (value, expected) in [
+        ("0 min", "0 s"),
+        ("0.5 s", "0.5 s"),
+        ("0.000000001 s", "0.000000001 s"),
+    ] {
+        let parsed: ExerciseDuration = serde_json::from_value(serde_json::json!(value))?;
+        assert_eq!(serde_json::to_value(parsed)?, serde_json::json!(expected));
+    }
+    let max = ExerciseDuration::new(Duration::MAX);
+    let encoded = serde_json::to_value(max)?;
     assert_eq!(
-        ExerciseDuration::new(Duration::ZERO),
-        Err(DurationError::NonPositive)
+        encoded,
+        serde_json::json!("18446744073709551615.999999999 s")
     );
+    assert_eq!(serde_json::from_value::<ExerciseDuration>(encoded)?, max);
+    assert_eq!(
+        *ExerciseDuration::new(Duration::ZERO).value(),
+        Duration::ZERO
+    );
+    for value in ["-1 min", "invalid", "18446744073709551616 s"] {
+        assert!(
+            serde_json::from_value::<ExerciseDuration>(serde_json::json!(value)).is_err(),
+            "accepted {value}"
+        );
+    }
     Ok(())
 }
 

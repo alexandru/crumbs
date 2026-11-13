@@ -488,7 +488,6 @@ fn exercise_entry_validates_fields_and_patch() -> Result<(), Box<dyn Error>> {
     for (field, value) in [
         ("exercise_type", serde_json::json!("  ")),
         ("intensity", serde_json::json!("extreme")),
-        ("duration", serde_json::json!("0 min")),
         ("duration", serde_json::json!(-1)),
         ("calories_burned", serde_json::json!("-1 kcal")),
         ("calories_burned", serde_json::json!("2 kJ")),
