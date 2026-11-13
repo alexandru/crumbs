@@ -49,11 +49,23 @@ fn exercise_duration_parses_exact_units_and_canonicalizes_seconds() -> Result<()
 }
 
 #[test]
-fn exercise_type_and_calories_constructors_validate() {
+fn exercise_type_and_calories_constructors_validate() -> Result<(), Box<dyn Error>> {
     use crate::nutrition_model::Kcal;
     use crate::profile_logs::{ExerciseCalories, ExerciseType};
 
-    assert!(ExerciseType::new("  ").is_err());
+    use crate::text::NonBlankString;
+
+    let exercise_type = ExerciseType(NonBlankString::new("  walking  ")?);
+    assert_eq!(
+        serde_json::to_value(&exercise_type)?,
+        serde_json::json!("  walking  ")
+    );
+    assert_eq!(
+        serde_json::from_value::<ExerciseType>(serde_json::json!("  walking  "))?,
+        exercise_type
+    );
+    assert!(serde_json::from_value::<ExerciseType>(serde_json::json!("  ")).is_err());
     assert!(ExerciseCalories::new(Kcal::new(Decimal::NEGATIVE_ONE)).is_err());
     assert!(ExerciseCalories::new(Kcal::ZERO).is_ok());
+    Ok(())
 }

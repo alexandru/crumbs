@@ -7,42 +7,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::nutrition_model::{self, Kcal};
 use crate::profiles::{NullablePatch, Patch};
+use crate::text::NonBlankString;
 
 use super::ProfileLogError;
 
 /// The activity name as supplied, without a catalog reference.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ExerciseType(String);
-
-impl ExerciseType {
-    /// Creates an activity name and preserves its text.
-    ///
-    /// # Errors
-    ///
-    /// Returns InvalidInput if the name is blank.
-    pub fn new(value: impl Into<String>) -> Result<Self, ProfileLogError> {
-        let value = value.into();
-        if value.trim().is_empty() {
-            return Err(ProfileLogError::InvalidInput(
-                "exercise type must not be blank".to_owned(),
-            ));
-        }
-
-        Ok(Self(value))
-    }
-
-    /// Returns the activity name as supplied.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for ExerciseType {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::new(String::deserialize(deserializer)?).map_err(D::Error::custom)
-    }
-}
+pub struct ExerciseType(pub NonBlankString);
 
 /// The reported effort for an exercise session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
