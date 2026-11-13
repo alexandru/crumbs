@@ -398,18 +398,34 @@ fn canonicalizes_inclusive_unicode_qualifiers() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn nonnegative_kcal_validates_and_preserves_wire_value() -> Result<(), Box<dyn Error>> {
+fn nonnegative_measurements_validate_and_preserve_units() -> Result<(), Box<dyn Error>> {
     assert_eq!(
-        NonNegativeKcal::try_from(Kcal::from(-1)),
+        NonNegative::new(Kcal::from(-1)),
         Err(QuantityError::Negative)
     );
-    assert!(serde_json::from_str::<NonNegativeKcal>(r#""-1 kcal""#).is_err());
-    let zero = NonNegativeKcal::try_from(Kcal::ZERO)?;
-    assert_eq!(*zero.value(), Kcal::ZERO);
-    assert_eq!(serde_json::to_string(&zero)?, r#""0 kcal""#);
     assert_eq!(
-        serde_json::from_str::<NonNegativeKcal>(r#""0 kcal""#)?,
-        zero
+        NonNegative::new(Grams::from(-1)),
+        Err(QuantityError::Negative)
+    );
+    assert!(serde_json::from_str::<NonNegative<Kcal>>(r#""-1 kcal""#).is_err());
+    assert!(serde_json::from_str::<NonNegative<Grams>>(r#""-1 g""#).is_err());
+
+    for amount in [0, 1] {
+        let kcal = NonNegative::new(Kcal::from(amount))?;
+        assert_eq!(*kcal.value(), Kcal::from(amount));
+        let json = format!("\"{amount} kcal\"");
+        assert_eq!(serde_json::to_string(&kcal)?, json);
+        assert_eq!(serde_json::from_str::<NonNegative<Kcal>>(&json)?, kcal);
+
+        let grams = NonNegative::new(Grams::from(amount))?;
+        assert_eq!(*grams.value(), Grams::from(amount));
+        let json = format!("\"{amount} g\"");
+        assert_eq!(serde_json::to_string(&grams)?, json);
+        assert_eq!(serde_json::from_str::<NonNegative<Grams>>(&json)?, grams);
+    }
+    assert_eq!(
+        NonNegative::<Kcal>::try_from(Kcal::from(1))?,
+        NonNegative::new(Kcal::from(1))?
     );
     Ok(())
 }

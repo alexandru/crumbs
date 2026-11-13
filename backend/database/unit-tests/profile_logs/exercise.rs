@@ -48,5 +48,9 @@ fn exercise_type_and_calories_constructors_validate() -> Result<(), Box<dyn Erro
         *ExerciseCalories::new(Kcal::ZERO)?.value().value(),
         Kcal::ZERO
     );
+    assert_eq!(
+        *ExerciseCalories::new(Kcal::from(1))?.value().value(),
+        Kcal::from(1)
+    );
     Ok(())
 }

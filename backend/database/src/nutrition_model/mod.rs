@@ -9,7 +9,7 @@ pub use model::{
 };
 pub use quantity::{
     Centimetres, Energy, FixedUnit, Grams, Kcal, Kilograms, Kilojoules, Litres, Mass,
-    MeasuredQuantity, Measurement, Micrograms, Milligrams, Millilitres, NonNegativeKcal, PerDay,
+    MeasuredQuantity, Measurement, Micrograms, Milligrams, Millilitres, NonNegative, PerDay,
     PerWeek, Qualifier, QuantityError, Ratio, Reported, Volume,
 };
 

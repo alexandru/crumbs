@@ -2,7 +2,7 @@ use crumbs_derive::{AliasTryNew, AliasValue, Display};
 use serde::{Deserialize, Serialize};
 
 use crate::duration::PositiveDuration;
-use crate::nutrition_model::NonNegativeKcal;
+use crate::nutrition_model::{Kcal, NonNegative};
 use crate::profiles::{NullablePatch, Patch};
 use crate::text::NonBlankString;
 
@@ -31,7 +31,7 @@ pub struct ExerciseDuration(PositiveDuration);
 /// Nonnegative energy burned during an exercise session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AliasTryNew, AliasValue)]
 #[serde(transparent)]
-pub struct ExerciseCalories(NonNegativeKcal);
+pub struct ExerciseCalories(NonNegative<Kcal>);
 
 /// Free-text notes preserved as supplied.
 pub type ExerciseNotes = String;

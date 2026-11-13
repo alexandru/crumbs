@@ -301,15 +301,18 @@ measurement!(Kilojoules, "kJ");
 measurement!(Centimetres, "cm");
 measurement!(Kilograms, "kg");
 
-/// A nonnegative energy amount in kilocalories.
+/// A measurement whose value is zero or positive, retaining its unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, crumbs_derive::AliasValue)]
 #[serde(transparent)]
-pub struct NonNegativeKcal(Kcal);
+pub struct NonNegative<T: Measurement>(T);
 
-impl TryFrom<Kcal> for NonNegativeKcal {
-    type Error = QuantityError;
-
-    fn try_from(value: Kcal) -> Result<Self, Self::Error> {
+impl<T: Measurement> NonNegative<T> {
+    /// Creates a measurement without changing its value or unit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QuantityError::Negative`] if the value is negative.
+    pub fn new(value: T) -> Result<Self, QuantityError> {
         if value.is_negative() {
             return Err(QuantityError::Negative);
         }
@@ -318,9 +321,18 @@ impl TryFrom<Kcal> for NonNegativeKcal {
     }
 }
 
-impl<'de> Deserialize<'de> for NonNegativeKcal {
+// A generic TryFrom<T> conflicts with the standard blanket implementation.
+impl TryFrom<Kcal> for NonNegative<Kcal> {
+    type Error = QuantityError;
+
+    fn try_from(value: Kcal) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl<'de, T: Measurement + Deserialize<'de>> Deserialize<'de> for NonNegative<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::try_from(Kcal::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+        Self::new(T::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 }
 
