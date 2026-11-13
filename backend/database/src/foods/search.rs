@@ -4,7 +4,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::future::Future;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::model::{FoodLimit, StoredFood};
 
@@ -38,12 +38,9 @@ pub trait FoodSearch: Sync {
     ) -> impl Future<Output = Result<SearchResults, SearchError<Self::Error>>> + Send;
 }
 
-/// A nonblank Crumbs full-text expression.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct SearchQuery(String);
-
-impl SearchQuery {
+crate::text::string_newtype! {
+    /// A nonblank Crumbs full-text expression.
+    pub struct SearchQuery;
     /// Creates a search query from a Crumbs full-text expression.
     ///
     /// # Errors
@@ -51,35 +48,11 @@ impl SearchQuery {
     /// Returns [`SearchQueryError`] when the expression is blank or contains a
     /// NUL character. Expressions rejected by the current search adapter are reported by
     /// [`FoodSearch::search_foods`](super::FoodSearch::search_foods).
-    pub fn new(value: impl Into<String>) -> Result<Self, SearchQueryError> {
-        let value = value.into();
-        if value.trim().is_empty() {
-            return Err(SearchQueryError::Empty);
-        }
-        if value.contains('\0') {
-            return Err(SearchQueryError::Nul);
-        }
-        Ok(Self(value))
-    }
-
-    /// Returns the Crumbs full-text expression.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for SearchQuery {
-    type Error = SearchQueryError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<SearchQuery> for String {
-    fn from(value: SearchQuery) -> Self {
-        value.0
-    }
+    fn new -> SearchQueryError;
+    validate = |value: &str| crate::text::nonblank_without_nul(value).map_err(|error| match error {
+        crate::text::TextError::Blank => SearchQueryError::Empty,
+        crate::text::TextError::Nul => SearchQueryError::Nul,
+    });
 }
 
 /// Error produced when input cannot form a valid [`SearchQuery`].

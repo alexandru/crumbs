@@ -1,43 +1,27 @@
-use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer, Serialize};
+use std::fmt;
+use std::time::Duration;
 
-use crate::nutrition_model::{Kcal, Minutes};
+use rust_decimal::Decimal;
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::nutrition_model::{self, Kcal};
 use crate::profiles::{NullablePatch, Patch};
 
 use super::ProfileLogError;
 
-/// The activity name as supplied, without a catalog reference.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub struct ExerciseType(String);
-
-impl ExerciseType {
+crate::text::string_newtype! {
+    /// The activity name as supplied, without a catalog reference.
+    pub struct ExerciseType;
     /// Creates an activity name and preserves its text.
     ///
     /// # Errors
     ///
     /// Returns InvalidInput if the name is blank.
-    pub fn new(value: impl Into<String>) -> Result<Self, ProfileLogError> {
-        let value = value.into();
-        if value.trim().is_empty() {
-            return Err(ProfileLogError::InvalidInput(
-                "exercise type must not be blank".to_owned(),
-            ));
-        }
-
-        Ok(Self(value))
-    }
-
-    /// Returns the activity name as supplied.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for ExerciseType {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::new(String::deserialize(deserializer)?).map_err(D::Error::custom)
-    }
+    fn new -> ProfileLogError;
+    validate = |value: &str| crate::text::nonblank(value).map_err(|_| {
+        ProfileLogError::InvalidInput("exercise type must not be blank".to_owned())
+    });
 }
 
 /// The reported effort for an exercise session.
@@ -50,19 +34,18 @@ pub enum ExerciseIntensity {
     VeryHard,
 }
 
-/// A positive, exact exercise duration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub struct ExerciseDuration(Minutes);
+/// A positive exercise duration with nanosecond precision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExerciseDuration(Duration);
 
 impl ExerciseDuration {
     /// Creates a positive duration.
     ///
     /// # Errors
     ///
-    /// Returns InvalidInput if the duration is zero or negative.
-    pub fn new(value: Minutes) -> Result<Self, ProfileLogError> {
-        if !value.is_positive() {
+    /// Returns InvalidInput if the duration is zero.
+    pub fn new(value: Duration) -> Result<Self, ProfileLogError> {
+        if value.is_zero() {
             return Err(ProfileLogError::InvalidInput(
                 "exercise duration must be positive".to_owned(),
             ));
@@ -71,15 +54,78 @@ impl ExerciseDuration {
         Ok(Self(value))
     }
 
-    /// Returns the exact duration in minutes.
-    pub const fn value(self) -> Minutes {
+    /// Returns the duration.
+    pub const fn value(self) -> Duration {
         self.0
+    }
+
+    fn parse(value: &str) -> Result<Self, ProfileLogError> {
+        let invalid = || {
+            ProfileLogError::InvalidInput(
+                "exercise duration must be an exact decimal with unit s, min, or h".to_owned(),
+            )
+        };
+        let (number, unit) = value
+            .trim()
+            .rsplit_once(char::is_whitespace)
+            .ok_or_else(invalid)?;
+        let factor: u128 = match unit {
+            "s" => 1_000_000_000,
+            "min" => 60_000_000_000,
+            "h" => 3_600_000_000_000,
+            _ => return Err(invalid()),
+        };
+
+        let decimal = nutrition_model::parse_decimal(number.trim()).map_err(|_| invalid())?;
+        if decimal <= Decimal::ZERO {
+            return Err(ProfileLogError::InvalidInput(
+                "exercise duration must be positive".to_owned(),
+            ));
+        }
+
+        let mantissa = u128::try_from(decimal.mantissa()).map_err(|_| invalid())?;
+        let divisor = 10_u128.pow(decimal.scale());
+        // Reduce the fraction before multiplication to test nanosecond precision without rounding.
+        let common = gcd(divisor, factor);
+        let divisor = divisor / common;
+        let factor = factor / common;
+        if mantissa % divisor != 0 {
+            return Err(ProfileLogError::InvalidInput(
+                "exercise duration must have nanosecond precision".to_owned(),
+            ));
+        }
+
+        let count = mantissa / divisor;
+        if count > Duration::MAX.as_nanos() / factor {
+            return Err(ProfileLogError::InvalidInput(
+                "exercise duration is too large".to_owned(),
+            ));
+        }
+
+        let nanos = count * factor;
+        let secs = u64::try_from(nanos / 1_000_000_000).map_err(|_| invalid())?;
+        let subsec = u32::try_from(nanos % 1_000_000_000).map_err(|_| invalid())?;
+        Self::new(Duration::new(secs, subsec))
+    }
+}
+
+impl fmt::Display for ExerciseDuration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let seconds =
+            Decimal::from(self.0.as_secs()) + Decimal::new(i64::from(self.0.subsec_nanos()), 9);
+        write!(formatter, "{} s", seconds.normalize())
+    }
+}
+
+impl Serialize for ExerciseDuration {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
     }
 }
 
 impl<'de> Deserialize<'de> for ExerciseDuration {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::new(Minutes::deserialize(deserializer)?).map_err(D::Error::custom)
+        Self::parse(&String::deserialize(deserializer)?).map_err(D::Error::custom)
     }
 }
 
@@ -161,6 +207,13 @@ impl ExerciseLogPatch {
             },
         }
     }
+}
+
+fn gcd(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }
 
 fn replacement<T: Clone>(patch: &Patch<T>, current: &T) -> T {

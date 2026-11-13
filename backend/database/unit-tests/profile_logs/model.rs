@@ -481,7 +481,9 @@ fn journal_text_rejects_blank_and_preserves_original_content() -> Result<(), Box
 fn exercise_entry_validates_fields_and_patch() -> Result<(), Box<dyn Error>> {
     let valid = serde_json::json!({"type":"exercise", "exercise_type":"  walking  ", "intensity":"moderate", "duration":"30.5 min", "calories_burned":"150 kcal", "notes":"Outside"});
     let data: ProfileLogData = serde_json::from_value(valid.clone())?;
-    assert_eq!(serde_json::to_value(data)?, valid);
+    let mut expected = valid.clone();
+    expected["duration"] = serde_json::json!("1830 s");
+    assert_eq!(serde_json::to_value(data)?, expected);
     let _: LogInput = serde_json::from_value(valid.clone())?;
     for (field, value) in [
         ("exercise_type", serde_json::json!("  ")),
@@ -533,6 +535,8 @@ fn exercise_intensities_and_optional_notes_round_trip() -> Result<(), Box<dyn Er
     }
     let input = serde_json::json!({"type":"exercise", "exercise_type":"walking", "intensity":"easy", "duration":"30 min", "calories_burned":"0 kcal", "notes":null});
     let data: ProfileLogData = serde_json::from_value(input.clone())?;
-    assert_eq!(serde_json::to_value(data)?, input);
+    let mut expected = input;
+    expected["duration"] = serde_json::json!("1800 s");
+    assert_eq!(serde_json::to_value(data)?, expected);
     Ok(())
 }

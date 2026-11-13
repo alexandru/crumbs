@@ -1668,7 +1668,9 @@ async fn exercise_entries_preserve_fields_and_weight() -> Result<(), Box<dyn Err
         .create_profile_log(owner, profile.id, &input)
         .await?
         .ok_or("missing exercise")?;
-    assert_eq!(serde_json::to_value(&exercise.data)?, entry);
+    let mut expected = entry.clone();
+    expected["duration"] = serde_json::json!("1830 s");
+    assert_eq!(serde_json::to_value(&exercise.data)?, expected);
     assert_eq!(
         database.profile_log(other, profile.id, exercise.id).await?,
         None
@@ -1712,7 +1714,7 @@ async fn exercise_entries_preserve_fields_and_weight() -> Result<(), Box<dyn Err
         .ok_or("missing exercise")?;
     assert_eq!(
         serde_json::to_value(&updated.data)?,
-        serde_json::json!({"type":"exercise", "exercise_type":"walking", "intensity":"moderate", "duration":"45 min", "calories_burned":"150 kcal", "notes":null})
+        serde_json::json!({"type":"exercise", "exercise_type":"walking", "intensity":"moderate", "duration":"2700 s", "calories_burned":"150 kcal", "notes":null})
     );
     assert_eq!(
         database.profile_log(owner, profile.id, exercise.id).await?,

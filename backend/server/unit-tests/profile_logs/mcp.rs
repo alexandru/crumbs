@@ -770,12 +770,14 @@ async fn exercise_mcp_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
         created.json
     );
     let log = &created.json["result"]["structuredContent"];
-    assert_eq!(log["data"], entry);
+    let mut expected = entry.clone();
+    expected["duration"] = json!("1830 s");
+    assert_eq!(log["data"], expected);
     let id = log["id"].as_i64().ok_or("exercise ID is missing")?;
     let updated = mcp_call_router_with_token(&app.router, 2, "update_profile_log", json!({"profile_id":profile_id, "id":id, "patch":{"entry":{"type":"exercise", "intensity":"easy", "notes":null}}}), TEST_MCP_WRITE_ACCESS_TOKEN).await?;
     assert_eq!(
         updated.json["result"]["structuredContent"]["data"],
-        json!({"type":"exercise", "exercise_type":"weights training", "intensity":"easy", "duration":"30.5 min", "calories_burned":"150 kcal", "notes":null})
+        json!({"type":"exercise", "exercise_type":"weights training", "intensity":"easy", "duration":"1830 s", "calories_burned":"150 kcal", "notes":null})
     );
     let listed = mcp_call_router_with_token(
         &app.router,

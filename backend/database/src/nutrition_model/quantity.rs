@@ -297,7 +297,6 @@ measurement!(Micrograms, "µg");
 measurement!(Millilitres, "ml");
 measurement!(Litres, "l");
 measurement!(Kcal, "kcal");
-measurement!(Minutes, "min");
 measurement!(Kilojoules, "kJ");
 measurement!(Centimetres, "cm");
 measurement!(Kilograms, "kg");
@@ -978,7 +977,7 @@ fn split_quantity(value: &str) -> Result<(&str, &str), QuantityError> {
         .ok_or_else(|| QuantityError::Unit(value.to_owned()))
 }
 
-fn parse_decimal(value: &str) -> Result<Decimal, QuantityError> {
+pub(crate) fn parse_decimal(value: &str) -> Result<Decimal, QuantityError> {
     let expanded;
     let value = if let Some((base, exponent)) = value.split_once(['e', 'E']) {
         expanded = expand_decimal(base, exponent)

@@ -8,48 +8,24 @@ use serde::{Deserialize, Serialize};
 use super::model::{FoodCategory, FoodId, FoodLimit, FoodNotes, StoredFood};
 use crate::nutrition_model::FoodData;
 
-/// A nonblank custom food description without NUL characters.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct CustomFoodDescription(String);
-
-impl CustomFoodDescription {
+crate::text::string_newtype! {
+    /// A nonblank custom food description without NUL characters.
+    pub struct CustomFoodDescription;
     /// Creates a custom food description without changing its wording.
     ///
     /// # Errors
     ///
     /// Returns [`InvalidCustomFoodDescription`] if the value is blank after trimming or contains
     /// a NUL character.
-    pub fn new(value: impl Into<String>) -> Result<Self, InvalidCustomFoodDescription> {
-        let value = value.into();
-        if value.trim().is_empty() || value.contains('\0') {
-            return Err(InvalidCustomFoodDescription);
-        }
-        Ok(Self(value))
-    }
+    fn new -> InvalidCustomFoodDescription;
+    validate = |value: &str| crate::text::nonblank_without_nul(value)
+        .map_err(|_| InvalidCustomFoodDescription);
+}
 
-    /// Returns the description as supplied.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
+impl CustomFoodDescription {
     /// Returns the owned description string.
     pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl TryFrom<String> for CustomFoodDescription {
-    type Error = InvalidCustomFoodDescription;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<CustomFoodDescription> for String {
-    fn from(value: CustomFoodDescription) -> Self {
-        value.0
+        self.into()
     }
 }
 

@@ -1065,13 +1065,15 @@ async fn exercise_rest_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
         )?)
         .await?;
     assert_eq!(created.status, StatusCode::CREATED, "{:?}", created.json);
-    assert_eq!(created.json["data"], entry);
+    let mut expected = entry.clone();
+    expected["duration"] = json!("1830 s");
+    assert_eq!(created.json["data"], expected);
     let id = created.json["id"]
         .as_i64()
         .ok_or("exercise ID is missing")?;
     let item_uri = format!("{uri}/{id}");
     let fetched = app.request(http_request(&item_uri)?).await?;
-    assert_eq!(fetched.json["data"], entry);
+    assert_eq!(fetched.json["data"], expected);
     let wrong_profile = app
         .request(http_request(&format!("/profiles/{other_id}/logs/{id}"))?)
         .await?;
@@ -1097,7 +1099,7 @@ async fn exercise_rest_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
     assert_eq!(updated.status, StatusCode::OK);
     assert_eq!(
         updated.json["data"],
-        json!({"type":"exercise", "exercise_type":"walking", "intensity":"moderate", "duration":"45 min", "calories_burned":"150 kcal", "notes":null})
+        json!({"type":"exercise", "exercise_type":"walking", "intensity":"moderate", "duration":"2700 s", "calories_burned":"150 kcal", "notes":null})
     );
     let invalid = app
         .request(http_json_request(
