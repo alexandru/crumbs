@@ -1,4 +1,4 @@
-use super::{expand_display, expand_try_new, expand_value};
+use super::{expand_alias_try_new, expand_alias_value, expand_display};
 
 #[test]
 fn rejects_unsupported_shapes() -> Result<(), Box<dyn std::error::Error>> {
@@ -10,21 +10,21 @@ fn rejects_unsupported_shapes() -> Result<(), Box<dyn std::error::Error>> {
         "union Choice { value: u8 }",
     ] {
         let input = syn::parse_str(source)?;
-        let error = match expand_try_new(&input) {
+        let error = match expand_alias_try_new(&input) {
             Ok(_) => return Err(format!("accepted {source}").into()),
             Err(error) => error,
         };
         assert_eq!(
             error.to_string(),
-            "TryNew requires a single-field tuple struct"
+            "AliasTryNew requires a single-field tuple struct"
         );
-        let error = match expand_value(&input) {
-            Ok(_) => return Err(format!("Value accepted {source}").into()),
+        let error = match expand_alias_value(&input) {
+            Ok(_) => return Err(format!("AliasValue accepted {source}").into()),
             Err(error) => error,
         };
         assert_eq!(
             error.to_string(),
-            "Value requires a single-field tuple struct"
+            "AliasValue requires a single-field tuple struct"
         );
         let error = match expand_display(&input) {
             Ok(_) => return Err(format!("Display accepted {source}").into()),

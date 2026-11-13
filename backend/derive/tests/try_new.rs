@@ -1,16 +1,16 @@
-use crumbs_derive::TryNew;
+use crumbs_derive::AliasTryNew;
 
-#[derive(Debug, PartialEq, TryNew)]
+#[derive(Debug, PartialEq, AliasTryNew)]
 struct Byte(u8);
 
-#[derive(Debug, PartialEq, TryNew)]
+#[derive(Debug, PartialEq, AliasTryNew)]
 struct Generic<T>(T)
 where
     T: PartialEq;
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, PartialEq, TryNew)]
-struct Collision<__CrumbsTryNewInput>(__CrumbsTryNewInput);
+#[derive(Debug, PartialEq, AliasTryNew)]
+struct Collision<__CrumbsAliasTryNewInput>(__CrumbsAliasTryNewInput);
 
 #[test]
 fn forwards_success_and_failure() -> Result<(), Box<dyn std::error::Error>> {
@@ -22,9 +22,9 @@ fn forwards_success_and_failure() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 mod values {
-    use crumbs_derive::{Display, Value};
+    use crumbs_derive::{AliasValue, Display};
 
-    #[derive(Value)]
+    #[derive(AliasValue)]
     pub struct Text(String);
 
     impl Text {
@@ -33,7 +33,7 @@ mod values {
         }
     }
 
-    #[derive(Display, Value)]
+    #[derive(Display, AliasValue)]
     pub struct Generic<T>(T)
     where
         T: PartialEq;

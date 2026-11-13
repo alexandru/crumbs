@@ -302,7 +302,7 @@ measurement!(Centimetres, "cm");
 measurement!(Kilograms, "kg");
 
 /// A nonnegative energy amount in kilocalories.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, crumbs_derive::Value)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, crumbs_derive::AliasValue)]
 #[serde(transparent)]
 pub struct NonNegativeKcal(Kcal);
 

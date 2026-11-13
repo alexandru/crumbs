@@ -4,14 +4,14 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
-use crumbs_derive::Value;
+use crumbs_derive::AliasValue;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::nutrition_model;
 
 /// A positive duration with nanosecond precision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Value)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AliasValue)]
 pub struct PositiveDuration(Duration);
 
 impl PositiveDuration {

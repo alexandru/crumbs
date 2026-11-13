@@ -9,20 +9,20 @@ use syn::{Data, DeriveInput, Fields, GenericParam};
 ///
 /// Construction delegates to the inner type's `TryFrom` implementation and returns
 /// its error unchanged. The constructor accepts each input type supported by the inner type.
-#[proc_macro_derive(TryNew)]
-pub fn derive_try_new(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(AliasTryNew)]
+pub fn derive_alias_try_new(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
-    match expand_try_new(&input) {
+    match expand_alias_try_new(&input) {
         Ok(output) => output.into(),
         Err(error) => error.into_compile_error().into(),
     }
 }
 
 /// Generates a borrowed `value(&self)` accessor for a single-field tuple struct.
-#[proc_macro_derive(Value)]
-pub fn derive_value(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(AliasValue)]
+pub fn derive_alias_value(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
-    match expand_value(&input) {
+    match expand_alias_value(&input) {
         Ok(output) => output.into(),
         Err(error) => error.into_compile_error().into(),
     }
@@ -38,12 +38,12 @@ pub fn derive_display(input: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_try_new(input: &DeriveInput) -> syn::Result<TokenStream2> {
-    let field = newtype_field(input, "TryNew")?;
+fn expand_alias_try_new(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let field = newtype_field(input, "AliasTryNew")?;
 
     let name = &input.ident;
     let inner = &field.ty;
-    let mut parameter = format_ident!("__CrumbsTryNewInput");
+    let mut parameter = format_ident!("__CrumbsAliasTryNewInput");
     while input.generics.params.iter().any(|generic| match generic {
         GenericParam::Type(generic) => generic.ident == parameter,
         GenericParam::Const(generic) => generic.ident == parameter,
@@ -71,8 +71,8 @@ fn expand_try_new(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
-fn expand_value(input: &DeriveInput) -> syn::Result<TokenStream2> {
-    let field = newtype_field(input, "Value")?;
+fn expand_alias_value(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let field = newtype_field(input, "AliasValue")?;
     let name = &input.ident;
     let inner = &field.ty;
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();

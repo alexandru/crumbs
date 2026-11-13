@@ -1,4 +1,4 @@
-use crumbs_derive::{Display, TryNew, Value};
+use crumbs_derive::{AliasTryNew, AliasValue, Display};
 use serde::{Deserialize, Serialize};
 
 use crate::duration::PositiveDuration;
@@ -7,7 +7,7 @@ use crate::profiles::{NullablePatch, Patch};
 use crate::text::NonBlankString;
 
 /// The activity name as supplied, without a catalog reference.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TryNew, Value)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, AliasTryNew, AliasValue)]
 #[serde(transparent)]
 pub struct ExerciseType(NonBlankString);
 
@@ -22,12 +22,14 @@ pub enum ExerciseIntensity {
 }
 
 /// A positive exercise duration with nanosecond precision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TryNew, Value, Display)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AliasTryNew, AliasValue, Display,
+)]
 #[serde(transparent)]
 pub struct ExerciseDuration(PositiveDuration);
 
 /// Nonnegative energy burned during an exercise session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TryNew, Value)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AliasTryNew, AliasValue)]
 #[serde(transparent)]
 pub struct ExerciseCalories(NonNegativeKcal);
 
