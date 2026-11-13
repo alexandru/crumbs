@@ -13,4 +13,4 @@ pub use quantity::{
     PerWeek, Qualifier, QuantityError, Ratio, Reported, Volume,
 };
 
-pub(crate) use quantity::{KcalPerCm, KcalPerKg, parse_decimal};
+pub(crate) use quantity::{KcalPerCm, KcalPerKg};

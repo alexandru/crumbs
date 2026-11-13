@@ -182,13 +182,7 @@ fn reported_values_round_trip_exact_decimal_values_units_and_qualifiers()
 #[test]
 fn rejects_negative_incompatible_unknown_and_unrepresentable_measurements()
 -> Result<(), Box<dyn Error>> {
-    for input in [
-        "-1 g",
-        "15 ml",
-        "1 lb",
-        "0.12345678901234567890123456789 g",
-        "79228162514264337593543950336 g",
-    ] {
+    for input in ["-1 g", "15 ml", "1 lb", "79228162514264337593543950336 g"] {
         assert!(
             Reported::<Mass>::from_str(input).is_err(),
             "accepted invalid value {input}"
@@ -238,16 +232,24 @@ fn quantity_builder_parses_values_and_units_without_combining_strings() -> Resul
 }
 
 #[test]
-fn parses_scientific_decimal_notation_exactly_without_rounding() -> Result<(), Box<dyn Error>> {
-    for (input, expected) in [("1e-3 g", "0.001 g"), ("1e2 g", "100 g")] {
+fn parses_decimal_notation_with_library_precision() -> Result<(), Box<dyn Error>> {
+    for (input, expected) in [
+        ("1e-3 g", "0.001 g"),
+        ("1e2 g", "100 g"),
+        (
+            "1.00000000000000000000000000001e0 g",
+            "1.0000000000000000000000000000 g",
+        ),
+    ] {
         let parsed = Reported::<Mass>::from_str(input)?;
         assert_eq!(parsed.to_string(), expected);
     }
-    for input in ["1e-29 g", "123456789012345678901234567890e-29 g"] {
-        assert!(
-            Reported::<Mass>::from_str(input).is_err(),
-            "accepted unsupported precision {input}"
-        );
+    assert_eq!(
+        Reported::<Mass>::from_str("0.12345678901234567890123456789 g")?.to_string(),
+        "0.1234567890123456789012345679 g"
+    );
+    for input in ["1e-29 g", "bad g"] {
+        assert!(Reported::<Mass>::from_str(input).is_err());
     }
     Ok(())
 }

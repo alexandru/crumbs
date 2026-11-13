@@ -540,8 +540,8 @@ fn definitions() -> Value {
                 "type": {"const": "exercise"},
                 "exercise_type": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank exercise type, preserved as supplied."},
                 "intensity": {"type": "string", "enum": ["easy", "moderate", "hard", "very_hard"]},
-                "duration": {"type": "string", "description": "Positive exact decimal duration with unit s, min, or h, for example 30 min. Responses use seconds."},
-                "calories_burned": {"type": "string", "description": "Nonnegative exact energy with the kcal unit, for example 150 kcal."},
+                "duration": {"type": "string", "description": "Positive decimal duration with unit s, min, or h, for example 30 min. Responses use seconds."},
+                "calories_burned": {"type": "string", "description": "Nonnegative energy with the kcal unit, for example 150 kcal."},
                 "notes": {"anyOf": [{"type": "string"}, {"type": "null"}]}
             }
         },
@@ -553,8 +553,8 @@ fn definitions() -> Value {
                 "type": {"const": "exercise"},
                 "exercise_type": {"type": "string", "minLength": 1, "pattern": "\\S"},
                 "intensity": {"type": "string", "enum": ["easy", "moderate", "hard", "very_hard"]},
-                "duration": {"type": "string", "description": "Positive exact decimal duration with unit s, min, or h. Responses use seconds."},
-                "calories_burned": {"type": "string", "description": "Nonnegative exact energy with the kcal unit."},
+                "duration": {"type": "string", "description": "Positive decimal duration with unit s, min, or h. Responses use seconds."},
+                "calories_burned": {"type": "string", "description": "Nonnegative energy with the kcal unit."},
                 "notes": {"anyOf": [{"type": "string"}, {"type": "null"}], "description": "Null clears notes; omission preserves them."}
             }
         },

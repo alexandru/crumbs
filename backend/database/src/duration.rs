@@ -8,8 +8,6 @@ use crumbs_derive::AliasValue;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::nutrition_model;
-
 /// A positive duration with nanosecond precision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, AliasValue)]
 pub struct PositiveDuration(Duration);
@@ -28,7 +26,7 @@ impl PositiveDuration {
             _ => return Err(invalid()),
         };
 
-        let decimal = nutrition_model::parse_decimal(number.trim()).map_err(|_| invalid())?;
+        let decimal = number.trim().parse::<Decimal>().map_err(|_| invalid())?;
         if decimal <= Decimal::ZERO {
             return Err(DurationError::NonPositive);
         }
@@ -98,7 +96,7 @@ impl<'de> Deserialize<'de> for PositiveDuration {
 /// A duration is invalid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DurationError {
-    #[error("duration must be an exact decimal with unit s, min, or h")]
+    #[error("duration must be a decimal with unit s, min, or h")]
     Format,
     #[error("duration must be positive")]
     NonPositive,

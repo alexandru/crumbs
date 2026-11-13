@@ -585,7 +585,7 @@ async fn import_continues_after_sanitized_and_rejected_foods_with_diagnostics()
         ],
         "",
     );
-    let invalid_precision = food_record(
+    let rounded_precision = food_record(
         9605,
         "Foundation",
         &[nutrient(
@@ -617,7 +617,7 @@ async fn import_continues_after_sanitized_and_rejected_foods_with_diagnostics()
             sanitized,
             missing_description,
             invalid_unit,
-            invalid_precision,
+            rounded_precision,
             impossible_bound,
             invalid_serving,
             last,
@@ -633,7 +633,7 @@ async fn import_continues_after_sanitized_and_rejected_foods_with_diagnostics()
     .await?;
 
     assert_eq!(report.committed().get(), 7);
-    assert_eq!(report.sanitized().get(), 5);
+    assert_eq!(report.sanitized().get(), 4);
     assert_eq!(report.rejected().get(), 1);
     assert_eq!(food_count(&fixture.pool).await?, 7);
     food_row(&fixture.pool, "usda", "9601").await?;
@@ -698,11 +698,23 @@ async fn import_continues_after_sanitized_and_rejected_foods_with_diagnostics()
         Some("2 g")
     );
 
+    let rounded = food_row(&fixture.pool, "usda", "9605")
+        .await?
+        .parsed_data()?;
+    let protein = rounded
+        .nutrition
+        .as_ref()
+        .and_then(|profile| profile.nutrients.protein.as_ref());
+    assert_eq!(
+        protein.map(ToString::to_string).as_deref(),
+        Some("0.1234567890123456789012345679 g")
+    );
+
     let sanitized_diagnostics: Vec<_> = diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.kind == DiagnosticKind::Sanitized)
         .collect();
-    assert_eq!(sanitized_diagnostics.len(), 9);
+    assert_eq!(sanitized_diagnostics.len(), 8);
     for (source_food_id, field) in [
         ("9602", "energy"),
         ("9602", "protein"),
@@ -710,7 +722,6 @@ async fn import_continues_after_sanitized_and_rejected_foods_with_diagnostics()
         ("9602", "fibre"),
         ("9602", "carbohydrates.sugars.added"),
         ("9604", "nutrient[1003]"),
-        ("9605", "nutrient[1003]"),
         ("9606", "nutrient[1003]"),
     ] {
         assert!(

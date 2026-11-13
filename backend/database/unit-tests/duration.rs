@@ -17,6 +17,9 @@ fn exercise_duration_parses_exact_units_and_canonicalizes_seconds() -> Result<()
         let parsed: PositiveDuration = serde_json::from_value(serde_json::json!(value))?;
         assert_eq!(serde_json::to_value(parsed)?, serde_json::json!(value));
     }
+    let rounded: PositiveDuration =
+        serde_json::from_value(serde_json::json!("1.00000000000000000000000000001e0 s"))?;
+    assert_eq!(*rounded.value(), Duration::from_secs(1));
     let fractional_minute: PositiveDuration =
         serde_json::from_value(serde_json::json!("0.00000000005 min"))?;
     assert_eq!(*fractional_minute.value(), Duration::from_nanos(3));
