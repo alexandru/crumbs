@@ -689,26 +689,10 @@ impl Measurement for Mass {
 
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
         match unit {
-            "kg" => Ok(Self::Kilograms(Kilograms::new(
-                value
-                    .parse::<Decimal>()
-                    .map_err(|_| QuantityError::Decimal(value.to_owned()))?,
-            ))),
-            "g" => Ok(Self::Grams(Grams::new(
-                value
-                    .parse::<Decimal>()
-                    .map_err(|_| QuantityError::Decimal(value.to_owned()))?,
-            ))),
-            "mg" => Ok(Self::Milligrams(Milligrams::new(
-                value
-                    .parse::<Decimal>()
-                    .map_err(|_| QuantityError::Decimal(value.to_owned()))?,
-            ))),
-            "µg" => Ok(Self::Micrograms(Micrograms::new(
-                value
-                    .parse::<Decimal>()
-                    .map_err(|_| QuantityError::Decimal(value.to_owned()))?,
-            ))),
+            "kg" => Kilograms::parse_with_unit(value, unit).map(Self::Kilograms),
+            "g" => Grams::parse_with_unit(value, unit).map(Self::Grams),
+            "mg" => Milligrams::parse_with_unit(value, unit).map(Self::Milligrams),
+            "µg" => Micrograms::parse_with_unit(value, unit).map(Self::Micrograms),
             _ => Err(QuantityError::Unit(unit.to_owned())),
         }
     }
@@ -791,16 +775,8 @@ impl Measurement for Energy {
 
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
         match unit {
-            "kcal" => Ok(Self::Kcal(Kcal::new(
-                value
-                    .parse::<Decimal>()
-                    .map_err(|_| QuantityError::Decimal(value.to_owned()))?,
-            ))),
-            "kJ" => Ok(Self::Kilojoules(Kilojoules::new(
-                value
-                    .parse::<Decimal>()
-                    .map_err(|_| QuantityError::Decimal(value.to_owned()))?,
-            ))),
+            "kcal" => Kcal::parse_with_unit(value, unit).map(Self::Kcal),
+            "kJ" => Kilojoules::parse_with_unit(value, unit).map(Self::Kilojoules),
             _ => Err(QuantityError::Unit(unit.to_owned())),
         }
     }
