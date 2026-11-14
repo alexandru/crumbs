@@ -2,8 +2,7 @@ use std::error::Error as StdError;
 use std::io;
 
 use super::*;
-use crate::DatabaseConfig;
-use crate::runtime::Database;
+use crate::tests::open_database;
 
 #[tokio::test]
 async fn user_management_persists_normalized_names_and_credentials() -> Result<(), Box<dyn StdError>>
@@ -57,13 +56,4 @@ async fn user_management_persists_normalized_names_and_credentials() -> Result<(
     ));
     database.close().await;
     Ok(())
-}
-
-async fn open_database() -> Result<(tempfile::TempDir, Database), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let database = Database::open(DatabaseConfig {
-        path: directory.path().join("crumbs.db"),
-    })
-    .await?;
-    Ok((directory, database))
 }

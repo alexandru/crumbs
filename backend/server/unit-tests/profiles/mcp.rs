@@ -37,10 +37,13 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
             "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}
         }))?)
         .await?;
+
     assert_eq!(tools_response.status, StatusCode::OK);
+
     let tools = tools_response.json["result"]["tools"]
         .as_array()
         .ok_or("MCP tools list is missing")?;
+
     for name in [
         "create_profile",
         "list_profiles",
@@ -51,15 +54,18 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
             .iter()
             .find(|tool| tool["name"] == name)
             .ok_or("missing profile tool")?;
+
         for schema_name in ["inputSchema", "outputSchema"] {
             let schema = &tool[schema_name];
             assert!(schema.is_object(), "{name} missing {schema_name}");
-            assert_local_references(schema, schema)?;
+            crate::tests::assert_local_references(schema, schema)?;
         }
+
         let output = &tool["outputSchema"];
         assert_eq!(output["type"], "object");
         assert_eq!(output["oneOf"][1]["$ref"], "#/$defs/error");
         assert_eq!(output["oneOf"][2]["$ref"], "#/$defs/scope_error");
+
         let defs = &output["$defs"];
         if name == "list_profiles" {
             assert_eq!(output["oneOf"][0]["$ref"], "#/$defs/profile_list");
@@ -295,35 +301,6 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
             .map(Vec::len),
         Some(1)
     );
-    Ok(())
-}
-
-fn assert_local_references(
-    root: &serde_json::Value,
-    value: &serde_json::Value,
-) -> Result<(), Box<dyn Error>> {
-    match value {
-        serde_json::Value::Object(fields) => {
-            if let Some(reference) = fields.get("$ref") {
-                let reference = reference.as_str().ok_or("non-string schema reference")?;
-                let pointer = reference
-                    .strip_prefix('#')
-                    .ok_or("non-local schema reference")?;
-                if root.pointer(pointer).is_none() {
-                    return Err(format!("unresolved schema reference: {reference}").into());
-                }
-            }
-            for child in fields.values() {
-                assert_local_references(root, child)?;
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for child in values {
-                assert_local_references(root, child)?;
-            }
-        }
-        _ => {}
-    }
     Ok(())
 }
 

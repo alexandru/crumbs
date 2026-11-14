@@ -10,7 +10,7 @@ use crate::nutrition_model::FoodData;
 
 /// A nonblank custom food description without NUL characters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
+#[serde(try_from = "String")]
 pub struct CustomFoodDescription(String);
 
 impl CustomFoodDescription {
@@ -44,12 +44,6 @@ impl TryFrom<String> for CustomFoodDescription {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::new(value)
-    }
-}
-
-impl From<CustomFoodDescription> for String {
-    fn from(value: CustomFoodDescription) -> Self {
-        value.0
     }
 }
 

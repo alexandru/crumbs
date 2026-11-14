@@ -1,6 +1,6 @@
 use std::error::Error as StdError;
 use std::io;
-use std::io::Read;
+use std::io::{Cursor, Read};
 use std::thread;
 
 use tokio::sync::mpsc;
@@ -324,7 +324,7 @@ fn reports_io_failure_while_reading_a_later_record() -> Result<(), Box<dyn StdEr
     );
     let second_start = record_offset(&input, IO_FAILURE_SECOND_RECORD)?;
     let fail_after = second_start + IO_FAILURE_SECOND_RECORD.len() / 2;
-    let reader = FailingReader::new(input.as_bytes(), fail_after);
+    let reader = FailingReader::new(input.as_bytes(), u64::try_from(fail_after)?);
 
     let (result, foods) = collect_reader(reader, 1);
 
@@ -379,7 +379,7 @@ fn reports_io_failure_while_checking_trailing_input() -> Result<(), Box<dyn StdE
         "FoundationFoods",
         &[IO_FAILURE_FIRST_RECORD, IO_FAILURE_SECOND_RECORD],
     );
-    let reader = FailingReader::new(input.as_bytes(), input.len());
+    let reader = FailingReader::new(input.as_bytes(), u64::try_from(input.len())?);
 
     let (result, foods) = collect_reader(reader, 1);
 
@@ -697,7 +697,8 @@ fn streams_large_input_to_incremental_consumer() -> Result<(), Box<dyn StdError>
         first
     });
 
-    let mut reader = CountingReader::new(input.as_bytes());
+    let mut reader = Cursor::new(input.as_bytes());
+
     let result = stream_foods(&mut reader, &sender);
     drop(sender);
 
@@ -705,7 +706,7 @@ fn streams_large_input_to_incremental_consumer() -> Result<(), Box<dyn StdError>
     assert!(consumer_result.is_ok(), "consumer thread panicked");
     let first = consumer_result.ok().flatten();
     assert!(matches!(first, Some(Ok(_))), "consumer received no food");
-    let bytes_read = reader.bytes_read();
+    let bytes_read = usize::try_from(reader.position())?;
 
     let error = error(result)?;
     assert!(
@@ -897,54 +898,15 @@ fn generated_foundation_json(count: usize) -> String {
     json
 }
 
-struct CountingReader<'a> {
-    input: &'a [u8],
-    offset: usize,
-}
-
-impl<'a> CountingReader<'a> {
-    const fn new(input: &'a [u8]) -> Self {
-        Self { input, offset: 0 }
-    }
-
-    const fn bytes_read(&self) -> usize {
-        self.offset
-    }
-}
-
-impl Read for CountingReader<'_> {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        let remaining = match self.input.get(self.offset..) {
-            Some(remaining) => remaining,
-            None => &[],
-        };
-        let count = remaining.len().min(buffer.len());
-        let source = remaining
-            .get(..count)
-            .ok_or_else(|| io::Error::other("source range was out of bounds"))?;
-        let destination = buffer
-            .get_mut(..count)
-            .ok_or_else(|| io::Error::other("buffer range was out of bounds"))?;
-        destination.copy_from_slice(source);
-        self.offset = self
-            .offset
-            .checked_add(count)
-            .ok_or_else(|| io::Error::other("read offset overflowed"))?;
-        Ok(count)
-    }
-}
-
 struct FailingReader<'a> {
-    input: &'a [u8],
-    offset: usize,
-    fail_after: usize,
+    input: Cursor<&'a [u8]>,
+    fail_after: u64,
 }
 
 impl<'a> FailingReader<'a> {
-    const fn new(input: &'a [u8], fail_after: usize) -> Self {
+    fn new(input: &'a [u8], fail_after: u64) -> Self {
         Self {
-            input,
-            offset: 0,
+            input: Cursor::new(input),
             fail_after,
         }
     }
@@ -952,26 +914,15 @@ impl<'a> FailingReader<'a> {
 
 impl Read for FailingReader<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if self.offset >= self.fail_after {
+        let position = self.input.position();
+
+        if position >= self.fail_after {
             return Err(io::Error::other("simulated input read failure"));
         }
-        let remaining = match self.input.get(self.offset..) {
-            Some(remaining) => remaining,
-            None => &[],
-        };
-        let available = self.fail_after - self.offset;
-        let count = remaining.len().min(buffer.len()).min(available);
-        let source = remaining
-            .get(..count)
-            .ok_or_else(|| io::Error::other("source range was out of bounds"))?;
-        let destination = buffer
-            .get_mut(..count)
-            .ok_or_else(|| io::Error::other("buffer range was out of bounds"))?;
-        destination.copy_from_slice(source);
-        self.offset = self
-            .offset
-            .checked_add(count)
-            .ok_or_else(|| io::Error::other("read offset overflowed"))?;
-        Ok(count)
+
+        self.input
+            .by_ref()
+            .take(self.fail_after - position)
+            .read(buffer)
     }
 }

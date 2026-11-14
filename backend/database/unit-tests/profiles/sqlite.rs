@@ -3,24 +3,11 @@ use std::sync::atomic::Ordering;
 
 use sqlx::FromRow;
 
-use super::open_database;
 use crate::clock::UnixMillis;
-use crate::identity::UserId;
 use crate::nutrition_model::Measurement;
 use crate::profiles::*;
 use crate::runtime::Database;
-
-async fn insert_user(database: &Database, id: i64) -> Result<UserId, Box<dyn Error>> {
-    sqlx::query(
-        "INSERT INTO users (id, username, password_hash, active, created_at)
-         VALUES (?, ?, 'hash', 1, 1)",
-    )
-    .bind(id)
-    .bind(format!("user{id}"))
-    .execute(&database.pool)
-    .await?;
-    Ok(UserId::new(id)?)
-}
+use crate::tests::{insert_user, open_database_with_clock};
 
 fn create_input(value: &str) -> Result<CreateProfile, Box<dyn Error>> {
     Ok(serde_json::from_str(value)?)
@@ -42,9 +29,10 @@ async fn timestamps(database: &Database, id: ProfileId) -> Result<Timestamps, sq
 #[tokio::test]
 async fn profile_names_are_unique_per_account_and_listing_is_scoped_and_cursor_based()
 -> Result<(), Box<dyn Error>> {
-    let (_directory, database, _) = open_database(1_000).await?;
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
     let alice = insert_user(&database, 1).await?;
     let bob = insert_user(&database, 2).await?;
+
     let first = database
         .create_profile(alice, &create_input(r#"{"name":" Alex "}"#)?)
         .await?;
@@ -113,8 +101,9 @@ async fn profile_names_are_unique_per_account_and_listing_is_scoped_and_cursor_b
 #[tokio::test]
 async fn create_applies_defaults_and_patch_preserves_cache_and_timestamp_semantics()
 -> Result<(), Box<dyn Error>> {
-    let (_directory, database, clock) = open_database(1_000).await?;
+    let (_directory, database, clock) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let created = database
         .create_profile(user, &create_input(r#"{"name":"Alex"}"#)?)
         .await?;
@@ -179,8 +168,9 @@ async fn create_applies_defaults_and_patch_preserves_cache_and_timestamp_semanti
 
 #[tokio::test]
 async fn patch_nulls_and_mode_replacement_persist_independently() -> Result<(), Box<dyn Error>> {
-    let (_directory, database, clock) = open_database(10_000).await?;
+    let (_directory, database, clock) = open_database_with_clock(10_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let created = database
         .create_profile(
             user,
@@ -260,8 +250,9 @@ async fn patch_nulls_and_mode_replacement_persist_independently() -> Result<(), 
 #[tokio::test]
 async fn invalid_calculation_timestamps_do_not_reserve_profile_names() -> Result<(), Box<dyn Error>>
 {
-    let (_directory, database, clock) = open_database(1_000).await?;
+    let (_directory, database, clock) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let input = create_input(r#"{"name":"Overflow"}"#)?;
     clock.store(u64::try_from(i64::MAX)?, Ordering::SeqCst);
     assert!(matches!(
@@ -282,8 +273,9 @@ async fn invalid_calculation_timestamps_do_not_reserve_profile_names() -> Result
 #[tokio::test]
 async fn profile_migration_enforces_strict_json_and_restricts_user_deletion()
 -> Result<(), Box<dyn Error>> {
-    let (_directory, database, _) = open_database(1_000).await?;
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     database
         .create_profile(user, &create_input(r#"{"name":"Alex"}"#)?)
         .await?;
@@ -323,8 +315,9 @@ async fn profile_migration_enforces_strict_json_and_restricts_user_deletion()
 #[tokio::test]
 async fn malformed_stored_profile_data_is_reported_as_domain_corruption()
 -> Result<(), Box<dyn Error>> {
-    let (_directory, database, _) = open_database(1_000).await?;
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let profile = database
         .create_profile(user, &create_input(r#"{"name":"Alex"}"#)?)
         .await?;
@@ -343,8 +336,9 @@ async fn malformed_stored_profile_data_is_reported_as_domain_corruption()
 #[tokio::test]
 async fn weight_change_goal_persists_and_recalculates_without_changing_other_values()
 -> Result<(), Box<dyn Error>> {
-    let (directory, database, clock) = open_database(1_000).await?;
+    let (directory, database, clock) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let created = database.create_profile(user, &create_input(r#"{"name":"Alex","settings":{"weight_change_goal":"-0.5 kg/week","weight_goal":"70 kg","bmr":{"mode":"custom","value":"1200 kcal/day"},"baseline_activity":{"mode":"custom","value":"300 kcal/day"}}}"#)?).await?;
     assert_eq!(
         created.derived.calorie_balance_goal().map(|v| v.value()),

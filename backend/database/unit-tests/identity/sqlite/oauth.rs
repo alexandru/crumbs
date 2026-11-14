@@ -5,6 +5,7 @@ use super::*;
 use crate::DatabaseConfig;
 use crate::identity::{PasswordHash, Username, Users};
 use crate::runtime::Database;
+use crate::tests::open_database;
 
 const PASSWORD_HASH: &str = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
 const NOW: AuthTimestamp = 1_000;
@@ -631,15 +632,6 @@ async fn denial_requires_csrf_and_consumes_only_the_matching_request()
     );
     database.close().await;
     Ok(())
-}
-
-async fn open_database() -> Result<(tempfile::TempDir, Database), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let database = Database::open(DatabaseConfig {
-        path: directory.path().join("crumbs.db"),
-    })
-    .await?;
-    Ok((directory, database))
 }
 
 async fn create_user(database: &Database) -> Result<(UserId, PasswordHash), Box<dyn StdError>> {

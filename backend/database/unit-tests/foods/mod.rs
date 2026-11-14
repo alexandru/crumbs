@@ -2,16 +2,8 @@ use std::error::Error as StdError;
 use std::io;
 
 use super::*;
-use crate::{Database, DatabaseConfig};
-
-pub(super) async fn open_database() -> Result<(tempfile::TempDir, Database), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let database = Database::open(DatabaseConfig {
-        path: directory.path().join("crumbs.db"),
-    })
-    .await?;
-    Ok((directory, database))
-}
+use crate::Database;
+pub(crate) use crate::tests::open_database;
 
 pub(super) fn make_food(
     source: Source,

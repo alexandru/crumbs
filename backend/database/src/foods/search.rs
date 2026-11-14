@@ -40,7 +40,7 @@ pub trait FoodSearch: Sync {
 
 /// A nonblank Crumbs full-text expression.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
+#[serde(try_from = "String")]
 pub struct SearchQuery(String);
 
 impl SearchQuery {
@@ -73,12 +73,6 @@ impl TryFrom<String> for SearchQuery {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::new(value)
-    }
-}
-
-impl From<SearchQuery> for String {
-    fn from(value: SearchQuery) -> Self {
-        value.0
     }
 }
 

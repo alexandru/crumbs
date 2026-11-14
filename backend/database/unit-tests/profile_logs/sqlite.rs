@@ -6,25 +6,13 @@ use rust_decimal::{Decimal, dec};
 use sqlx::FromRow;
 use tokio::sync::Barrier;
 
-use super::open_database;
 use crate::foods::{CustomFoodInput, CustomFoodStore, Dataset, Food, FoodId, FoodWriter};
 use crate::identity::UserId;
 use crate::nutrition_model::FoodData;
 use crate::profile_logs::*;
 use crate::profiles::{CreateProfile, Profile, ProfileId, Profiles};
 use crate::runtime::Database;
-
-async fn insert_user(database: &Database, id: i64) -> Result<UserId, Box<dyn Error>> {
-    sqlx::query(
-        "INSERT INTO users (id, username, password_hash, active, created_at)
-         VALUES (?, ?, 'hash', 1, 1)",
-    )
-    .bind(id)
-    .bind(format!("user{id}"))
-    .execute(&database.pool)
-    .await?;
-    Ok(UserId::new(id)?)
-}
+use crate::tests::{insert_user, open_database_with_clock};
 
 async fn create_profile(
     database: &Database,
@@ -190,8 +178,9 @@ async fn omitted_time_uses_profile_local_clock_but_preserves_backdated_day()
 -> Result<(), Box<dyn Error>> {
     let instant =
         chrono::DateTime::parse_from_rfc3339("2024-01-02T03:04:05.123Z")?.timestamp_millis();
-    let (_directory, database, _) = open_database(u64::try_from(instant)?).await?;
+    let (_directory, database, _) = open_database_with_clock(u64::try_from(instant)?).await?;
     let user = insert_user(&database, 1).await?;
+
     let profile = create_profile(
         &database,
         user,
@@ -221,9 +210,10 @@ async fn omitted_time_uses_profile_local_clock_but_preserves_backdated_day()
 #[tokio::test]
 async fn ownership_patch_get_delete_and_cache_are_scoped_to_profile() -> Result<(), Box<dyn Error>>
 {
-    let (_directory, database, clock) = open_database(1_000).await?;
+    let (_directory, database, clock) = open_database_with_clock(1_000).await?;
     let alex = insert_user(&database, 1).await?;
     let cristi = insert_user(&database, 2).await?;
+
     let alex_profile = create_profile(&database, alex, serde_json::json!({"name":"Alex"})).await?;
     let cristi_profile =
         create_profile(&database, cristi, serde_json::json!({"name":"Alex"})).await?;
@@ -364,8 +354,9 @@ async fn ownership_patch_get_delete_and_cache_are_scoped_to_profile() -> Result<
 
 #[tokio::test]
 async fn malformed_stored_log_cannot_be_patched_or_deleted() -> Result<(), Box<dyn Error>> {
-    let (_directory, database, _) = open_database(1_000).await?;
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let profile = create_profile(&database, user, serde_json::json!({"name": "Alex"})).await?;
     let log = create_weight_log(
         &database,
@@ -411,8 +402,9 @@ async fn malformed_stored_log_cannot_be_patched_or_deleted() -> Result<(), Box<d
 #[tokio::test]
 async fn weight_order_uses_day_time_created_at_then_id_and_delete_falls_back()
 -> Result<(), Box<dyn Error>> {
-    let (_directory, database, clock) = open_database(1_000).await?;
+    let (_directory, database, clock) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
 
     clock.store(5_000, Ordering::SeqCst);
@@ -516,8 +508,9 @@ async fn weight_order_uses_day_time_created_at_then_id_and_delete_falls_back()
 #[tokio::test]
 async fn list_uses_inclusive_day_bounds_descending_cursor_and_fixed_100_page()
 -> Result<(), Box<dyn Error>> {
-    let (_directory, database, _) = open_database(1_000).await?;
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
     let day = "2024-01-01";
     let mut ids = Vec::new();
@@ -569,8 +562,9 @@ async fn list_uses_inclusive_day_bounds_descending_cursor_and_fixed_100_page()
 async fn cache_recalculation_updates_calculated_bmr_and_preserves_custom_settings()
 -> Result<(), Box<dyn Error>> {
     let instant = chrono::DateTime::parse_from_rfc3339("2020-01-01T12:00:00Z")?.timestamp_millis();
-    let (_directory, database, clock) = open_database(u64::try_from(instant)?).await?;
+    let (_directory, database, clock) = open_database_with_clock(u64::try_from(instant)?).await?;
     let user = insert_user(&database, 1).await?;
+
     let calculated = create_profile(
         &database,
         user,
@@ -677,8 +671,9 @@ async fn cache_recalculation_updates_calculated_bmr_and_preserves_custom_setting
 
 #[tokio::test]
 async fn failed_log_and_cache_mutations_roll_back_together() -> Result<(), Box<dyn Error>> {
-    let (_directory, database, clock) = open_database(1_000).await?;
+    let (_directory, database, clock) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
     let original = create_weight_log(
         &database,
@@ -774,8 +769,9 @@ async fn failed_log_and_cache_mutations_roll_back_together() -> Result<(), Box<d
 
 #[tokio::test]
 async fn concurrent_weight_creates_leave_cache_at_latest_local_day() -> Result<(), Box<dyn Error>> {
-    let (_directory, database, _) = open_database(1_000).await?;
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
     let database = Arc::new(database);
     let barrier = Arc::new(Barrier::new(3));
@@ -834,8 +830,9 @@ async fn concurrent_weight_creates_leave_cache_at_latest_local_day() -> Result<(
 #[tokio::test]
 async fn food_logs_scale_mass_and_volume_profiles_and_keep_all_nutrients()
 -> Result<(), Box<dyn Error>> {
-    let (_directory, database, _) = open_database(1_000).await?;
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
     let mass_food = create_custom_food(
         &database,
@@ -1040,8 +1037,9 @@ async fn food_logs_scale_mass_and_volume_profiles_and_keep_all_nutrients()
 #[tokio::test]
 async fn food_logs_validate_sources_calories_dimensions_servings_and_precision()
 -> Result<(), Box<dyn Error>> {
-    let (_directory, database, _) = open_database(1_000).await?;
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
     let no_calories = create_custom_food(
         &database,
@@ -1151,8 +1149,9 @@ async fn food_logs_validate_sources_calories_dimensions_servings_and_precision()
 #[tokio::test]
 async fn food_snapshot_without_optional_inputs_survives_patches_until_refresh()
 -> Result<(), Box<dyn Error>> {
-    let (_directory, database, clock) = open_database(1_000).await?;
+    let (_directory, database, clock) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
     let food_id = create_custom_food(
         &database,
@@ -1254,9 +1253,10 @@ async fn food_snapshot_without_optional_inputs_survives_patches_until_refresh()
 #[tokio::test]
 async fn food_snapshots_survive_source_changes_deletion_and_metadata_patch()
 -> Result<(), Box<dyn Error>> {
-    let (_directory, database, clock) = open_database(1_000).await?;
+    let (_directory, database, clock) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
     let other_user = insert_user(&database, 2).await?;
+
     let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
     let weight = create_weight_log(
         &database,
@@ -1459,8 +1459,9 @@ async fn food_snapshots_survive_source_changes_deletion_and_metadata_patch()
 #[tokio::test]
 async fn migration_has_generated_projection_columns_indexes_and_profile_restrict()
 -> Result<(), Box<dyn Error>> {
-    let (_directory, database, _) = open_database(1_000).await?;
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
     let user = insert_user(&database, 1).await?;
+
     let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
     let strict: i64 =
         sqlx::query_scalar("SELECT strict FROM pragma_table_list WHERE name = 'profile_logs'")
@@ -1513,9 +1514,10 @@ async fn migration_has_generated_projection_columns_indexes_and_profile_restrict
 async fn journal_entries_support_crud_and_type_filtering() -> Result<(), Box<dyn Error>> {
     let instant =
         chrono::DateTime::parse_from_rfc3339("2024-01-02T03:04:05.123Z")?.timestamp_millis();
-    let (_directory, database, _) = open_database(u64::try_from(instant)?).await?;
+    let (_directory, database, _) = open_database_with_clock(u64::try_from(instant)?).await?;
     let owner = insert_user(&database, 1).await?;
     let other = insert_user(&database, 2).await?;
+
     let profile = create_profile(
         &database,
         owner,
@@ -1648,9 +1650,10 @@ async fn journal_entries_support_crud_and_type_filtering() -> Result<(), Box<dyn
 #[tokio::test]
 async fn exercise_entries_preserve_fields_and_weight() -> Result<(), Box<dyn Error>> {
     let instant = chrono::DateTime::parse_from_rfc3339("2024-01-02T03:04:05Z")?.timestamp_millis();
-    let (_directory, database, _) = open_database(u64::try_from(instant)?).await?;
+    let (_directory, database, _) = open_database_with_clock(u64::try_from(instant)?).await?;
     let owner = insert_user(&database, 1).await?;
     let other = insert_user(&database, 2).await?;
+
     let profile = create_profile(&database, owner, serde_json::json!({"name":"Alex"})).await?;
     let weight = create_weight_log(
         &database,

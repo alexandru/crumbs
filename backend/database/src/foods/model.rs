@@ -127,7 +127,7 @@ pub struct StoredFood {
 ///
 /// The default is 20. Converting any signed integer clamps it to this range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "i64", into = "i64")]
+#[serde(from = "i64")]
 pub struct FoodLimit(i64);
 
 impl FoodLimit {
@@ -146,12 +146,6 @@ impl Default for FoodLimit {
 impl From<i64> for FoodLimit {
     fn from(value: i64) -> Self {
         Self(value.clamp(20, 1_000))
-    }
-}
-
-impl From<FoodLimit> for i64 {
-    fn from(value: FoodLimit) -> Self {
-        value.0
     }
 }
 

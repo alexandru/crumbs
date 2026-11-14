@@ -16,3 +16,7 @@ pub mod text;
 
 pub use config::{DatabaseConfig, DatabasePath};
 pub use runtime::{Database, Error};
+
+#[cfg(test)]
+#[path = "../unit-tests/lib.rs"]
+mod tests;

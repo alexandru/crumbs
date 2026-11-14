@@ -288,3 +288,32 @@ pub(crate) async fn mcp_call_router_with_token(
     )
     .await
 }
+
+pub(crate) fn assert_local_references(root: &Value, value: &Value) -> Result<(), Box<dyn Error>> {
+    match value {
+        Value::Object(fields) => {
+            if let Some(reference) = fields.get("$ref") {
+                let reference = reference.as_str().ok_or("non-string schema reference")?;
+                let pointer = reference
+                    .strip_prefix('#')
+                    .ok_or_else(|| format!("non-local schema reference: {reference}"))?;
+
+                if root.pointer(pointer).is_none() {
+                    return Err(format!("unresolved schema reference: {reference}").into());
+                }
+            }
+
+            for child in fields.values() {
+                assert_local_references(root, child)?;
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                assert_local_references(root, child)?;
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}

@@ -50,10 +50,13 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
             "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}
         }))?)
         .await?;
+
     assert_eq!(tools_response.status, StatusCode::OK);
+
     let tools = tools_response.json["result"]["tools"]
         .as_array()
         .ok_or("MCP tools list is missing")?;
+
     for name in [
         "create_profile_log",
         "list_profile_logs",
@@ -65,15 +68,17 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
             .iter()
             .find(|tool| tool["name"] == name)
             .ok_or_else(|| format!("missing {name}"))?;
+
         let schema = &tool["inputSchema"];
         assert!(schema.is_object(), "missing inputSchema for {name}");
-        assert_local_references(schema, schema)?;
+        crate::tests::assert_local_references(schema, schema)?;
     }
 
     let create_tool = tools
         .iter()
         .find(|tool| tool["name"] == "create_profile_log")
         .ok_or("create tool is missing")?;
+
     assert_eq!(
         create_tool["inputSchema"]["required"],
         json!(["profile_id", "log"])
@@ -392,35 +397,6 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
         profile_after_delete.json["derived"]["bmr"],
         serde_json::Value::Null
     );
-    Ok(())
-}
-
-fn assert_local_references(
-    root: &serde_json::Value,
-    value: &serde_json::Value,
-) -> Result<(), Box<dyn Error>> {
-    match value {
-        serde_json::Value::Object(fields) => {
-            if let Some(reference) = fields.get("$ref") {
-                let reference = reference.as_str().ok_or("non-string schema reference")?;
-                let pointer = reference
-                    .strip_prefix('#')
-                    .ok_or_else(|| format!("non-local schema reference: {reference}"))?;
-                if root.pointer(pointer).is_none() {
-                    return Err(format!("unresolved schema reference: {reference}").into());
-                }
-            }
-            for child in fields.values() {
-                assert_local_references(root, child)?;
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for child in values {
-                assert_local_references(root, child)?;
-            }
-        }
-        _ => {}
-    }
     Ok(())
 }
 
