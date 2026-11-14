@@ -4,7 +4,7 @@ use axum::Json;
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use crumbs_database::identity::UserSession;
 use crumbs_database::profile_logs::{
     CreateLog, LogFilter, PatchLog, ProfileLogError, ProfileLogId, ProfileLogs,
@@ -12,28 +12,23 @@ use crumbs_database::profile_logs::{
 use crumbs_database::profiles::ProfileId;
 use serde_json::json;
 
+use crate::ErrorResponse;
+
 pub(super) async fn list<S: ProfileLogs + Send + 'static>(
     State(store): State<Arc<S>>,
     Extension(session): Extension<UserSession>,
     id: Result<Path<ProfileId>, PathRejection>,
     query: Result<Query<LogFilter>, QueryRejection>,
-) -> Response {
-    let Path(profile_id) = match id {
-        Ok(id) => id,
-        Err(error) => return invalid_request(error.to_string()),
-    };
-    let Query(filter) = match query {
-        Ok(query) => query,
-        Err(error) => return invalid_request(error.to_string()),
-    };
-    match store
+) -> Result<impl IntoResponse, ErrorResponse> {
+    let Path(profile_id) = id.map_err(invalid_request)?;
+    let Query(filter) = query.map_err(invalid_request)?;
+
+    let page = store
         .list_profile_logs(session.user_id, profile_id, &filter)
         .await
-    {
-        Ok(Some(page)) => Json(page).into_response(),
-        Ok(None) => not_found(),
-        Err(error) => profile_log_error(error),
-    }
+        .map_err(profile_log_error)?
+        .ok_or_else(not_found)?;
+    Ok(Json(page))
 }
 
 pub(super) async fn create<S: ProfileLogs + Send + 'static>(
@@ -41,47 +36,38 @@ pub(super) async fn create<S: ProfileLogs + Send + 'static>(
     Extension(session): Extension<UserSession>,
     id: Result<Path<ProfileId>, PathRejection>,
     input: Result<Json<CreateLog>, JsonRejection>,
-) -> Response {
-    let Path(profile_id) = match id {
-        Ok(id) => id,
-        Err(error) => return invalid_request(error.to_string()),
-    };
-    let Json(input) = match input {
-        Ok(input) => input,
-        Err(error) => return invalid_request(error.to_string()),
-    };
-    match store
+) -> Result<impl IntoResponse, ErrorResponse> {
+    let Path(profile_id) = id.map_err(invalid_request)?;
+    let Json(input) = input.map_err(invalid_request)?;
+
+    let log = store
         .create_profile_log(session.user_id, profile_id, &input)
         .await
-    {
-        Ok(Some(log)) => (
-            StatusCode::CREATED,
-            [(
-                header::LOCATION,
-                format!("/profiles/{}/logs/{}", profile_id.get(), log.id.get()),
-            )],
-            Json(log),
-        )
-            .into_response(),
-        Ok(None) => not_found(),
-        Err(error) => profile_log_error(error),
-    }
+        .map_err(profile_log_error)?
+        .ok_or_else(not_found)?;
+    Ok((
+        StatusCode::CREATED,
+        [(
+            header::LOCATION,
+            format!("/profiles/{}/logs/{}", profile_id.get(), log.id.get()),
+        )],
+        Json(log),
+    ))
 }
 
 pub(super) async fn get<S: ProfileLogs + Send + 'static>(
     State(store): State<Arc<S>>,
     Extension(session): Extension<UserSession>,
     path: Result<Path<(ProfileId, ProfileLogId)>, PathRejection>,
-) -> Response {
-    let Path((profile_id, log_id)) = match path {
-        Ok(path) => path,
-        Err(error) => return invalid_request(error.to_string()),
-    };
-    match store.profile_log(session.user_id, profile_id, log_id).await {
-        Ok(Some(log)) => Json(log).into_response(),
-        Ok(None) => not_found(),
-        Err(error) => profile_log_error(error),
-    }
+) -> Result<impl IntoResponse, ErrorResponse> {
+    let Path((profile_id, log_id)) = path.map_err(invalid_request)?;
+
+    let log = store
+        .profile_log(session.user_id, profile_id, log_id)
+        .await
+        .map_err(profile_log_error)?
+        .ok_or_else(not_found)?;
+    Ok(Json(log))
 }
 
 pub(super) async fn patch<S: ProfileLogs + Send + 'static>(
@@ -89,45 +75,37 @@ pub(super) async fn patch<S: ProfileLogs + Send + 'static>(
     Extension(session): Extension<UserSession>,
     path: Result<Path<(ProfileId, ProfileLogId)>, PathRejection>,
     input: Result<Json<PatchLog>, JsonRejection>,
-) -> Response {
-    let Path((profile_id, log_id)) = match path {
-        Ok(path) => path,
-        Err(error) => return invalid_request(error.to_string()),
-    };
-    let Json(patch) = match input {
-        Ok(input) => input,
-        Err(error) => return invalid_request(error.to_string()),
-    };
-    match store
+) -> Result<impl IntoResponse, ErrorResponse> {
+    let Path((profile_id, log_id)) = path.map_err(invalid_request)?;
+    let Json(patch) = input.map_err(invalid_request)?;
+
+    let log = store
         .patch_profile_log(session.user_id, profile_id, log_id, &patch)
         .await
-    {
-        Ok(Some(log)) => Json(log).into_response(),
-        Ok(None) => not_found(),
-        Err(error) => profile_log_error(error),
-    }
+        .map_err(profile_log_error)?
+        .ok_or_else(not_found)?;
+    Ok(Json(log))
 }
 
 pub(super) async fn delete<S: ProfileLogs + Send + 'static>(
     State(store): State<Arc<S>>,
     Extension(session): Extension<UserSession>,
     path: Result<Path<(ProfileId, ProfileLogId)>, PathRejection>,
-) -> Response {
-    let Path((profile_id, log_id)) = match path {
-        Ok(path) => path,
-        Err(error) => return invalid_request(error.to_string()),
-    };
-    match store
+) -> Result<impl IntoResponse, ErrorResponse> {
+    let Path((profile_id, log_id)) = path.map_err(invalid_request)?;
+
+    if store
         .delete_profile_log(session.user_id, profile_id, log_id)
         .await
+        .map_err(profile_log_error)?
     {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => not_found(),
-        Err(error) => profile_log_error(error),
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(not_found())
     }
 }
 
-fn profile_log_error(error: ProfileLogError) -> Response {
+fn profile_log_error(error: ProfileLogError) -> ErrorResponse {
     let code = error.code();
     let (status, message) = match error {
         ProfileLogError::InvalidInput(message) => (StatusCode::BAD_REQUEST, message),
@@ -141,16 +119,20 @@ fn profile_log_error(error: ProfileLogError) -> Response {
     error_response(status, code, message)
 }
 
-fn not_found() -> Response {
+fn not_found() -> ErrorResponse {
     error_response(StatusCode::NOT_FOUND, "not_found", "profile log not found")
 }
 
-fn invalid_request(message: String) -> Response {
-    error_response(StatusCode::BAD_REQUEST, "invalid_input", message)
+fn invalid_request(error: impl std::fmt::Display) -> ErrorResponse {
+    error_response(StatusCode::BAD_REQUEST, "invalid_input", error.to_string())
 }
 
-fn error_response(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
-    (status, Json(json!({"code": code, "error": message.into()}))).into_response()
+fn error_response(
+    status: StatusCode,
+    code: &'static str,
+    message: impl Into<String>,
+) -> ErrorResponse {
+    (status, Json(json!({"code": code, "error": message.into()})))
 }
 
 #[cfg(test)]

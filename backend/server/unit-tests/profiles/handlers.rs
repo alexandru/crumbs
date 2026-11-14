@@ -1,12 +1,14 @@
 use std::error::Error;
 
+use axum::response::IntoResponse;
+
 use serde_json::{Value, json};
 
 #[tokio::test]
 async fn profile_error_responses_preserve_status_json_and_redact_sources()
 -> Result<(), Box<dyn Error>> {
     for case in crate::profiles::tests::profile_error_cases() {
-        let response = super::profile_error(case.error);
+        let response = super::profile_error(case.error).into_response();
         assert_eq!(response.status(), case.status);
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;

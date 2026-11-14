@@ -23,7 +23,7 @@ pub(super) async fn search_foods<S: FoodSearch + Send + 'static>(
         }
     };
 
-    match super::execute(reader.as_ref(), request).await {
+    match reader.search_foods(&request.query, request.limit).await {
         Ok(response) => Json(response).into_response(),
         Err(SearchError::InvalidQuery(diagnostic)) => failure(StatusCode::BAD_REQUEST, diagnostic),
         Err(SearchError::Storage(_)) => failure(

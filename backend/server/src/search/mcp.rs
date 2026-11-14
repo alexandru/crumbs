@@ -36,7 +36,7 @@ async fn call<S: FoodSearch + ?Sized>(
             Ok(request) => request,
             Err(error) => return Ok(tool_error(error.to_string()).into()),
         };
-    match super::execute(reader, request).await {
+    match reader.search_foods(&request.query, request.limit).await {
         Ok(response) => {
             let value = serde_json::to_value(response)
                 .map_err(|_| ErrorData::internal_error("food search serialization failed", None))?;

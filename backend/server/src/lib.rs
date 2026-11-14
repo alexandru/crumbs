@@ -20,6 +20,8 @@ pub use config::{HttpBindAddress, HttpConfig, HttpPort};
 pub use oauth::{InitError as OAuthInitError, InvalidIssuerUrl, IssuerUrl, OAuthConfig};
 pub use runtime::{Error, start};
 
+type ErrorResponse = (axum::http::StatusCode, axum::Json<serde_json::Value>);
+
 #[cfg(test)]
 #[path = "../unit-tests/lib.rs"]
 mod tests;
