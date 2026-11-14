@@ -348,7 +348,8 @@ impl<'de> Deserialize<'de> for IanaTimezone {
 }
 
 /// A strictly positive body height in centimetres.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
 pub struct BodyHeight(Centimetres);
 
 impl BodyHeight {
@@ -372,12 +373,6 @@ impl BodyHeight {
     }
 }
 
-impl Serialize for BodyHeight {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
-    }
-}
-
 impl<'de> Deserialize<'de> for BodyHeight {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Self::new(Centimetres::deserialize(deserializer)?).map_err(D::Error::custom)
@@ -385,7 +380,8 @@ impl<'de> Deserialize<'de> for BodyHeight {
 }
 
 /// A strictly positive body weight in kilograms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
 pub struct BodyWeight(Kilograms);
 
 impl BodyWeight {
@@ -406,12 +402,6 @@ impl BodyWeight {
     /// Returns the weight in kilograms.
     pub const fn value(self) -> Kilograms {
         self.0
-    }
-}
-
-impl Serialize for BodyWeight {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
     }
 }
 
@@ -444,7 +434,8 @@ impl WeightChangeGoal {
 }
 
 /// A positive custom BMR value, stored as kcal/day.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
 pub struct CustomBmr(PerDay<Kcal>);
 
 impl CustomBmr {
@@ -465,12 +456,6 @@ impl CustomBmr {
     /// Returns the custom BMR value in kcal/day.
     pub const fn value(self) -> PerDay<Kcal> {
         self.0
-    }
-}
-
-impl Serialize for CustomBmr {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
     }
 }
 
@@ -827,92 +812,37 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for NullablePatch<T> {
     }
 }
 
-/// An unchanged BMR mode or an explicit reset to calculated mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BmrPatch {
-    /// Keep the stored mode.
-    Unchanged,
-    /// Replace the mode.
-    Set(BmrSetting),
-    /// Reset to calculated mode.
-    ResetToCalculated,
-}
-
 /// A partial update for a profile.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PatchProfile {
     /// Optional replacement display name.
+    #[serde(default, deserialize_with = "deserialize_name_patch")]
     pub name: Patch<ProfileName>,
     /// Optional birth date update.
+    #[serde(default)]
     pub birth_date: NullablePatch<BirthDate>,
     /// Optional sex update.
+    #[serde(default)]
     pub sex: NullablePatch<Sex>,
     /// Optional height update.
+    #[serde(default)]
     pub height: NullablePatch<BodyHeight>,
     /// Optional timezone replacement.
+    #[serde(default, deserialize_with = "deserialize_timezone_patch")]
     pub timezone: Patch<IanaTimezone>,
     /// Optional weight-goal update.
+    #[serde(default)]
     pub weight_goal: NullablePatch<BodyWeight>,
     /// Optional weight-change goal update; null clears the goal.
+    #[serde(default)]
     pub weight_change_goal: NullablePatch<WeightChangeGoal>,
     /// Optional BMR mode update; null resets to calculated mode.
-    pub bmr: BmrPatch,
+    #[serde(default)]
+    pub bmr: NullablePatch<BmrSetting>,
     /// Optional baseline activity update.
+    #[serde(default)]
     pub baseline_activity: NullablePatch<BaselineActivity>,
-}
-
-impl<'de> Deserialize<'de> for PatchProfile {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            #[serde(default, deserialize_with = "deserialize_present")]
-            name: Option<Option<ProfileName>>,
-            #[serde(default, deserialize_with = "deserialize_present")]
-            birth_date: Option<Option<BirthDate>>,
-            #[serde(default, deserialize_with = "deserialize_present")]
-            sex: Option<Option<Sex>>,
-            #[serde(default, deserialize_with = "deserialize_present")]
-            height: Option<Option<BodyHeight>>,
-            #[serde(default, deserialize_with = "deserialize_present")]
-            timezone: Option<Option<IanaTimezone>>,
-            #[serde(default, deserialize_with = "deserialize_present")]
-            weight_goal: Option<Option<BodyWeight>>,
-            #[serde(default, deserialize_with = "deserialize_present")]
-            weight_change_goal: Option<Option<WeightChangeGoal>>,
-            #[serde(default, deserialize_with = "deserialize_present")]
-            bmr: Option<Option<BmrSetting>>,
-            #[serde(default, deserialize_with = "deserialize_present")]
-            baseline_activity: Option<Option<BaselineActivity>>,
-        }
-
-        let fields = Fields::deserialize(deserializer)?;
-        let name = match fields.name {
-            None => Patch::Unchanged,
-            Some(Some(name)) => Patch::Set(name),
-            Some(None) => return Err(D::Error::custom("name cannot be null")),
-        };
-        let timezone = match fields.timezone {
-            None => Patch::Unchanged,
-            Some(Some(timezone)) => Patch::Set(timezone),
-            Some(None) => return Err(D::Error::custom("timezone cannot be null")),
-        };
-        Ok(Self {
-            name,
-            birth_date: nullable_patch(fields.birth_date),
-            sex: nullable_patch(fields.sex),
-            height: nullable_patch(fields.height),
-            timezone,
-            weight_goal: nullable_patch(fields.weight_goal),
-            weight_change_goal: nullable_patch(fields.weight_change_goal),
-            bmr: match fields.bmr {
-                None => BmrPatch::Unchanged,
-                Some(Some(bmr)) => BmrPatch::Set(bmr),
-                Some(None) => BmrPatch::ResetToCalculated,
-            },
-            baseline_activity: nullable_patch(fields.baseline_activity),
-        })
-    }
 }
 
 /// A bounded page size for profile listing.
@@ -1007,9 +937,9 @@ pub(crate) fn apply_patch(
     settings.weight_change_goal =
         patched_optional(settings.weight_change_goal, &patch.weight_change_goal);
     match patch.bmr {
-        BmrPatch::Unchanged => {}
-        BmrPatch::Set(value) => settings.bmr = value,
-        BmrPatch::ResetToCalculated => settings.bmr = BmrSetting::Calculated,
+        NullablePatch::Unchanged => {}
+        NullablePatch::Set(value) => settings.bmr = value,
+        NullablePatch::Clear => settings.bmr = BmrSetting::Calculated,
     }
     settings.baseline_activity =
         patched_optional(settings.baseline_activity, &patch.baseline_activity);
@@ -1034,20 +964,20 @@ enum BmrSettingInput {
     Custom { value: CustomBmr },
 }
 
-fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
+fn deserialize_name_patch<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Patch<ProfileName>, D::Error> {
+    Option::<ProfileName>::deserialize(deserializer)?
+        .map(Patch::Set)
+        .ok_or_else(|| D::Error::custom("name cannot be null"))
 }
 
-fn nullable_patch<T>(value: Option<Option<T>>) -> NullablePatch<T> {
-    match value {
-        None => NullablePatch::Unchanged,
-        Some(None) => NullablePatch::Clear,
-        Some(Some(value)) => NullablePatch::Set(value),
-    }
+fn deserialize_timezone_patch<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Patch<IanaTimezone>, D::Error> {
+    Option::<IanaTimezone>::deserialize(deserializer)?
+        .map(Patch::Set)
+        .ok_or_else(|| D::Error::custom("timezone cannot be null"))
 }
 
 fn calculate_bmr(

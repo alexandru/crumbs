@@ -7,10 +7,10 @@ mod store;
 
 pub use error::ProfileError;
 pub use model::{
-    ActivityLevel, BaselineActivity, BirthDate, BirthDatePrecision, BmrPatch, BmrSetting,
-    BodyHeight, BodyWeight, CreateProfile, CreateProfileSettings, CustomBmr, IanaTimezone,
-    NullablePatch, Patch, PatchProfile, Profile, ProfileCache, ProfileData, ProfileDerived,
-    ProfileId, ProfileLimit, ProfileList, ProfileListQuery, ProfileName, ProfileSettings, Sex,
+    ActivityLevel, BaselineActivity, BirthDate, BirthDatePrecision, BmrSetting, BodyHeight,
+    BodyWeight, CreateProfile, CreateProfileSettings, CustomBmr, IanaTimezone, NullablePatch,
+    Patch, PatchProfile, Profile, ProfileCache, ProfileData, ProfileDerived, ProfileId,
+    ProfileLimit, ProfileList, ProfileListQuery, ProfileName, ProfileSettings, Sex,
     WeightChangeGoal,
 };
 pub use store::Profiles;

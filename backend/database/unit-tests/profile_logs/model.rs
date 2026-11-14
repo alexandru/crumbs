@@ -445,7 +445,7 @@ fn journal_text_rejects_blank_and_preserves_original_content() -> Result<(), Box
     }
     let value = "  Salut, lume! 🌿\nA good day.  ";
     let text = JournalText::new(value)?;
-    assert_eq!(text.as_str(), value);
+    assert_eq!(text.value().as_str(), value);
     assert_eq!(
         serde_json::from_value::<JournalText>(serde_json::json!(value))?,
         text

@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use chrono::{Datelike, NaiveDate, NaiveTime, Timelike};
+use crumbs_derive::{AliasTryNew, AliasValue, Display};
 use regex::Regex;
 use rust_decimal::{Decimal, dec};
 use serde::de::Error as DeError;
@@ -13,6 +14,7 @@ use crate::nutrition_model::{
     Milligrams, Millilitres, NutritionBasis, QuantityError, ServingName, ServingSize, Volume,
 };
 use crate::profiles::{BodyWeight, Patch, ProfileId};
+use crate::text::NonBlankString;
 
 use super::{ExerciseLogEntry, ExerciseLogPatch, ProfileLogError};
 
@@ -207,7 +209,7 @@ impl<'de> Deserialize<'de> for LocalTime {
 }
 
 /// A positive fixed-point amount entered for a food serving.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
 pub struct Amount(Decimal);
 
 impl Amount {
@@ -238,12 +240,6 @@ impl Amount {
     /// Returns the exact fixed-point amount.
     pub const fn value(self) -> Decimal {
         self.0
-    }
-}
-
-impl fmt::Display for Amount {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
     }
 }
 
@@ -356,7 +352,8 @@ impl MeasurementUnit {
 }
 
 /// A nonblank, nonreserved selected name for a source food serving.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
 pub struct SelectedServingName(String);
 
 impl SelectedServingName {
@@ -393,12 +390,6 @@ impl SelectedServingName {
 impl fmt::Display for SelectedServingName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
-    }
-}
-
-impl Serialize for SelectedServingName {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
     }
 }
 
@@ -877,38 +868,9 @@ pub struct BiometricLogEntry {
 }
 
 /// Nonblank journal text, preserved exactly as supplied.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, AliasTryNew, AliasValue)]
 #[serde(transparent)]
-pub struct JournalText(String);
-
-impl JournalText {
-    /// Creates journal text without changing its content.
-    ///
-    /// # Errors
-    ///
-    /// Returns InvalidInput if the text is empty or contains only whitespace.
-    pub fn new(value: impl Into<String>) -> Result<Self, ProfileLogError> {
-        let value = value.into();
-        if value.trim().is_empty() {
-            return Err(ProfileLogError::InvalidInput(
-                "journal text must not be blank".to_owned(),
-            ));
-        }
-
-        Ok(Self(value))
-    }
-
-    /// Returns the text as supplied.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for JournalText {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::new(String::deserialize(deserializer)?).map_err(D::Error::custom)
-    }
-}
+pub struct JournalText(NonBlankString);
 
 /// The free-text payload for an independent journal log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

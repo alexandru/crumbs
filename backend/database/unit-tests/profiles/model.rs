@@ -81,10 +81,17 @@ fn create_and_patch_inputs_reject_unknown_fields_and_keep_null_semantics()
     assert!(matches!(patch.name, Patch::Set(_)));
     assert_eq!(patch.birth_date, NullablePatch::Clear);
     assert_eq!(patch.weight_goal, NullablePatch::Clear);
-    assert_eq!(patch.bmr, BmrPatch::ResetToCalculated);
+    assert_eq!(patch.bmr, NullablePatch::Clear);
     assert_eq!(patch.sex, NullablePatch::Unchanged);
-    assert!(serde_json::from_str::<PatchProfile>(r#"{"name":null}"#).is_err());
-    assert!(serde_json::from_str::<PatchProfile>(r#"{"timezone":null}"#).is_err());
+    for (input, expected) in [
+        (r#"{"name":null}"#, "name cannot be null"),
+        (r#"{"timezone":null}"#, "timezone cannot be null"),
+    ] {
+        let error = serde_json::from_str::<PatchProfile>(input)
+            .err()
+            .ok_or("null was accepted")?;
+        assert!(error.to_string().contains(expected));
+    }
     assert!(serde_json::from_str::<PatchProfile>(r#"{"derived":{}}"#).is_err());
 
     let custom_bmr: BmrSetting =
@@ -122,7 +129,7 @@ fn calculated_bmr_rejects_extra_fields_directly_and_in_create_or_patch()
     );
     assert_eq!(
         serde_json::from_value::<PatchProfile>(serde_json::json!({"bmr": calculated}))?.bmr,
-        BmrPatch::Set(BmrSetting::Calculated)
+        NullablePatch::Set(BmrSetting::Calculated)
     );
 
     for bmr in [
