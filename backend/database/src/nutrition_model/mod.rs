@@ -8,9 +8,9 @@ pub use model::{
     NutritionProfile, ServingName, ServingSize, Sugars, Vitamins,
 };
 pub use quantity::{
-    Centimetres, Energy, FixedUnit, Grams, Kcal, Kilograms, Kilojoules, Litres, Mass,
+    Centimetres, Days, Energy, FixedUnit, Grams, Kcal, Kilograms, Kilojoules, Litres, Mass,
     MeasuredQuantity, Measurement, Micrograms, Milligrams, Millilitres, NonNegative, PerDay,
-    PerWeek, Qualifier, QuantityError, Ratio, Reported, Volume,
+    PerWeek, Qualifier, QuantityError, Ratio, Reported, Volume, Weeks,
 };
 
 pub(crate) use quantity::{KcalPerCm, KcalPerKg};

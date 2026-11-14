@@ -14,7 +14,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::clock::UnixMillis;
 use crate::nutrition_model::{
-    Centimetres, Kcal, KcalPerCm, KcalPerKg, Kilograms, PerDay, PerWeek, QuantityError,
+    Centimetres, Kcal, KcalPerCm, KcalPerKg, Kilograms, Measurement, PerDay, PerWeek, QuantityError,
 };
 
 use super::ProfileError;

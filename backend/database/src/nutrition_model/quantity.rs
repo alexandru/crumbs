@@ -300,6 +300,8 @@ measurement!(Kcal, "kcal");
 measurement!(Kilojoules, "kJ");
 measurement!(Centimetres, "cm");
 measurement!(Kilograms, "kg");
+measurement!(Days, "day");
+measurement!(Weeks, "week");
 
 /// A measurement whose value is zero or positive, retaining its unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, crumbs_derive::AliasValue)]
@@ -437,203 +439,27 @@ impl<N: std::ops::Neg<Output = N>, D> std::ops::Neg for Ratio<N, D> {
 }
 
 /// A quantity expressed per week.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PerWeek<T>(T);
-
-impl<T> PerWeek<T> {
-    /// Creates a weekly rate from its weekly amount.
-    pub const fn new(value: T) -> Self {
-        Self(value)
-    }
-    /// Returns the amount for one week.
-    pub fn amount(self) -> T {
-        self.0
-    }
-}
-
-impl<T: Measurement> PerWeek<T> {
-    /// Returns whether the amount is zero.
-    pub fn is_zero(self) -> bool {
-        self.0.is_zero()
-    }
-    /// Returns whether the amount is negative.
-    pub fn is_negative(self) -> bool {
-        self.0.is_negative()
-    }
-    /// Returns whether the amount is positive.
-    pub fn is_positive(self) -> bool {
-        self.0.is_positive()
-    }
-}
-
-impl<T> From<T> for PerWeek<T> {
-    fn from(value: T) -> Self {
-        Self(value)
-    }
-}
-impl<T: Measurement> sealed::Sealed for PerWeek<T> {}
-
-impl<T: Measurement> Measurement for PerWeek<T> {
-    fn value(self) -> Decimal {
-        self.0.value()
-    }
-
-    fn unit_symbol(self) -> Cow<'static, str> {
-        Cow::Owned(format!("{}/week", self.0.unit_symbol()))
-    }
-
-    fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
-        let base = unit
-            .strip_suffix("/week")
-            .ok_or_else(|| QuantityError::Unit(unit.to_owned()))?;
-        T::parse_with_unit(value, base).map(Self)
-    }
-}
-
-impl<T: Measurement> FromStr for PerWeek<T> {
-    type Err = QuantityError;
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let (number, unit) = split_quantity(value)?;
-        Self::parse_with_unit(number, unit)
-    }
-}
-impl<T: Measurement> fmt::Display for PerWeek<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {}/week", self.0.value(), self.0.unit_symbol())
-    }
-}
-
-impl<T: Measurement> Serialize for PerWeek<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de, T: Measurement> Deserialize<'de> for PerWeek<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(serde::de::Error::custom)
-    }
-}
+pub type PerWeek<T> = Ratio<T, Weeks>;
 
 /// A quantity expressed per day.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PerDay<T>(T);
+pub type PerDay<T> = Ratio<T, Days>;
 
-impl<T> PerDay<T> {
-    /// Creates a daily rate from its daily amount.
-    pub const fn new(value: T) -> Self {
-        Self(value)
-    }
-    /// Returns the amount for one day.
-    pub fn amount(self) -> T {
-        self.0
-    }
-}
-
-impl<T: Measurement> PerDay<T> {
-    /// Returns whether the amount is zero.
-    pub fn is_zero(self) -> bool {
-        self.0.is_zero()
-    }
-    /// Returns whether the amount is negative.
-    pub fn is_negative(self) -> bool {
-        self.0.is_negative()
-    }
-    /// Returns whether the amount is positive.
-    pub fn is_positive(self) -> bool {
-        self.0.is_positive()
-    }
-}
-
-impl<T> From<T> for PerDay<T> {
-    fn from(value: T) -> Self {
-        Self(value)
-    }
-}
-impl<T: Measurement> sealed::Sealed for PerDay<T> {}
-
-impl<T: Measurement> Measurement for PerDay<T> {
-    fn value(self) -> Decimal {
-        self.0.value()
-    }
-
-    fn unit_symbol(self) -> Cow<'static, str> {
-        Cow::Owned(format!("{}/day", self.0.unit_symbol()))
-    }
-
-    fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
-        let base = unit
-            .strip_suffix("/day")
-            .ok_or_else(|| QuantityError::Unit(unit.to_owned()))?;
-        T::parse_with_unit(value, base).map(Self)
-    }
-}
-
-impl<T: Measurement> FromStr for PerDay<T> {
-    type Err = QuantityError;
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let (number, unit) = split_quantity(value)?;
-        Self::parse_with_unit(number, unit)
-    }
-}
-impl<T: Measurement> fmt::Display for PerDay<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {}/day", self.0.value(), self.0.unit_symbol())
-    }
-}
-
-impl<T: Measurement> Serialize for PerDay<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de, T: Measurement> Deserialize<'de> for PerDay<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(serde::de::Error::custom)
-    }
-}
-impl<T: std::ops::Add<Output = T>> std::ops::Add for PerDay<T> {
-    type Output = Self;
-    fn add(self, other: Self) -> Self {
-        Self(self.0 + other.0)
-    }
-}
 impl<T: std::ops::Add<Output = T>> std::ops::Add<T> for PerDay<T> {
     type Output = Self;
     fn add(self, other: T) -> Self {
-        Self(self.0 + other)
-    }
-}
-impl<T: std::ops::Sub<Output = T>> std::ops::Sub for PerDay<T> {
-    type Output = Self;
-    fn sub(self, other: Self) -> Self {
-        Self(self.0 - other.0)
+        Self::new(self.0 + other)
     }
 }
 impl<T: std::ops::Sub<Output = T>> std::ops::Sub<T> for PerDay<T> {
     type Output = Self;
     fn sub(self, other: T) -> Self {
-        Self(self.0 - other)
+        Self::new(self.0 - other)
     }
 }
-impl<T: std::ops::Neg<Output = T>> std::ops::Neg for PerDay<T> {
+impl<T: std::ops::Mul<Decimal, Output = T>> std::ops::Mul<Decimal> for PerDay<T> {
     type Output = Self;
-    fn neg(self) -> Self {
-        Self(-self.0)
-    }
-}
-impl<T, Scalar> std::ops::Mul<Scalar> for PerDay<T>
-where
-    T: std::ops::Mul<Scalar, Output = T>,
-{
-    type Output = Self;
-    fn mul(self, other: Scalar) -> Self {
-        Self(self.0 * other)
+    fn mul(self, other: Decimal) -> Self {
+        Self::new(self.0 * other)
     }
 }
 

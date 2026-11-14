@@ -29,7 +29,7 @@ fn profile_tool_errors_preserve_structured_json_and_redact_sources() -> Result<(
 async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity()
 -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    crate::profiles::tests::routes::seed_profile_account(&app).await?;
+    app.seed_profile_owner().await?;
     crate::tests::mcp_initialize(&app).await?;
 
     let tools_response = app
@@ -331,7 +331,7 @@ fn assert_local_references(
 async fn mcp_weight_change_goal_handles_zero_clear_and_invalid_values() -> Result<(), Box<dyn Error>>
 {
     let app = TestApplication::new().await?;
-    crate::profiles::tests::routes::seed_profile_account(&app).await?;
+    app.seed_profile_owner().await?;
     crate::tests::mcp_initialize(&app).await?;
     let created = mcp_call_router_with_token(
         &app.router,

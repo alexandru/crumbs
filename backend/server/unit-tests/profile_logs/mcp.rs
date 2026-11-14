@@ -8,7 +8,7 @@ use crate::oauth::tests::{
 };
 use crate::profile_logs::tests::{
     assert_calories, assert_mass, create_test_food, create_test_profile, profile_log_error_cases,
-    seed_other_access_token, seed_profile_owner,
+    seed_other_access_token,
 };
 use crate::tests::{
     TestApplication, http_json_request, http_request, mcp_call_router_with_token, mcp_initialize,
@@ -40,7 +40,7 @@ const OTHER_MCP_CLIENT: &str = "test-other-profile-log-mcp-client";
 async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation()
 -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_owner(&app).await?;
+    app.seed_profile_owner().await?;
     let (profile_id, _) = create_test_profile(&app, "Alex", TEST_REST_WRITE_ACCESS_TOKEN).await?;
     let profile_uri = format!("/profiles/{profile_id}");
     mcp_initialize(&app).await?;
@@ -427,7 +427,7 @@ fn assert_local_references(
 #[tokio::test]
 async fn mcp_profile_logs_create_and_patch_food_snapshots() -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_owner(&app).await?;
+    app.seed_profile_owner().await?;
     let (profile_id, _) = create_test_profile(&app, "Amalia", TEST_REST_WRITE_ACCESS_TOKEN).await?;
     let profile_uri = format!("/profiles/{profile_id}");
     let logs_uri = format!("{profile_uri}/logs");
@@ -661,7 +661,7 @@ async fn mcp_profile_logs_create_and_patch_food_snapshots() -> Result<(), Box<dy
 #[tokio::test]
 async fn journal_mcp_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_owner(&app).await?;
+    app.seed_profile_owner().await?;
     let (profile_id, _) =
         create_test_profile(&app, "Journal", TEST_REST_WRITE_ACCESS_TOKEN).await?;
     mcp_initialize(&app).await?;
@@ -751,7 +751,7 @@ async fn journal_mcp_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
 #[tokio::test]
 async fn exercise_mcp_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_owner(&app).await?;
+    app.seed_profile_owner().await?;
     let (profile_id, _) =
         create_test_profile(&app, "Exercise", TEST_REST_WRITE_ACCESS_TOKEN).await?;
     mcp_initialize(&app).await?;

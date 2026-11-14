@@ -206,7 +206,28 @@ pub(crate) async fn seed_session_with_scope(
     refresh_token: &str,
     scope: FoodScopes,
 ) -> TestResult<()> {
-    let (user_id, password_hash) = test_user(store).await?;
+    let credentials = test_user(store).await?;
+    seed_session_for_user(
+        store,
+        client_id,
+        resource,
+        access_token,
+        refresh_token,
+        scope,
+        credentials,
+    )
+    .await
+}
+
+pub(crate) async fn seed_session_for_user(
+    store: &Database,
+    client_id: &str,
+    resource: &str,
+    access_token: &str,
+    refresh_token: &str,
+    scope: FoodScopes,
+    (user_id, password_hash): (UserId, PasswordHash),
+) -> TestResult<()> {
     let now = protocol::now()?;
     let request_id = protocol::secret()?;
     let csrf_token = protocol::secret()?;

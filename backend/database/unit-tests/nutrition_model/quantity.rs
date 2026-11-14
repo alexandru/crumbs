@@ -58,7 +58,7 @@ fn weekly_measurements_preserve_precision_sign_and_units() -> Result<(), Box<dyn
     assert!(!value.is_zero());
 
     let negative = PerWeek::<Kilograms>::from_str("-0.5 kg/week")?;
-    let zero = PerWeek::from(Kilograms::from(0));
+    let zero = PerWeek::new(Kilograms::from(0));
     assert!(negative.is_negative());
     assert!(zero.is_zero());
     for rate in [value, negative, zero] {

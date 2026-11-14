@@ -4,6 +4,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Request, StatusCode, header};
+use crumbs_database::identity::{Username, Users};
 use crumbs_database::{Database, DatabaseConfig};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -44,6 +45,23 @@ impl TestApplication {
             _authorization_database: authorization_database,
             router,
         })
+    }
+
+    pub(crate) async fn seed_profile_owner(&self) -> Result<(), Box<dyn Error>> {
+        let username = Username::new("alice")?;
+        let credentials = self
+            ._authorization_database
+            .user_by_username(&username)
+            .await?
+            .ok_or("test authorization user is missing")?;
+        let content_user = self
+            .database
+            .create_user(&username, &credentials.password_hash)
+            .await?;
+        if content_user.id != credentials.user.id {
+            return Err("test user IDs differ between content and authorization databases".into());
+        }
+        Ok(())
     }
 
     pub(crate) async fn request(

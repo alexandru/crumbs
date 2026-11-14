@@ -1,14 +1,8 @@
 use std::error::Error;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::http::StatusCode;
-use crumbs_database::identity::{
-    Approval, AuthorizationGrant, ClientAuthentication, CodeRedemption, CredentialHash,
-    OAuthClient, OAuthScope, OAuthStore, PasswordHash, PendingAuthorization, TokenPair, Username,
-    Users,
-};
+use crumbs_database::identity::{OAuthScope, PasswordHash, Username, Users};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::oauth::tests::{
     TEST_MCP_RESOURCE, TEST_REST_ACCESS_TOKEN, TEST_REST_RESOURCE, TEST_REST_WRITE_ACCESS_TOKEN,
@@ -30,25 +24,6 @@ pub(in crate::profiles) async fn seed_other_mcp_user_access(
     .await
 }
 
-pub(in crate::profiles) async fn seed_profile_account(
-    app: &TestApplication,
-) -> Result<(), Box<dyn Error>> {
-    let username = Username::new("alice")?;
-    let credentials = app
-        ._authorization_database
-        .user_by_username(&username)
-        .await?
-        .ok_or("test authorization user is missing")?;
-    let content_user = app
-        .database
-        .create_user(&username, &credentials.password_hash)
-        .await?;
-    if content_user.id != credentials.user.id {
-        return Err("test user IDs differ between content and authorization databases".into());
-    }
-    Ok(())
-}
-
 const OTHER_USER_ACCESS_TOKEN: &str = "test-other-profile-user-access-token";
 const OTHER_USER_REFRESH_TOKEN: &str = "test-other-profile-user-refresh-token";
 const OTHER_USER_CLIENT_ID: &str = "test-other-profile-user-client";
@@ -59,7 +34,7 @@ const OTHER_MCP_USER_CLIENT_ID: &str = "test-other-mcp-profile-user-client";
 async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
 -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_account(&app).await?;
+    app.seed_profile_owner().await?;
     let created = app
         .request(http_json_request(
             "POST",
@@ -241,7 +216,7 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
 async fn rest_profiles_are_account_scoped_and_require_write_scope_for_changes()
 -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_account(&app).await?;
+    app.seed_profile_owner().await?;
     let created = app
         .request(http_json_request(
             "POST",
@@ -337,84 +312,23 @@ async fn seed_other_user_access(
     if content_user.id != user.id {
         return Err("test user IDs differ between content and authorization databases".into());
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis()
-        .try_into()?;
-    let request_hash = credential_hash("other-profile-request");
-    let csrf_hash = credential_hash("other-profile-csrf");
-    let code_hash = credential_hash("other-profile-code");
-    let challenge = "profile-test-pkce-challenge".to_owned();
-    let redirect_uri = "https://client.example/callback".to_owned();
-    let client = OAuthClient {
-        id: client_id.to_owned(),
-        name: "Other profile test client".to_owned(),
-        redirect_uris: vec![redirect_uri.clone()],
-        authentication: ClientAuthentication::Public,
-        allow_refresh: true,
-    };
-    store.register_client(&client, now).await?;
-    store
-        .begin_authorization(
-            &PendingAuthorization {
-                request_hash,
-                csrf_hash,
-                grant: AuthorizationGrant {
-                    client_id: client.id.clone(),
-                    redirect_uri: redirect_uri.clone(),
-                    resource: resource.to_owned(),
-                    scope: OAuthScope::ReadWrite,
-                    state: None,
-                    code_challenge: challenge.clone(),
-                },
-                expires_at: now + 600_000,
-            },
-            now,
-        )
-        .await?;
-    store
-        .approve_authorization(
-            &Approval {
-                request_hash,
-                csrf_hash,
-                user_id: user.id,
-                password_hash,
-                code_hash,
-                code_expires_at: now + 60_000,
-            },
-            now,
-        )
-        .await?;
-    store
-        .redeem_code(
-            &CodeRedemption {
-                code_hash,
-                client_id: client.id,
-                redirect_uri,
-                resource: resource.to_owned(),
-                code_challenge: challenge,
-            },
-            None,
-            &TokenPair {
-                access_hash: credential_hash(access_token),
-                refresh_hash: credential_hash(refresh_token),
-                access_expires_at: now + 600_000,
-                session_expires_at: now + 2_592_000_000,
-            },
-            now,
-        )
-        .await?;
+    crate::oauth::tests::seed_session_for_user(
+        store,
+        client_id,
+        resource,
+        access_token,
+        refresh_token,
+        OAuthScope::ReadWrite,
+        (user.id, password_hash),
+    )
+    .await?;
     Ok(access_token.to_owned())
-}
-
-fn credential_hash(value: &str) -> CredentialHash {
-    CredentialHash::new(Sha256::digest(value.as_bytes()).into())
 }
 
 #[tokio::test]
 async fn rest_weight_change_goal_validates_and_clears() -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_account(&app).await?;
+    app.seed_profile_owner().await?;
     let created = app
         .request(http_json_request(
             "POST",

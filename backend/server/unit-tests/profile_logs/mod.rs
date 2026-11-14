@@ -2,18 +2,12 @@ mod routes;
 
 use std::error::Error;
 use std::io;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::http::StatusCode;
-use crumbs_database::identity::{
-    Approval, AuthorizationGrant, ClientAuthentication, CodeRedemption, CredentialHash,
-    OAuthClient, OAuthScope, OAuthStore, PasswordHash, PendingAuthorization, TokenPair, Username,
-    Users,
-};
+use crumbs_database::identity::{OAuthScope, PasswordHash, Username, Users};
 use crumbs_database::nutrition_model::{Kcal, Mass, Reported};
 use crumbs_database::profile_logs::ProfileLogError;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::oauth::tests::{TEST_MCP_RESOURCE, TEST_REST_RESOURCE, TEST_REST_WRITE_ACCESS_TOKEN};
 use crate::tests::{TestApplication, http_json_request};
@@ -61,23 +55,6 @@ pub(super) fn profile_log_error_cases() -> [ProfileLogErrorCase; 4] {
             message: "profile log operation failed",
         },
     ]
-}
-
-pub(super) async fn seed_profile_owner(app: &TestApplication) -> Result<(), Box<dyn Error>> {
-    let username = Username::new("alice")?;
-    let credentials = app
-        ._authorization_database
-        .user_by_username(&username)
-        .await?
-        .ok_or("test authorization user is missing")?;
-    let content_user = app
-        .database
-        .create_user(&username, &credentials.password_hash)
-        .await?;
-    if content_user.id != credentials.user.id {
-        return Err("test user IDs differ between content and authorization databases".into());
-    }
-    Ok(())
 }
 
 pub(super) async fn create_test_profile(
@@ -172,81 +149,20 @@ pub(super) async fn seed_other_access_token(
     if content_user.id != user.id {
         return Err("test user IDs differ between content and authorization databases".into());
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis()
-        .try_into()?;
-    let request_hash = credential_hash("profile-log-test-request");
-    let csrf_hash = credential_hash("profile-log-test-csrf");
-    let code_hash = credential_hash("profile-log-test-code");
-    let challenge = "profile-log-test-pkce-challenge".to_owned();
     let resource = if mcp {
         TEST_MCP_RESOURCE
     } else {
         TEST_REST_RESOURCE
     };
-    let redirect_uri = "https://client.example/callback".to_owned();
-    let client = OAuthClient {
-        id: client_id.to_owned(),
-        name: "Profile log test client".to_owned(),
-        redirect_uris: vec![redirect_uri.clone()],
-        authentication: ClientAuthentication::Public,
-        allow_refresh: true,
-    };
-    store.register_client(&client, now).await?;
-    store
-        .begin_authorization(
-            &PendingAuthorization {
-                request_hash,
-                csrf_hash,
-                grant: AuthorizationGrant {
-                    client_id: client.id.clone(),
-                    redirect_uri: redirect_uri.clone(),
-                    resource: resource.to_owned(),
-                    scope: OAuthScope::ReadWrite,
-                    state: None,
-                    code_challenge: challenge.clone(),
-                },
-                expires_at: now + 600_000,
-            },
-            now,
-        )
-        .await?;
-    store
-        .approve_authorization(
-            &Approval {
-                request_hash,
-                csrf_hash,
-                user_id: user.id,
-                password_hash,
-                code_hash,
-                code_expires_at: now + 60_000,
-            },
-            now,
-        )
-        .await?;
-    store
-        .redeem_code(
-            &CodeRedemption {
-                code_hash,
-                client_id: client.id,
-                redirect_uri,
-                resource: resource.to_owned(),
-                code_challenge: challenge,
-            },
-            None,
-            &TokenPair {
-                access_hash: credential_hash(token),
-                refresh_hash: credential_hash(refresh_token),
-                access_expires_at: now + 600_000,
-                session_expires_at: now + 2_592_000_000,
-            },
-            now,
-        )
-        .await?;
+    crate::oauth::tests::seed_session_for_user(
+        store,
+        client_id,
+        resource,
+        token,
+        refresh_token,
+        OAuthScope::ReadWrite,
+        (user.id, password_hash),
+    )
+    .await?;
     Ok(token.to_owned())
-}
-
-fn credential_hash(value: &str) -> CredentialHash {
-    CredentialHash::new(Sha256::digest(value.as_bytes()).into())
 }

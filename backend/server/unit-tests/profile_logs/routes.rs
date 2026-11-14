@@ -14,7 +14,6 @@ use crate::tests::{
 
 use super::{
     assert_calories, assert_mass, create_test_food, create_test_profile, seed_other_access_token,
-    seed_profile_owner,
 };
 
 const OTHER_REST_TOKEN: &str = "test-other-profile-log-rest-token";
@@ -25,7 +24,7 @@ const OTHER_REST_CLIENT: &str = "test-other-profile-log-rest-client";
 async fn rest_profile_logs_update_current_weight_and_support_date_filters_and_cursors()
 -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_owner(&app).await?;
+    app.seed_profile_owner().await?;
     let (profile_id, _) = create_test_profile(&app, "Alex", TEST_REST_WRITE_ACCESS_TOKEN).await?;
     let profile_uri = format!("/profiles/{profile_id}");
     let logs_uri = format!("{profile_uri}/logs");
@@ -255,7 +254,7 @@ async fn rest_profile_logs_update_current_weight_and_support_date_filters_and_cu
 async fn rest_profile_logs_resolve_food_inputs_and_list_mixed_entries() -> Result<(), Box<dyn Error>>
 {
     let app = TestApplication::new().await?;
-    seed_profile_owner(&app).await?;
+    app.seed_profile_owner().await?;
     let (profile_id, _) = create_test_profile(&app, "Alex", TEST_REST_WRITE_ACCESS_TOKEN).await?;
     let profile_uri = format!("/profiles/{profile_id}");
     let logs_uri = format!("{profile_uri}/logs");
@@ -460,7 +459,7 @@ async fn rest_profile_logs_resolve_food_inputs_and_list_mixed_entries() -> Resul
 async fn rest_profile_log_food_snapshots_survive_food_changes_and_deletion()
 -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_owner(&app).await?;
+    app.seed_profile_owner().await?;
     let (profile_id, _) = create_test_profile(&app, "Alex", TEST_REST_WRITE_ACCESS_TOKEN).await?;
     let logs_uri = format!("/profiles/{profile_id}/logs");
     let food_id = create_test_food(
@@ -623,7 +622,7 @@ async fn rest_profile_log_food_snapshots_survive_food_changes_and_deletion()
 async fn rest_profile_logs_reject_invalid_food_inputs_and_allow_zero_calories()
 -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_owner(&app).await?;
+    app.seed_profile_owner().await?;
     let (profile_id, _) = create_test_profile(&app, "Alex", TEST_REST_WRITE_ACCESS_TOKEN).await?;
     let logs_uri = format!("/profiles/{profile_id}/logs");
     let mass_food_id = create_test_food(
@@ -713,7 +712,7 @@ async fn rest_profile_logs_reject_invalid_food_inputs_and_allow_zero_calories()
 async fn rest_profile_logs_enforce_scope_and_hide_other_profiles_and_logs()
 -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_owner(&app).await?;
+    app.seed_profile_owner().await?;
     let (profile_id, _) = create_test_profile(&app, "Alex", TEST_REST_WRITE_ACCESS_TOKEN).await?;
     let logs_uri = format!("/profiles/{profile_id}/logs");
     let created = create_log(&app, &logs_uri, Some("07:30"), "2025-02-01", "72 kg").await?;
@@ -942,7 +941,7 @@ fn assert_local_time_near_now(time: &str, offset_seconds: u64) -> Result<(), Box
 #[tokio::test]
 async fn journal_rest_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_owner(&app).await?;
+    app.seed_profile_owner().await?;
     let (profile_id, _) =
         create_test_profile(&app, "Journal", TEST_REST_WRITE_ACCESS_TOKEN).await?;
     let (other_id, _) = create_test_profile(&app, "Other", TEST_REST_WRITE_ACCESS_TOKEN).await?;
@@ -1050,7 +1049,7 @@ async fn journal_rest_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
 #[tokio::test]
 async fn exercise_rest_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
     let app = TestApplication::new().await?;
-    seed_profile_owner(&app).await?;
+    app.seed_profile_owner().await?;
     let (profile_id, _) =
         create_test_profile(&app, "Exercise", TEST_REST_WRITE_ACCESS_TOKEN).await?;
     let (other_id, _) = create_test_profile(&app, "Other", TEST_REST_WRITE_ACCESS_TOKEN).await?;
