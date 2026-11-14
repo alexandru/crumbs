@@ -355,9 +355,9 @@ impl OwnedProfile {
                     ProfileLogData::Biometric(BiometricLogEntry {
                         measurement: BiometricEntry::Weight(measurement),
                     }) => Ok(measurement.value),
-                    ProfileLogData::Food(_) | ProfileLogData::Journal(_) => {
-                        Err(ProfileLogError::InvalidStoredData)
-                    }
+                    ProfileLogData::Food(_)
+                    | ProfileLogData::Journal(_)
+                    | ProfileLogData::Exercise(_) => Err(ProfileLogError::InvalidStoredData),
                 }
             })
             .transpose()?;
@@ -398,6 +398,7 @@ async fn resolve_log_input(
             resolve_food_input(transaction, input).await?,
         )),
         LogInput::Journal(entry) => Ok(ProfileLogData::Journal(entry.clone())),
+        LogInput::Exercise(entry) => Ok(ProfileLogData::Exercise(entry.clone())),
     }
 }
 
@@ -422,14 +423,12 @@ async fn replace_same_variant(
                 resolve_food_input(transaction, &input).await?,
             )))
         }
-        (ProfileLogData::Biometric(_), LogEntryPatch::Food(_))
-        | (ProfileLogData::Biometric(_), LogEntryPatch::Journal(_))
-        | (ProfileLogData::Food(_), LogEntryPatch::Biometric(_))
-        | (ProfileLogData::Food(_), LogEntryPatch::Journal(_))
-        | (ProfileLogData::Journal(_), LogEntryPatch::Biometric(_))
-        | (ProfileLogData::Journal(_), LogEntryPatch::Food(_)) => Err(
-            ProfileLogError::InvalidInput("a log entry cannot change its category".to_owned()),
-        ),
+        (ProfileLogData::Exercise(current), LogEntryPatch::Exercise(patch)) => {
+            Ok(Some(ProfileLogData::Exercise(patch.apply(current))))
+        }
+        _ => Err(ProfileLogError::InvalidInput(
+            "a log entry cannot change its category".to_owned(),
+        )),
     }
 }
 

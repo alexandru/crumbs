@@ -231,7 +231,7 @@ macro_rules! measurement {
                 if unit != $unit {
                     return Err(QuantityError::Unit(unit.to_owned()));
                 }
-                Ok(Self::new(parse_decimal(value)?))
+                Ok(Self::new(value.parse::<Decimal>().map_err(|_| QuantityError::Decimal(value.to_owned()))?))
             }
         }
 
@@ -300,6 +300,41 @@ measurement!(Kcal, "kcal");
 measurement!(Kilojoules, "kJ");
 measurement!(Centimetres, "cm");
 measurement!(Kilograms, "kg");
+
+/// A measurement whose value is zero or positive, retaining its unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, crumbs_derive::AliasValue)]
+#[serde(transparent)]
+pub struct NonNegative<T: Measurement>(T);
+
+impl<T: Measurement> NonNegative<T> {
+    /// Creates a measurement without changing its value or unit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QuantityError::Negative`] if the value is negative.
+    pub fn new(value: T) -> Result<Self, QuantityError> {
+        if value.is_negative() {
+            return Err(QuantityError::Negative);
+        }
+
+        Ok(Self(value))
+    }
+}
+
+// A generic TryFrom<T> conflicts with the standard blanket implementation.
+impl TryFrom<Kcal> for NonNegative<Kcal> {
+    type Error = QuantityError;
+
+    fn try_from(value: Kcal) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl<'de, T: Measurement + Deserialize<'de>> Deserialize<'de> for NonNegative<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(T::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
 
 /// A numerator quantity per one unit of the denominator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -654,10 +689,10 @@ impl Measurement for Mass {
 
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
         match unit {
-            "kg" => Ok(Self::Kilograms(Kilograms::new(parse_decimal(value)?))),
-            "g" => Ok(Self::Grams(Grams::new(parse_decimal(value)?))),
-            "mg" => Ok(Self::Milligrams(Milligrams::new(parse_decimal(value)?))),
-            "µg" => Ok(Self::Micrograms(Micrograms::new(parse_decimal(value)?))),
+            "kg" => Kilograms::parse_with_unit(value, unit).map(Self::Kilograms),
+            "g" => Grams::parse_with_unit(value, unit).map(Self::Grams),
+            "mg" => Milligrams::parse_with_unit(value, unit).map(Self::Milligrams),
+            "µg" => Micrograms::parse_with_unit(value, unit).map(Self::Micrograms),
             _ => Err(QuantityError::Unit(unit.to_owned())),
         }
     }
@@ -740,8 +775,8 @@ impl Measurement for Energy {
 
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
         match unit {
-            "kcal" => Ok(Self::Kcal(Kcal::new(parse_decimal(value)?))),
-            "kJ" => Ok(Self::Kilojoules(Kilojoules::new(parse_decimal(value)?))),
+            "kcal" => Kcal::parse_with_unit(value, unit).map(Self::Kcal),
+            "kJ" => Kilojoules::parse_with_unit(value, unit).map(Self::Kilojoules),
             _ => Err(QuantityError::Unit(unit.to_owned())),
         }
     }
@@ -975,61 +1010,6 @@ fn split_quantity(value: &str) -> Result<(&str, &str), QuantityError> {
         .rsplit_once(char::is_whitespace)
         .map(|(number, unit)| (number.trim(), unit))
         .ok_or_else(|| QuantityError::Unit(value.to_owned()))
-}
-
-fn parse_decimal(value: &str) -> Result<Decimal, QuantityError> {
-    let expanded;
-    let value = if let Some((base, exponent)) = value.split_once(['e', 'E']) {
-        expanded = expand_decimal(base, exponent)
-            .ok_or_else(|| QuantityError::Decimal(value.to_owned()))?;
-        &expanded
-    } else {
-        value
-    };
-    // from_str_exact rejects excess scale instead of rounding to the decimal capacity.
-    Decimal::from_str_exact(value).map_err(|_| QuantityError::Decimal(value.to_owned()))
-}
-
-fn expand_decimal(base: &str, exponent: &str) -> Option<String> {
-    let exponent: i32 = exponent.parse().ok()?;
-    // Bound allocation before expanding an untrusted exponent. A fixed-point
-    // value has at most 29 integer and 28 fractional digits.
-    if !(-56..=56).contains(&exponent) || base.len() > 86 {
-        return None;
-    }
-    let (sign, base) = match base.strip_prefix('-') {
-        Some(base) => ("-", base),
-        None => ("", base.strip_prefix('+').unwrap_or(base)),
-    };
-    let (integer, fraction) = base.split_once('.').unwrap_or((base, ""));
-    if integer.is_empty()
-        || !integer
-            .bytes()
-            .chain(fraction.bytes())
-            .all(|digit| digit.is_ascii_digit())
-    {
-        return None;
-    }
-    let digits = format!("{integer}{fraction}");
-    let point = i32::try_from(integer.len()).ok()? + exponent;
-    if point <= 0 {
-        let zeros = usize::try_from(-point).ok()?;
-        Some(format!("{sign}0.{}{digits}", "0".repeat(zeros)))
-    } else {
-        let point = usize::try_from(point).ok()?;
-        if point >= digits.len() {
-            Some(format!(
-                "{sign}{digits}{}",
-                "0".repeat(point - digits.len())
-            ))
-        } else {
-            Some(format!(
-                "{sign}{}.{}",
-                digits.get(..point)?,
-                digits.get(point..)?
-            ))
-        }
-    }
 }
 
 #[cfg(test)]

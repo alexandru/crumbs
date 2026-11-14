@@ -14,6 +14,10 @@ All units of measurement MUST use distinct semantic newtypes (e.g. `Grams`, `Mil
 
 Nutrition quantities and arithmetic MUST use fixed-point decimal representations. Parsing, conversion, storage, and serialization MUST NOT pass these quantities through binary floating-point values.
 
+## Standard types and library APIs
+
+Code SHOULD reuse standard types and existing library APIs when they meet the required semantics. Before implementing a custom representation, parser, or algorithm, verify what those APIs support and identify the unmet requirement. Domain constraints can be enforced by a newtype around an existing type, such as `std::time::Duration`.
+
 ## Arithmetic
 
 Use ordinary operators and `std::ops` traits. Do not wrap arithmetic in overflow checks or `Result`. See [ADR-0014](docs/adr/0014-use-standard-arithmetic-operators.md).
@@ -26,6 +30,33 @@ Use ordinary operators and `std::ops` traits. Do not wrap arithmetic in overflow
 ## Construction
 
 Numeric newtypes SHOULD implement `From` for common inputs that convert without loss or validation. Call sites SHOULD use these conversions directly, such as `KcalPerKg::from(10)`.
+
+### Avoid repeated newtype implementations
+
+`ExerciseType` repeated blank checks, constructors, accessors, and deserialization already needed by other text types. A custom declaration macro then hid ordinary Rust behind new syntax. Neither approach was necessary.
+
+Newtypes SHOULD reuse validated inner types, such as `NonBlankString`, and derive forwarding constructors, accessors, and serialization instead of repeating those implementations. Wrapper constructors SHOULD accept unvalidated input and delegate validation to the inner type. Callers SHOULD NOT need to construct the inner value first.
+
+Bodies are abbreviated:
+
+```diff
+-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, AliasTryNew, AliasValue)]
+ #[serde(transparent)]
+-pub struct ExerciseType(String);
+-impl ExerciseType {
+-    pub fn new(value: impl Into<String>) -> Result<Self, ProfileLogError> { ... }
+-    pub fn as_str(&self) -> &str { ... }
+-}
+-impl<'de> Deserialize<'de> for ExerciseType { ... }
++pub struct ExerciseType(NonBlankString);
+```
+
+```diff
+-let activity = ExerciseType(NonBlankString::new("walking")?);
++let activity = ExerciseType::new("walking")?;
++let name = activity.value().as_str();
+```
 
 ## Enum payloads
 

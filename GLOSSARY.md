@@ -4,6 +4,12 @@ Crumbs manages food information from multiple sources.
 
 ## Language
 
+**Positive**:
+Greater than or equal to zero (`>= 0`). Includes zero.
+
+**Strictly positive**:
+Greater than zero (`> 0`). Excludes zero.
+
 **Food**:
 A food entry supplied by a source, whether an ordinary ingredient or a branded product.
 
@@ -56,7 +62,7 @@ The association of a food with a tag. Assignments are managed by Crumbs and surv
 The personal context for one person. One user can have multiple profiles, whose names are unique within that user after ignoring case and surrounding whitespace.
 
 **Profile log entry**:
-A record of food consumed, a biometric measurement, or a journal entry for one profile.
+A record of food consumed, a biometric measurement, a journal entry, or an exercise session for one profile.
 
 **Journal entry**:
 A free-text record of a person's feelings, experiences, or observations for one profile. A person can record multiple journal entries on the same day.
@@ -67,6 +73,9 @@ A recorded value for a physical characteristic of a person, such as body weight.
 **Food log entry**:
 A record of food consumed, its quantity, calories and nutrition information, and a description retained from when it was recorded.
 
+**Exercise log entry**:
+A record of an exercise session with its activity type, intensity, duration, calories burned, and optional notes.
+
 **Current weight**:
 The weight from a profile’s most recent recorded weight measurement. It is unknown when the profile has no weight measurements.
 
@@ -74,10 +83,10 @@ The weight from a profile’s most recent recorded weight measurement. It is unk
 An optional body weight that a person wants to reach.
 
 **Weight change goal**:
-The change in body mass that a person wants over time. Negative values mean weight loss, positive values mean weight gain, and zero means no weight change.
+The change in body mass that a person wants over time. Negative values mean weight loss, strictly positive values mean weight gain, and zero means no weight change.
 
 **Calorie balance goal**:
-The desired difference between calorie intake and maintenance calories for a person's weight change goal. Negative values mean a deficit, and positive values mean a surplus.
+The desired difference between calorie intake and maintenance calories for a person's weight change goal. Negative values mean a deficit, and strictly positive values mean a surplus.
 
 **Basal metabolic rate (BMR)**:
 The estimated daily energy expenditure at rest, calculated from profile information or supplied as a custom value.

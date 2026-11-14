@@ -818,6 +818,15 @@ pub enum NullablePatch<T> {
     Clear,
 }
 
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for NullablePatch<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Option::<T>::deserialize(deserializer)? {
+            Some(value) => Self::Set(value),
+            None => Self::Clear,
+        })
+    }
+}
+
 /// An unchanged BMR mode or an explicit reset to calculated mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BmrPatch {

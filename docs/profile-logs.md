@@ -1,6 +1,6 @@
 # Profile log API
 
-Profile logs record food consumption, biometric measurements, and journal entries. Each log belongs to one profile. REST and MCP enforce the same profile ownership and read/write permissions.
+Profile logs record food consumption, biometric measurements, journal entries, and exercise sessions. Each log belongs to one profile. REST and MCP enforce the same profile ownership and read/write permissions.
 
 ## Journal entries
 
@@ -46,6 +46,44 @@ A patch can change `day` or `time` without changing the text. An entry patch mus
 
 The MCP tools are `create_profile_log`, `get_profile_log`, `update_profile_log`, `delete_profile_log`, and `list_profile_logs`. Create and update use the same journal entry shape inside their existing request objects.
 
+## Exercise entries
+
+An exercise entry records an activity name, intensity, duration, calories burned, and optional notes. The activity name is free text, such as `walking` or `weights training`.
+
+Create an entry with `POST /profiles/{profile_id}/logs`:
+
+```json
+{
+  "day": "2026-11-13",
+  "entry": {
+    "type": "exercise",
+    "exercise_type": "walking",
+    "intensity": "moderate",
+    "duration": "30 min",
+    "calories_burned": "150 kcal",
+    "notes": "Walk through the park."
+  }
+}
+```
+
+The activity name must not be blank. Intensity is `easy`, `moderate`, `hard`, or `very_hard`. Duration accepts human-readable units, such as `30 min`, `0 s`, or `1 h 30 min`. Zero is valid. Responses use normalized decimal seconds, such as `1800 s`. Calories burned are a nonnegative decimal with the `kcal` unit. Both quantities use strings with units. Calories are supplied with the entry. Notes can be omitted, null, or any string; text is preserved as supplied.
+
+The response retains these fields in `data`. The existing occurrence day and time rules apply. REST and MCP use the same exercise fields.
+
+Use `PATCH /profiles/{profile_id}/logs/{log_id}` to change any subset of exercise fields:
+
+```json
+{
+  "entry": {
+    "type": "exercise",
+    "duration": "45 min",
+    "notes": null
+  }
+}
+```
+
+Patches follow the shared field rules: omitted fields retain their values, null clears optional fields, and required fields cannot be cleared. Notes are optional; the activity name, intensity, duration, and calories burned are required. A log cannot change its entry type. Exercise entries support the same get, delete, ownership, and pagination rules as other logs. Exercise writes do not change the profile's cached current weight.
+
 ## Filtering
 
 List logs with `GET /profiles/{profile_id}/logs`. The optional `entry_type` selects one type:
@@ -55,6 +93,7 @@ List logs with `GET /profiles/{profile_id}/logs`. The optional `entry_type` sele
 | `food` | Food consumption |
 | `biometric` | Biometric measurements |
 | `journal` | Journal entries |
+| `exercise` | Exercise sessions |
 
 Omit `entry_type` to return all types. For example, `GET /profiles/42/logs?entry_type=journal&from=2026-11-01&to=2026-11-12` returns journal entries in the inclusive day range.
 
@@ -71,7 +110,7 @@ MCP uses `list_profile_logs` with `profile_id` and a `filter` object:
 }
 ```
 
-The existing `subtype=weight` filter requires `entry_type=biometric`. It cannot be combined with `journal`.
+The existing `subtype=weight` filter requires `entry_type=biometric`. It cannot be combined with `journal` or `exercise`.
 
 Lists contain at most 100 entries in descending ID order. This is creation order, independent of the occurrence day and time. The response has `items` and `last_id`. To get the next page, keep the same filters and pass the returned `last_id` as an exclusive cursor. An empty page has a null cursor.
 

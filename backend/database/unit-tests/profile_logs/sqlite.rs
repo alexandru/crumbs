@@ -1644,3 +1644,112 @@ async fn journal_entries_support_crud_and_type_filtering() -> Result<(), Box<dyn
     database.close().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn exercise_entries_preserve_fields_and_weight() -> Result<(), Box<dyn Error>> {
+    let instant = chrono::DateTime::parse_from_rfc3339("2024-01-02T03:04:05Z")?.timestamp_millis();
+    let (_directory, database, _) = open_database(u64::try_from(instant)?).await?;
+    let owner = insert_user(&database, 1).await?;
+    let other = insert_user(&database, 2).await?;
+    let profile = create_profile(&database, owner, serde_json::json!({"name":"Alex"})).await?;
+    let weight = create_weight_log(
+        &database,
+        owner,
+        profile.id,
+        "2024-01-01",
+        Some("12:00"),
+        "70 kg",
+    )
+    .await?;
+    let entry = serde_json::json!({"type":"exercise", "exercise_type":"walking", "intensity":"moderate", "duration":"30.5 min", "calories_burned":"150 kcal", "notes":"Outside"});
+    let input: CreateLog =
+        serde_json::from_value(serde_json::json!({"day":"2024-01-01", "entry":entry}))?;
+    let exercise = database
+        .create_profile_log(owner, profile.id, &input)
+        .await?
+        .ok_or("missing exercise")?;
+    let mut expected = entry.clone();
+    expected["duration"] = serde_json::json!("1830 s");
+    assert_eq!(serde_json::to_value(&exercise.data)?, expected);
+    assert_eq!(
+        database.profile_log(other, profile.id, exercise.id).await?,
+        None
+    );
+    let filter = LogFilter::new(None, None, Some(LogEntryType::Exercise), None, None)?;
+    let page = database
+        .list_profile_logs(owner, profile.id, &filter)
+        .await?
+        .ok_or("missing page")?;
+    assert_eq!(
+        page.items.iter().map(|log| log.id).collect::<Vec<_>>(),
+        vec![exercise.id]
+    );
+    let empty: PatchLog = serde_json::from_value(serde_json::json!({"entry":{"type":"exercise"}}))?;
+    let unchanged = database
+        .patch_profile_log(owner, profile.id, exercise.id, &empty)
+        .await?
+        .ok_or("missing exercise")?;
+    assert_eq!(unchanged.data, exercise.data);
+    let duration_patch: PatchLog = serde_json::from_value(
+        serde_json::json!({"entry":{"type":"exercise", "duration":"40 min"}}),
+    )?;
+    let changed = database
+        .patch_profile_log(owner, profile.id, exercise.id, &duration_patch)
+        .await?
+        .ok_or("missing exercise")?;
+    assert_eq!(serde_json::to_value(&changed.data)?["notes"], "Outside");
+    let notes_patch: PatchLog =
+        serde_json::from_value(serde_json::json!({"entry":{"type":"exercise", "notes":"Inside"}}))?;
+    let changed = database
+        .patch_profile_log(owner, profile.id, exercise.id, &notes_patch)
+        .await?
+        .ok_or("missing exercise")?;
+    assert_eq!(serde_json::to_value(&changed.data)?["notes"], "Inside");
+    let patch: PatchLog = serde_json::from_value(
+        serde_json::json!({"entry":{"type":"exercise", "duration":"45 min", "notes":null}}),
+    )?;
+    let updated = database
+        .patch_profile_log(owner, profile.id, exercise.id, &patch)
+        .await?
+        .ok_or("missing exercise")?;
+    assert_eq!(
+        serde_json::to_value(&updated.data)?,
+        serde_json::json!({"type":"exercise", "exercise_type":"walking", "intensity":"moderate", "duration":"2700 s", "calories_burned":"150 kcal", "notes":null})
+    );
+    assert_eq!(
+        database.profile_log(owner, profile.id, exercise.id).await?,
+        Some(updated)
+    );
+    let zero_patch: PatchLog =
+        serde_json::from_value(serde_json::json!({"entry":{"type":"exercise", "duration":"0 s"}}))?;
+    let zero = database
+        .patch_profile_log(owner, profile.id, exercise.id, &zero_patch)
+        .await?
+        .ok_or("missing exercise")?;
+    assert_eq!(serde_json::to_value(&zero.data)?["duration"], "0 s");
+    let zero_input: CreateLog = serde_json::from_value(
+        serde_json::json!({"day":"2024-01-01", "entry":{"type":"exercise", "exercise_type":"walking", "intensity":"easy", "duration":"0 min", "calories_burned":"0 kcal"}}),
+    )?;
+    let zero_created = database
+        .create_profile_log(owner, profile.id, &zero_input)
+        .await?
+        .ok_or("missing exercise")?;
+    assert_eq!(serde_json::to_value(&zero_created.data)?["duration"], "0 s");
+    assert!(
+        database
+            .patch_profile_log(owner, profile.id, weight.id, &patch)
+            .await
+            .is_err()
+    );
+    assert!(
+        database
+            .delete_profile_log(owner, profile.id, exercise.id)
+            .await?
+    );
+    assert_eq!(
+        current_weight(&get_profile(&database, owner, profile.id).await?),
+        Some(Decimal::from(70))
+    );
+    database.close().await;
+    Ok(())
+}

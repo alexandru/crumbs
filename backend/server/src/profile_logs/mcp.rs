@@ -79,7 +79,7 @@ impl ProfileLogTool {
     fn tool(self) -> Tool {
         let description = match self {
             Self::List => {
-                r#"List food, biometric, and journal logs for one profile owned by the authenticated account.
+                r#"List food, biometric, journal, and exercise logs for one profile owned by the authenticated account.
 
 Example arguments:
 ```json
@@ -97,6 +97,7 @@ Example arguments:
 - Dates are inclusive YYYY-MM-DD strings.
 - For weight logs, set entry_type to "biometric" and subtype to "weight".
 - For journal entries, set entry_type to "journal".
+- For exercise entries, set entry_type to "exercise".
 - Results contain at most 100 logs, ordered by ID descending.
 - For the next page, set filter.last_id to the last returned ID. Only smaller IDs are returned.
 
@@ -120,7 +121,7 @@ Example arguments:
 Requires crumbs:read."#
             }
             Self::Create => {
-                r#"Create one food, weight, or journal log for a profile owned by the authenticated account.
+                r#"Create one food, weight, journal, or exercise log for a profile owned by the authenticated account.
 
 Food arguments:
 ```json
@@ -167,6 +168,7 @@ Weight arguments:
 
 - Food amount is a positive decimal string without a unit.
 - A journal entry uses {"type":"journal","text":"..."} with nonblank text.
+- An exercise entry uses {"type":"exercise","exercise_type":"walking","intensity":"moderate","duration":"30 min","calories_burned":"150 kcal","notes":"..."}. Notes are optional.
 - Put the unit or exact named serving in the separate serving_size string.
 - Use an existing food_id from food search or custom-food tools.
 - Units are kg, g, mg, µg, l, or ml and must match the food's nutrition basis.
@@ -225,11 +227,12 @@ Date/time arguments:
 }
 ```
 
-- Omit fields to keep their stored values. Null is invalid.
+- Omit fields to keep their stored values. Null clears optional fields; required fields cannot be cleared.
 - For food entries, amount is a positive decimal string without a unit.
 - serving_size is a separate unit or exact named serving string.
 - food_id, amount, and serving_size are independently optional inside patch.entry.
 - type is required when entry is supplied.
+- For exercise entries, omit fields in patch.entry to preserve them.
 - For a journal entry, supply {"type":"journal","text":"..."} to replace its nonblank text.
 - Supplied food input fields rebuild the snapshot from the current food record.
 - Date/time-only changes preserve the snapshot.
@@ -490,7 +493,7 @@ fn definitions() -> Value {
             "properties": {
                 "day": {"$ref": "#/$defs/log_day", "description": "Replace the occurrence day. Omission preserves the stored day."},
                 "time": {"$ref": "#/$defs/local_time", "description": "Replace the occurrence time. Null is invalid; omission preserves the stored time."},
-                "entry": {"$ref": "#/$defs/log_entry_patch", "description": "Patch the weight measurement, food input, or journal text without changing the entry category. Food input fields refresh the snapshot; an empty food patch preserves it."}
+                "entry": {"$ref": "#/$defs/log_entry_patch", "description": "Patch the weight measurement, food input, journal text, or exercise entry without changing the entry category. Food input fields refresh the snapshot; an empty food patch preserves it."}
             }
         },
         "log_filter": {
@@ -499,7 +502,7 @@ fn definitions() -> Value {
             "properties": {
                 "from": {"anyOf": [{"$ref": "#/$defs/log_day"}, {"type": "null"}], "description": "Inclusive lower day bound."},
                 "to": {"anyOf": [{"$ref": "#/$defs/log_day"}, {"type": "null"}], "description": "Inclusive upper day bound."},
-                "entry_type": {"anyOf": [{"type": "string", "enum": ["food", "biometric", "journal"]}, {"type": "null"}]},
+                "entry_type": {"anyOf": [{"type": "string", "enum": ["food", "biometric", "journal", "exercise"]}, {"type": "null"}]},
                 "subtype": {"anyOf": [{"type": "string", "enum": ["weight"]}, {"type": "null"}], "description": "Biometric subtype; when set to weight, requires entry_type=biometric."},
                 "last_id": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}], "description": "Exclusive cursor. Results are ordered by ID descending; next page uses id < last_id."}
             },
@@ -517,15 +520,43 @@ fn definitions() -> Value {
             "oneOf": [
                 {"$ref": "#/$defs/biometric_log_entry"},
                 {"$ref": "#/$defs/food_log_entry"},
-                {"$ref": "#/$defs/journal_log_entry"}
+                {"$ref": "#/$defs/journal_log_entry"},
+                {"$ref": "#/$defs/exercise_log_entry"}
             ]
         },
         "log_entry_patch": {
             "oneOf": [
                 {"$ref": "#/$defs/biometric_log_entry"},
                 {"$ref": "#/$defs/food_log_entry_patch"},
-                {"$ref": "#/$defs/journal_log_entry"}
+                {"$ref": "#/$defs/journal_log_entry"},
+                {"$ref": "#/$defs/exercise_log_entry_patch"}
             ]
+        },
+        "exercise_log_entry": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "exercise_type", "intensity", "duration", "calories_burned"],
+            "properties": {
+                "type": {"const": "exercise"},
+                "exercise_type": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank exercise type, preserved as supplied."},
+                "intensity": {"type": "string", "enum": ["easy", "moderate", "hard", "very_hard"]},
+                "duration": {"type": "string", "description": "Duration such as 30 min or 0 s. Supports human-readable units and combined values. Responses use seconds."},
+                "calories_burned": {"type": "string", "description": "Nonnegative energy with the kcal unit, for example 150 kcal."},
+                "notes": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+            }
+        },
+        "exercise_log_entry_patch": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+                "type": {"const": "exercise"},
+                "exercise_type": {"type": "string", "minLength": 1, "pattern": "\\S"},
+                "intensity": {"type": "string", "enum": ["easy", "moderate", "hard", "very_hard"]},
+                "duration": {"type": "string", "description": "Duration such as 30 min or 0 s. Supports human-readable units and combined values. Responses use seconds."},
+                "calories_burned": {"type": "string", "description": "Nonnegative energy with the kcal unit."},
+                "notes": {"anyOf": [{"type": "string"}, {"type": "null"}], "description": "Null clears notes; omission preserves them."}
+            }
         },
         "journal_log_entry": {
             "type": "object",

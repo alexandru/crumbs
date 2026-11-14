@@ -182,13 +182,7 @@ fn reported_values_round_trip_exact_decimal_values_units_and_qualifiers()
 #[test]
 fn rejects_negative_incompatible_unknown_and_unrepresentable_measurements()
 -> Result<(), Box<dyn Error>> {
-    for input in [
-        "-1 g",
-        "15 ml",
-        "1 lb",
-        "0.12345678901234567890123456789 g",
-        "79228162514264337593543950336 g",
-    ] {
+    for input in ["-1 g", "15 ml", "1 lb", "79228162514264337593543950336 g"] {
         assert!(
             Reported::<Mass>::from_str(input).is_err(),
             "accepted invalid value {input}"
@@ -238,16 +232,24 @@ fn quantity_builder_parses_values_and_units_without_combining_strings() -> Resul
 }
 
 #[test]
-fn parses_scientific_decimal_notation_exactly_without_rounding() -> Result<(), Box<dyn Error>> {
-    for (input, expected) in [("1e-3 g", "0.001 g"), ("1e2 g", "100 g")] {
+fn parses_decimal_notation_with_library_precision() -> Result<(), Box<dyn Error>> {
+    for (input, expected) in [
+        ("1e-3 g", "0.001 g"),
+        ("1e2 g", "100 g"),
+        (
+            "1.00000000000000000000000000001e0 g",
+            "1.0000000000000000000000000000 g",
+        ),
+    ] {
         let parsed = Reported::<Mass>::from_str(input)?;
         assert_eq!(parsed.to_string(), expected);
     }
-    for input in ["1e-29 g", "123456789012345678901234567890e-29 g"] {
-        assert!(
-            Reported::<Mass>::from_str(input).is_err(),
-            "accepted unsupported precision {input}"
-        );
+    assert_eq!(
+        Reported::<Mass>::from_str("0.12345678901234567890123456789 g")?.to_string(),
+        "0.1234567890123456789012345679 g"
+    );
+    for input in ["1e-29 g", "bad g"] {
+        assert!(Reported::<Mass>::from_str(input).is_err());
     }
     Ok(())
 }
@@ -394,5 +396,38 @@ fn canonicalizes_inclusive_unicode_qualifiers() -> Result<(), Box<dyn Error>> {
         let decoded: Reported<Mass> = serde_json::from_str(&encoded)?;
         assert_eq!(decoded, parsed);
     }
+    Ok(())
+}
+
+#[test]
+fn nonnegative_measurements_validate_and_preserve_units() -> Result<(), Box<dyn Error>> {
+    assert_eq!(
+        NonNegative::new(Kcal::from(-1)),
+        Err(QuantityError::Negative)
+    );
+    assert_eq!(
+        NonNegative::new(Grams::from(-1)),
+        Err(QuantityError::Negative)
+    );
+    assert!(serde_json::from_str::<NonNegative<Kcal>>(r#""-1 kcal""#).is_err());
+    assert!(serde_json::from_str::<NonNegative<Grams>>(r#""-1 g""#).is_err());
+
+    for amount in [0, 1] {
+        let kcal = NonNegative::new(Kcal::from(amount))?;
+        assert_eq!(*kcal.value(), Kcal::from(amount));
+        let json = format!("\"{amount} kcal\"");
+        assert_eq!(serde_json::to_string(&kcal)?, json);
+        assert_eq!(serde_json::from_str::<NonNegative<Kcal>>(&json)?, kcal);
+
+        let grams = NonNegative::new(Grams::from(amount))?;
+        assert_eq!(*grams.value(), Grams::from(amount));
+        let json = format!("\"{amount} g\"");
+        assert_eq!(serde_json::to_string(&grams)?, json);
+        assert_eq!(serde_json::from_str::<NonNegative<Grams>>(&json)?, grams);
+    }
+    assert_eq!(
+        NonNegative::<Kcal>::try_from(Kcal::from(1))?,
+        NonNegative::new(Kcal::from(1))?
+    );
     Ok(())
 }

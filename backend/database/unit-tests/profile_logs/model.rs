@@ -181,7 +181,7 @@ fn patch_fields_preserve_omission_and_reject_nulls() -> Result<(), Box<dyn Error
     ));
     let patch_data = match patch_entry {
         LogEntryPatch::Biometric(entry) => ProfileLogData::Biometric(entry),
-        LogEntryPatch::Food(_) | LogEntryPatch::Journal(_) => {
+        LogEntryPatch::Food(_) | LogEntryPatch::Journal(_) | LogEntryPatch::Exercise(_) => {
             return Err(std::io::Error::other("expected biometric patch entry").into());
         }
     };
@@ -474,5 +474,68 @@ fn journal_text_rejects_blank_and_preserves_original_content() -> Result<(), Box
         )
         .is_err()
     );
+    Ok(())
+}
+
+#[test]
+fn exercise_entry_validates_fields_and_patch() -> Result<(), Box<dyn Error>> {
+    let valid = serde_json::json!({"type":"exercise", "exercise_type":"  walking  ", "intensity":"moderate", "duration":"30.5 min", "calories_burned":"150 kcal", "notes":"Outside"});
+    let data: ProfileLogData = serde_json::from_value(valid.clone())?;
+    let mut expected = valid.clone();
+    expected["duration"] = serde_json::json!("1830 s");
+    assert_eq!(serde_json::to_value(data)?, expected);
+    let _: LogInput = serde_json::from_value(valid.clone())?;
+    for (field, value) in [
+        ("exercise_type", serde_json::json!("  ")),
+        ("intensity", serde_json::json!("extreme")),
+        ("duration", serde_json::json!(-1)),
+        ("calories_burned", serde_json::json!("-1 kcal")),
+        ("calories_burned", serde_json::json!("2 kJ")),
+    ] {
+        let mut invalid = valid.clone();
+        invalid[field] = value;
+        assert!(
+            serde_json::from_value::<LogInput>(invalid).is_err(),
+            "invalid {field}"
+        );
+    }
+    for field in ["exercise_type", "intensity", "duration", "calories_burned"] {
+        let mut invalid = serde_json::json!({"type":"exercise"});
+        invalid[field] = serde_json::Value::Null;
+        assert!(
+            serde_json::from_value::<LogEntryPatch>(invalid).is_err(),
+            "null {field}"
+        );
+    }
+    let _: LogEntryPatch = serde_json::from_value(serde_json::json!({"type":"exercise"}))?;
+    let _: LogEntryPatch =
+        serde_json::from_value(serde_json::json!({"type":"exercise", "notes":null}))?;
+    assert!(
+        LogFilter::new(
+            None,
+            None,
+            Some(LogEntryType::Exercise),
+            Some(BiometricType::Weight),
+            None
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn exercise_intensities_and_optional_notes_round_trip() -> Result<(), Box<dyn Error>> {
+    for intensity in ["easy", "moderate", "hard", "very_hard"] {
+        let input = serde_json::json!({"type":"exercise", "exercise_type":"walking", "intensity":intensity, "duration":"30 min", "calories_burned":"0 kcal"});
+        let data: ProfileLogData = serde_json::from_value(input)?;
+        let serialized = serde_json::to_value(data)?;
+        assert_eq!(serialized["intensity"], intensity);
+        assert_eq!(serialized["notes"], serde_json::Value::Null);
+    }
+    let input = serde_json::json!({"type":"exercise", "exercise_type":"walking", "intensity":"easy", "duration":"30 min", "calories_burned":"0 kcal", "notes":null});
+    let data: ProfileLogData = serde_json::from_value(input.clone())?;
+    let mut expected = input;
+    expected["duration"] = serde_json::json!("1800 s");
+    assert_eq!(serde_json::to_value(data)?, expected);
     Ok(())
 }
