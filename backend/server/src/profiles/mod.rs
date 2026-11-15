@@ -1,5 +1,3 @@
-//! REST and MCP management of account-owned profiles.
-
 mod handlers;
 mod mcp;
 mod routes;

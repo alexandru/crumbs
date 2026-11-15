@@ -1,5 +1,3 @@
-//! OAuth discovery, authorization, and access-token enforcement.
-
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -92,7 +90,6 @@ where
     }
 }
 
-/// Failure to prepare the password-verification service.
 #[derive(Debug, thiserror::Error)]
 pub enum InitError {
     #[error("failed to prepare password verification")]
@@ -143,8 +140,6 @@ where
             }
             request.extensions_mut().insert(session);
             let response = next.run(request).await;
-            // Denied calls finish before emitting notifications. With JSON responses enabled,
-            // rmcp waits for this terminal result before returning the HTTP response.
             match mcp_authorization.and_then(|authorization| authorization.challenge()) {
                 Some(required) => scope_challenge(&server, mcp, required, response),
                 None => response,
@@ -243,7 +238,6 @@ where
         "/oauth/token" | "/oauth/revoke" => ("token", 120),
         _ => return next.run(request).await,
     };
-    // Only the socket peer is trusted. Forwarded headers are attacker-controlled.
     let peer = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()

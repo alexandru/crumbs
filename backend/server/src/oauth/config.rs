@@ -1,24 +1,17 @@
 use serde::Deserialize;
 use url::Url;
 
-/// OAuth authorization-server settings.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct OAuthConfig {
-    /// Externally reachable origin, using HTTPS except for loopback development.
     pub issuer: IssuerUrl,
 }
 
-/// A canonical public origin without credentials, query, fragment, or a path.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub struct IssuerUrl(Url);
 
 impl IssuerUrl {
-    /// Parses an HTTPS origin, or an HTTP loopback IP origin for development.
-    ///
-    /// # Errors
-    /// Returns an error for an invalid URL, non-origin URL, or insecure remote origin.
     pub fn new(value: &str) -> Result<Self, InvalidIssuerUrl> {
         let url = Url::parse(value).map_err(|_| InvalidIssuerUrl)?;
         let loopback = match url.host() {
@@ -40,7 +33,6 @@ impl IssuerUrl {
         Ok(Self(url))
     }
 
-    /// Returns the issuer identifier without a trailing slash.
     pub fn as_str(&self) -> &str {
         self.0.as_str().trim_end_matches('/')
     }
@@ -62,7 +54,6 @@ impl TryFrom<String> for IssuerUrl {
     }
 }
 
-/// The OAuth issuer is not a permitted public origin.
 #[derive(Debug, thiserror::Error)]
 #[error(
     "OAuth issuer must be an HTTPS origin, or an HTTP loopback IP origin, without credentials, path, query, or fragment"

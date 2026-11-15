@@ -1,9 +1,3 @@
-//! Command-line wiring for the `crumbs` executable.
-//!
-//! The clap hierarchy lives here so the executable entry point stays thin.
-//! Server argument types are composed with the application-owned database
-//! commands in this hierarchy.
-
 use std::error::Error as StdError;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -20,60 +14,41 @@ mod users;
 
 pub use cli::{DatabaseArgs, DbArgs, DbCommand, HttpArgs, ServerArgs, ServerCommand};
 
-/// Top-level command-line interface for the `crumbs` executable.
 #[derive(Debug, Parser)]
 #[command(name = "crumbs", version, about = "Crumbs backend service")]
 pub struct Cli {
-    /// Operation to perform.
     #[command(subcommand)]
     pub command: Command,
 }
 
-/// Top-level operations exposed by the executable.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Run the backend server.
+    #[command(about = "Run the backend server")]
     Server(ServerArgs),
-    /// Manage the database.
+    #[command(about = "Manage the database")]
     Db(DbArgs),
 }
 
-/// Errors produced while running the executable.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Logging could not be initialized.
     #[error("failed to initialize logging: {0}")]
     Logging(#[source] Box<dyn StdError + Send + Sync>),
-    /// The async runtime could not be created.
     #[error("failed to create the async runtime: {0}")]
     Runtime(#[source] io::Error),
-    /// The database could not be opened or migrated.
     #[error(transparent)]
     Database(#[from] crumbs_database::Error),
-    /// A USDA import failed.
     #[error(transparent)]
     Import(#[from] ImportError),
-    /// Some USDA food records were rejected.
     #[error("rejected {} USDA foods", .count.get())]
     RejectedFoods { count: FoodCount },
-    /// A user could not be created.
     #[error(transparent)]
     CreateUser(#[from] users::Error),
-    /// Command output could not be written.
     #[error("failed to write command output: {0}")]
     Output(#[source] io::Error),
-    /// The server failed to start or run.
     #[error(transparent)]
     Server(#[from] crumbs_server::Error),
 }
 
-/// Parses process arguments and runs the selected command.
-///
-/// # Errors
-///
-/// Returns an error if logging or the runtime cannot be initialized, the database cannot be
-/// opened or migrated, an import fails, user creation fails, or server startup
-/// fails.
 pub fn run() -> Result<(), Error> {
     let cli = Cli::parse();
     logging::init().map_err(Error::Logging)?;

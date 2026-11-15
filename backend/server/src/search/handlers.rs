@@ -1,5 +1,3 @@
-//! HTTP handling for food search.
-
 use std::sync::Arc;
 
 use axum::Json;

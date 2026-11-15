@@ -1,5 +1,3 @@
-//! User creation for database commands.
-
 use std::io;
 
 use crumbs_database::Database;

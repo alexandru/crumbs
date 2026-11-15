@@ -1,14 +1,7 @@
-//! Application clock for persistence timestamps.
-
 use std::time::SystemTime;
 
-/// Milliseconds since the Unix epoch, as stored in persistence timestamps.
 pub(crate) type UnixMillis = i64;
 
-/// Application clock used for persistence timestamps.
-///
-/// The default source is the system clock. A supplied source may be used as an
-/// alternate clock.
 pub(crate) struct Clock {
     source: ClockSource,
 }
@@ -20,7 +13,6 @@ impl Default for Clock {
 }
 
 impl Clock {
-    /// Creates a clock from the supplied time source.
     pub(crate) fn with_source(source: impl Fn() -> SystemTime + Send + Sync + 'static) -> Self {
         Self {
             source: Box::new(source),

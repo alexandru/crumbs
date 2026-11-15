@@ -1,5 +1,3 @@
-//! Process-level checks for the `crumbs` command-line interface.
-
 use std::io;
 use std::process::Output;
 

@@ -1,5 +1,3 @@
-//! REST and MCP management of profile logs.
-
 mod handlers;
 mod mcp;
 mod routes;

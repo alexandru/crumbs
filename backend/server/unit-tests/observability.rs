@@ -43,7 +43,6 @@ async fn lifecycle_logs_route_status_tool_outcome_and_cancellation_without_reque
         .without_time()
         .with_writer(move || buffer.clone());
     let subscriber = tracing_subscriber::registry().with(filter).with(formatter);
-    // Parallel requests must use the same subscriber when they register log callsites.
     tracing::subscriber::set_global_default(subscriber)?;
     let info_logs = async {
         let app = TestApplication::new().await?;

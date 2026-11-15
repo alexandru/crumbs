@@ -180,3 +180,5 @@ Code reviews MUST explicitly verify compliance.
 
 Comments MUST explain what the code does not make obvious and MUST NOT restate signatures or logic. Comments explaining non-obvious constructs (e.g., concurrency or lifecycle issues) to a Rust advanced-beginner are encouraged (assume expertise in Scala).
 Public API documentation MUST state concise contracts, observable behavior, and error conditions. Explanations of Rust mechanics for an advanced beginner belong in inline comments, not API documentation.
+
+NOTE: `AGENTS.md` bans comments and documentation written by AI agents and that were not requested by the user. These rules are not in contradiction.

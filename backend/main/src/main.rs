@@ -1,5 +1,3 @@
-//! Executable entry point for the Crumbs backend.
-
 use std::io::{self, Write};
 use std::process::ExitCode;
 

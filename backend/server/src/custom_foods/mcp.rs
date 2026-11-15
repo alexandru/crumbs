@@ -1,5 +1,3 @@
-//! MCP schemas and invocation for custom-food management.
-
 use std::sync::Arc;
 
 use crumbs_database::foods::{CustomFoodInput, CustomFoodStore};

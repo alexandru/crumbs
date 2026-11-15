@@ -130,7 +130,6 @@ pub(super) fn parse_food_data(raw: &str, kind: FoodKind) -> Result<ParsedFoodDat
         });
     };
 
-    // A repeated source nutrient stays ambiguous even if a third value follows it.
     let mut amounts = BTreeMap::new();
     for (nutrient, metadata, classified) in nutrients {
         let amount = match parse_nutrient(nutrient, metadata, classified, &mut sanitizations) {
@@ -390,7 +389,6 @@ impl ClassifiedNutrient {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-// Declaration order is the USDA energy preference order.
 enum EnergyMethod {
     AtwaterSpecific,
     AtwaterGeneral,
@@ -408,7 +406,6 @@ impl EnergyMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-// Declaration order prefers NLEA total sugars over other total sugars.
 enum SugarMethod {
     TotalNlea,
     Total,

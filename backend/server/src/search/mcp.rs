@@ -1,5 +1,3 @@
-//! MCP search tool schema and invocation.
-
 use std::sync::Arc;
 
 use crumbs_database::foods::{FoodSearch, SearchError};

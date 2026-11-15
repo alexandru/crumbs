@@ -1,14 +1,3 @@
-//! Workspace automation for the Crumbs backend.
-//!
-//! Run the quality gate through the alias in `.cargo/config.toml`:
-//!
-//! ```text
-//! cargo xtask check
-//! ```
-//!
-//! The gate runs formatting, Clippy, tests, and a full workspace build in that
-//! order, stopping at the first failing step.
-
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;

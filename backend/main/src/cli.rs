@@ -1,23 +1,18 @@
-//! Command-line arguments and environment settings for each operation.
-
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use crumbs_database::{DatabaseConfig, DatabasePath};
 use crumbs_server::{HttpBindAddress, HttpConfig, HttpPort, IssuerUrl, OAuthConfig};
 
-/// Arguments accepted by the `server` subcommand.
 #[derive(Debug, Args)]
 pub struct ServerArgs {
-    /// Operation to perform.
     #[command(subcommand)]
     pub command: ServerCommand,
 }
 
-/// Operations exposed by the `server` subcommand.
 #[derive(Debug, Subcommand)]
 pub enum ServerCommand {
-    /// Start the server and wait for a shutdown signal.
+    #[command(about = "Start the server and wait for a shutdown signal")]
     Start {
         #[command(flatten)]
         database: DatabaseArgs,
@@ -26,10 +21,9 @@ pub enum ServerCommand {
     },
 }
 
-/// Database settings shared by commands that open the database.
 #[derive(Debug, Args)]
 pub struct DatabaseArgs {
-    /// SQLite database file. Relative paths use the current working directory.
+    #[arg(help = "SQLite database file. Relative paths use the current working directory")]
     #[arg(
         long = "database-path",
         env = "CRUMBS_DATABASE_PATH",
@@ -44,10 +38,9 @@ impl From<DatabaseArgs> for DatabaseConfig {
     }
 }
 
-/// HTTP settings required only when starting the server.
 #[derive(Debug, Args)]
 pub struct HttpArgs {
-    /// IP address to bind. Use 0.0.0.0 inside a container behind a TLS proxy.
+    #[arg(help = "IP address to bind. Use 0.0.0.0 inside a container behind a TLS proxy")]
     #[arg(
         long = "http-bind",
         env = "CRUMBS_HTTP_BIND",
@@ -55,7 +48,7 @@ pub struct HttpArgs {
         default_value = "127.0.0.1"
     )]
     pub bind: HttpBindAddress,
-    /// TCP port to listen on. Use 0 to choose an available port.
+    #[arg(help = "TCP port to listen on. Use 0 to choose an available port")]
     #[arg(
         long = "http-port",
         env = "CRUMBS_HTTP_PORT",
@@ -63,7 +56,7 @@ pub struct HttpArgs {
         default_value = "8080"
     )]
     pub port: HttpPort,
-    /// Public HTTPS origin, or an HTTP loopback IP origin for development.
+    #[arg(help = "Public HTTPS origin, or an HTTP loopback IP origin for development")]
     #[arg(
         long = "oauth-issuer",
         env = "CRUMBS_OAUTH_ISSUER",
@@ -85,25 +78,22 @@ impl From<HttpArgs> for HttpConfig {
     }
 }
 
-/// Arguments accepted by the `db` subcommand.
 #[derive(Debug, Args)]
 pub struct DbArgs {
-    /// Operation to perform.
     #[command(subcommand)]
     pub command: DbCommand,
 }
 
-/// Operations exposed by the `db` subcommand.
 #[derive(Debug, Subcommand)]
 pub enum DbCommand {
-    /// Import an uncompressed USDA FoodData Central JSON download.
+    #[command(about = "Import an uncompressed USDA FoodData Central JSON download")]
     ImportUsda {
-        /// Path to an uncompressed USDA FoodData Central JSON file (not ZIP).
+        #[arg(help = "Path to an uncompressed USDA FoodData Central JSON file (not ZIP)")]
         #[arg(value_name = "FILE", env = "CRUMBS_IMPORT_FILE")]
         file: PathBuf,
         #[command(flatten)]
         database: DatabaseArgs,
-        /// Print details for foods with sanitized or rejected data.
+        #[arg(help = "Print details for foods with sanitized or rejected data")]
         #[arg(
             long,
             env = "CRUMBS_VERBOSE",
@@ -115,9 +105,9 @@ pub enum DbCommand {
         )]
         verbose: bool,
     },
-    /// Create a user account.
+    #[command(about = "Create a user account")]
     CreateUser {
-        /// Username for the new account.
+        #[arg(help = "Username for the new account")]
         #[arg(long, env = "CRUMBS_USERNAME", value_name = "NAME")]
         username: String,
         #[command(flatten)]

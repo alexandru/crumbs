@@ -1,5 +1,3 @@
-//! Shared MCP transport and tool dispatch.
-
 mod authorization;
 mod server;
 mod tools;

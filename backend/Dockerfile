@@ -12,7 +12,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:trixie-slim AS runtime
 
-# Keep arbitrary unprivileged IDs consistent with ownership of the database directory.
 ARG APP_UID=65532
 ARG APP_GID=65532
 

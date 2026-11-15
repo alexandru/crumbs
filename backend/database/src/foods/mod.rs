@@ -1,5 +1,3 @@
-//! Source-independent food models and storage contracts.
-
 mod custom_foods;
 mod model;
 mod search;

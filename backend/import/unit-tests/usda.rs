@@ -737,21 +737,18 @@ fn streams_all_records_from_large_input() -> Result<(), Box<dyn StdError>> {
 }
 
 impl FdcId {
-    /// Returns the identifier as text.
     fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 impl FoodDescription {
-    /// Returns the description as text.
     fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 impl FoodCategory {
-    /// Returns the category as text.
     fn as_str(&self) -> &str {
         &self.0
     }

@@ -1,9 +1,3 @@
-//! Streaming parser for the official USDA FoodData Central JSON archives.
-//!
-//! The archives wrap a single array under one root key. This module validates
-//! the root and each food record while forwarding one [`PreparedFood`] at a
-//! time without collecting the array.
-
 use std::fmt;
 use std::io::Read;
 use std::num::NonZeroU64;
@@ -22,25 +16,14 @@ mod usda_nutrition;
 use crumbs_database::foods::{Dataset, Food, Source, SourceFoodId};
 use crumbs_database::nutrition_model::FoodData;
 
-/// A validated food record ready for persistence.
-///
-/// Holds source-independent imported food details.
 #[derive(Debug)]
 pub(crate) struct PreparedFood {
-    /// Positive FoodData Central identifier, converted to decimal text.
     pub(crate) fdc_id: FdcId,
-    /// Food kind declared by `dataType` and checked against the root key.
     pub(crate) kind: FoodKind,
-    /// Nonblank food description, preserved verbatim.
     pub(crate) description: FoodDescription,
-    /// Optional category text from `foodCategory.description`,
-    /// `wweiaFoodCategory.wweiaFoodCategoryDescription`, or `brandedFoodCategory`.
     pub(crate) category: Option<FoodCategory>,
-    /// Typed nutrition and serving details.
     pub(crate) parsed_data: FoodData,
-    /// Source fields omitted because their values could not be represented.
     pub(crate) sanitizations: Vec<usda_nutrition::Sanitization>,
-    /// One-based position of the record within the root array.
     pub(crate) position: RecordPosition,
 }
 
@@ -58,7 +41,6 @@ impl PreparedFood {
     }
 }
 
-/// A positive FoodData Central identifier represented as decimal text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FdcId(String);
 
@@ -75,25 +57,19 @@ impl fmt::Display for FdcId {
     }
 }
 
-/// Food kind declared by the `dataType` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub(crate) enum FoodKind {
-    /// Foundation Foods archive.
     #[serde(rename = "Foundation")]
     Foundation,
-    /// SR Legacy archive.
     #[serde(rename = "SR Legacy")]
     SrLegacy,
-    /// Survey (FNDDS) archive.
     #[serde(rename = "Survey (FNDDS)")]
     Survey,
-    /// Branded Foods archive.
     #[serde(rename = "Branded")]
     Branded,
 }
 
 impl FoodKind {
-    /// Returns the exact `dataType` spelling for this kind.
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Foundation => "Foundation",
@@ -103,7 +79,6 @@ impl FoodKind {
         }
     }
 
-    /// Returns the search dataset assigned to this USDA food kind.
     pub(crate) const fn dataset(self) -> Dataset {
         match self {
             Self::Foundation | Self::SrLegacy | Self::Survey => Dataset::Common,
@@ -118,7 +93,6 @@ impl fmt::Display for FoodKind {
     }
 }
 
-/// A nonblank food description.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FoodDescription(String);
 
@@ -137,7 +111,6 @@ impl fmt::Display for FoodDescription {
     }
 }
 
-/// Optional category text attached to a food.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FoodCategory(String);
 
@@ -147,7 +120,6 @@ impl fmt::Display for FoodCategory {
     }
 }
 
-/// One-based position of a record within the root food array.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RecordPosition(NonZeroUsize);
 
@@ -164,7 +136,6 @@ impl RecordPosition {
             .map(Self)
     }
 
-    /// Returns the one-based position as a number.
     pub const fn get(self) -> usize {
         self.0.get()
     }
@@ -176,47 +147,28 @@ impl fmt::Display for RecordPosition {
     }
 }
 
-/// Errors produced while streaming USDA FoodData Central JSON.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ParseError {
-    /// The document framing is invalid: wrong root, missing array, or trailing
-    /// content. `source` keeps serde's line and column.
     #[error("invalid USDA FoodData Central document: {source}")]
     Document {
-        /// Underlying JSON error with line and column information.
         #[source]
         source: serde_json::Error,
     },
-    /// Reading document framing or trailing input failed because of an input I/O
-    /// error.
     #[error("failed to read USDA FoodData Central document: {source}")]
     Read {
-        /// Underlying I/O error while reading document framing or trailing input.
         #[source]
         source: serde_json::Error,
     },
-    /// A food record cannot be read or is invalid. `source` identifies the read
-    /// or field problem.
     #[error("invalid USDA FoodData Central record {position}: {source}")]
     Record {
-        /// One-based record position.
         position: RecordPosition,
-        /// Record-level read or validation failure.
         #[source]
         source: RecordError,
     },
-    /// The receiving side of the bounded channel disappeared.
     #[error("consumer disconnected at USDA FoodData Central record {position}")]
-    ConsumerDisconnected {
-        /// Record that could not be delivered.
-        position: RecordPosition,
-    },
-    /// The record counter could not represent another record.
+    ConsumerDisconnected { position: RecordPosition },
     #[error("record count overflowed at USDA FoodData Central record {position}")]
-    RecordCountOverflow {
-        /// Last representable record position.
-        position: RecordPosition,
-    },
+    RecordCountOverflow { position: RecordPosition },
 }
 
 impl ParseError {
@@ -229,38 +181,22 @@ impl ParseError {
     }
 }
 
-/// Details of reading or validating a food record.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RecordError {
-    /// The record is not a valid header object. Serde's line and column are
-    /// relative to the start of the record object.
     #[error("malformed food header: {0}")]
     Header(#[from] serde_json::Error),
-    /// The record JSON is malformed. Serde's line and column are relative to
-    /// the archive document.
     #[error("malformed record JSON: {0}")]
     Syntax(#[source] serde_json::Error),
-    /// Reading the record JSON failed because of an input I/O error.
     #[error("failed to read record JSON: {0}")]
     Read(#[source] serde_json::Error),
-    /// The record was valid JSON but not an object.
     #[error("food record must be a JSON object")]
     NotObject,
-    /// `fdcId` was zero.
     #[error("fdcId must be positive")]
     ZeroFdcId,
-    /// `description` was whitespace-only.
     #[error("description must not be blank")]
     BlankDescription,
-    /// The root key and `dataType` disagree.
     #[error("dataType {data_type} does not match the {root} root")]
-    KindMismatch {
-        /// Kind implied by the root key.
-        root: FoodKind,
-        /// Kind declared by the record.
-        data_type: FoodKind,
-    },
-    /// Supported nutrient or serving data is malformed.
+    KindMismatch { root: FoodKind, data_type: FoodKind },
     #[error("invalid food nutrition or serving data: {0}")]
     Nutrition(#[source] usda_nutrition::NutritionError),
 }
@@ -274,7 +210,6 @@ impl RecordError {
     }
 }
 
-/// One rejected complete record, with any identity and field details that could be read.
 pub(crate) struct RejectedFood {
     pub(crate) position: RecordPosition,
     pub(crate) source_food_id: Option<SourceFoodId>,
@@ -284,24 +219,6 @@ pub(crate) struct RejectedFood {
 
 pub(crate) type StreamItem = Result<PreparedFood, RejectedFood>;
 
-/// Streams food records from `reader` into `sender`.
-///
-/// The input must be a single top-level object with exactly one recognized
-/// array: `FoundationFoods`, `SRLegacyFoods`, `SurveyFoods`, or `BrandedFoods`.
-/// The parser maps supported nutrition and serving details. It sends complete
-/// rejected records as `Err` stream items and continues; it never collects the
-/// array.
-///
-/// The function uses [`mpsc::Sender::blocking_send`], so it must run on a
-/// blocking thread, such as one created by [`tokio::task::spawn_blocking`],
-/// rather than on an async executor thread.
-///
-/// # Errors
-///
-/// Returns [`ParseError::Document`] for invalid root framing or trailing
-/// content, [`ParseError::Read`] for document-level input I/O failures,
-/// [`ParseError::Record`] for unreadable or syntactically malformed records, and
-/// [`ParseError::ConsumerDisconnected`] when the receiver is dropped.
 pub(crate) fn stream_foods(
     reader: impl Read,
     sender: &mpsc::Sender<StreamItem>,

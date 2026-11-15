@@ -9,12 +9,10 @@ use crate::nutrition_model::{Kcal, NonNegative};
 use crate::profiles::{NullablePatch, Patch};
 use crate::text::NonBlankString;
 
-/// The activity name as supplied, without a catalog reference.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, AliasTryNew, AliasValue)]
 #[serde(transparent)]
 pub struct ExerciseType(NonBlankString);
 
-/// The reported effort for an exercise session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExerciseIntensity {
@@ -24,7 +22,6 @@ pub enum ExerciseIntensity {
     VeryHard,
 }
 
-/// An exercise duration with nanosecond precision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, AliasNew, AliasValue)]
 pub struct ExerciseDuration(Duration);
 
@@ -50,15 +47,12 @@ impl<'de> Deserialize<'de> for ExerciseDuration {
     }
 }
 
-/// Nonnegative energy burned during an exercise session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AliasTryNew, AliasValue)]
 #[serde(transparent)]
 pub struct ExerciseCalories(NonNegative<Kcal>);
 
-/// Free-text notes preserved as supplied.
 pub type ExerciseNotes = String;
 
-/// A self-contained exercise session with supplied energy expenditure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExerciseLogEntry {
@@ -70,7 +64,6 @@ pub struct ExerciseLogEntry {
     pub notes: Option<ExerciseNotes>,
 }
 
-/// Partial exercise changes. Null notes clear the stored notes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExerciseLogPatch {

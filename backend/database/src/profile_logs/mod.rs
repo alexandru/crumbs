@@ -1,5 +1,3 @@
-//! Per-profile measurement logs and their query contract.
-
 mod error;
 mod exercise;
 mod model;

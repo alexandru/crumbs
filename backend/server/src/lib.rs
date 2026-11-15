@@ -1,5 +1,3 @@
-//! HTTP server for Crumbs.
-
 #[cfg(not(unix))]
 compile_error!("crumbs-server currently supports Unix targets only");
 

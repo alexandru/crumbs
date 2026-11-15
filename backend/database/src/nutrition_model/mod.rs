@@ -1,5 +1,3 @@
-//! Shared nutrition, serving, and measurement model.
-
 mod model;
 mod quantity;
 

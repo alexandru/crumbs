@@ -1,5 +1,3 @@
-//! Process-level checks for `crumbs db import-usda`.
-
 mod common;
 
 use std::error::Error;

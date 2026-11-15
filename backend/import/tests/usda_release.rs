@@ -1,6 +1,3 @@
-//! Official 2026-10-29 USDA Foundation Foods regression test (CC0 1.0).
-//! https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_json_2026-10-29.zip
-
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::io;
@@ -417,7 +414,6 @@ async fn matching_rowids(
 }
 
 fn fts_phrase(text: &str) -> FtsPhrase {
-    // FTS5 escapes a double quote inside a quoted phrase by doubling it.
     format!("\"{}\"", text.replace('"', "\"\""))
 }
 

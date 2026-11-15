@@ -1,5 +1,3 @@
-//! Request and tool lifecycle events.
-
 use std::time::Instant;
 
 use axum::body::Body;

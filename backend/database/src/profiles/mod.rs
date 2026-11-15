@@ -1,5 +1,3 @@
-//! Account-owned personal profiles and calculated calorie values.
-
 mod error;
 mod model;
 mod sqlite;

@@ -1,5 +1,3 @@
-//! Browser authorization with request-bound CSRF and explicit consent.
-
 use std::sync::Arc;
 use std::time::Duration;
 

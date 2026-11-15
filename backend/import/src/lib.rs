@@ -1,10 +1,3 @@
-//! Streaming USDA import orchestration.
-//!
-//! USDA foods retain the exact `(source, source_food_id)` identity, where the
-//! source is `usda` and the identifier is `fdcId`. Records with different IDs
-//! remain separate even when their descriptions or GTINs match. Rows absent
-//! from an input remain untouched, so USDA archive subsets coexist.
-
 mod progress;
 mod usda;
 
@@ -20,17 +13,13 @@ use crumbs_database::foods::{FoodWriter, Source, SourceFoodId};
 
 pub use self::usda::RecordPosition as ImportRecordPosition;
 
-/// A field named in an import diagnostic.
 pub type DiagnosticField = String;
-/// A reason reported for a sanitized or rejected food.
 pub type DiagnosticReason = String;
 
-/// Number of foods in an import outcome.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FoodCount(usize);
 
 impl FoodCount {
-    /// Returns the food count.
     pub const fn get(self) -> usize {
         self.0
     }
@@ -40,7 +29,6 @@ impl FoodCount {
     }
 }
 
-/// Summary of committed, sanitized, and rejected foods.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ImportReport {
     committed: FoodCount,
@@ -49,28 +37,22 @@ pub struct ImportReport {
 }
 
 impl ImportReport {
-    /// Returns the number of foods committed by this import.
     pub const fn committed(self) -> FoodCount {
         self.committed
     }
 
-    /// Returns the number of committed foods whose source data was sanitized.
     pub const fn sanitized(self) -> FoodCount {
         self.sanitized
     }
 
-    /// Returns the number of food records rejected during this import.
     pub const fn rejected(self) -> FoodCount {
         self.rejected
     }
 }
 
-/// Kind of food-level diagnostic produced by an import.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticKind {
-    /// The food was committed after one or more source values were omitted.
     Sanitized,
-    /// The food record was skipped because its data could not be represented.
     Rejected,
 }
 
@@ -83,20 +65,13 @@ impl fmt::Display for DiagnosticKind {
     }
 }
 
-/// One food-level event observed during a USDA import.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportDiagnostic {
-    /// Food provider.
     pub source: Source,
-    /// Provider's food identifier, when it could be read.
     pub source_food_id: Option<SourceFoodId>,
-    /// One-based position in the archive.
     pub position: ImportRecordPosition,
-    /// Whether the food was sanitized or rejected.
     pub kind: DiagnosticKind,
-    /// Field affected by the diagnostic, when known.
     pub field: Option<DiagnosticField>,
-    /// Human-readable explanation.
     pub reason: DiagnosticReason,
 }
 
@@ -116,7 +91,6 @@ impl fmt::Display for ImportDiagnostic {
     }
 }
 
-/// Error produced while importing a USDA FoodData Central file.
 #[derive(Debug, thiserror::Error)]
 #[error("{failure} for {} (committed {} foods)", path.display(), report.committed.get())]
 pub struct ImportError {
@@ -126,14 +100,6 @@ pub struct ImportError {
     failure: Box<ImportFailure>,
 }
 
-/// Imports a USDA file into a food-store implementation, one food per commit.
-///
-/// Invalid food records are skipped and included in the returned report. Use
-/// [`import_usda_with_diagnostics`] to observe food-level details.
-///
-/// # Errors
-///
-/// Returns an error for input, framing, worker, storage, or diagnostic failures.
 pub async fn import_usda<S: FoodWriter + ?Sized>(
     store: &S,
     path: impl AsRef<Path>,
@@ -141,14 +107,6 @@ pub async fn import_usda<S: FoodWriter + ?Sized>(
     import_usda_with_diagnostics(store, path, |_| Ok(())).await
 }
 
-/// Imports a USDA file and reports sanitized or rejected foods as they occur.
-///
-/// The callback runs on the async consumer task. Its error stops processing;
-/// counts returned by [`ImportError::report`] include all completed work.
-///
-/// # Errors
-///
-/// Returns an error for input, framing, worker, storage, or diagnostic failures.
 pub async fn import_usda_with_diagnostics<S, F>(
     store: &S,
     path: impl AsRef<Path>,
@@ -166,7 +124,6 @@ where
 }
 
 impl ImportError {
-    /// Returns import counts completed before the failure.
     pub const fn report(&self) -> ImportReport {
         self.report
     }

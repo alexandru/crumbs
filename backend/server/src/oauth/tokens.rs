@@ -1,5 +1,3 @@
-//! Client registration, token issuance, and grant revocation.
-
 use std::sync::Arc;
 
 use axum::Json;

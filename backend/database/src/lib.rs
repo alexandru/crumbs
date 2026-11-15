@@ -1,9 +1,3 @@
-//! Persistent storage for Crumbs.
-//!
-//! [`Database`] prepares storage before exposing a usable handle and is passed
-//! to the server at startup. Dropping the handle initiates cleanup;
-//! [`Database::close`] waits for it.
-
 mod clock;
 mod config;
 pub mod foods;

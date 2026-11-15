@@ -1,5 +1,3 @@
-//! Process-owned logging configuration.
-
 use std::error::Error as StdError;
 
 use tracing_subscriber::EnvFilter;

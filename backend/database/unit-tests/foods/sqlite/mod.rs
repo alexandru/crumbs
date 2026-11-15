@@ -32,7 +32,6 @@ pub(super) fn before_epoch() -> Result<SystemTime, io::Error> {
 }
 
 pub(super) fn after_i64_millis() -> Result<SystemTime, io::Error> {
-    // One millisecond past the largest signed 64-bit millisecond value.
     const OVERFLOW_MILLIS: u64 = 1 << 63;
 
     SystemTime::UNIX_EPOCH

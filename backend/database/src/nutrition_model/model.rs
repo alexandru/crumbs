@@ -1,11 +1,8 @@
-//! Source-independent nutrition and measured serving definitions.
-
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use super::quantity::{Energy, Kcal, Mass, MeasuredQuantity, QuantityError, Reported};
 
-/// Imported food details. Missing nutrition does not imply zero nutrients.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FoodData {
     pub nutrition: Option<NutritionProfile>,
@@ -13,7 +10,6 @@ pub struct FoodData {
     pub serving_sizes: Vec<ServingSize>,
 }
 
-/// The standardized measured quantity to which a nutrition profile applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NutritionBasis {
     #[serde(rename = "100 g")]
@@ -22,8 +18,6 @@ pub enum NutritionBasis {
     Per100Millilitres,
 }
 
-/// Source-supplied nutrients on one mass or volume basis.
-/// Independent reported totals and components need not add up exactly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NutritionProfile {
     pub per: NutritionBasis,
@@ -33,7 +27,6 @@ pub struct NutritionProfile {
 }
 
 impl NutritionProfile {
-    /// Creates a profile with no reported nutrients on the selected basis.
     pub fn empty(per: NutritionBasis) -> Self {
         Self {
             per,
@@ -43,7 +36,6 @@ impl NutritionProfile {
     }
 }
 
-/// Reported non-energy nutrients, preserving source units and qualifiers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Nutrients {
     #[serde(default)]
@@ -57,7 +49,6 @@ pub struct Nutrients {
     pub cholesterol: Option<Reported<Mass>>,
     pub water: Option<Reported<Mass>>,
     pub caffeine: Option<Reported<Mass>>,
-    /// Total choline.
     pub choline: Option<Reported<Mass>>,
     #[serde(default)]
     pub minerals: Minerals,
@@ -65,7 +56,6 @@ pub struct Nutrients {
     pub vitamins: Vitamins,
 }
 
-/// Reported mineral amounts. Missing amounts remain unknown.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Minerals {
     pub calcium: Option<Reported<Mass>>,
@@ -79,36 +69,22 @@ pub struct Minerals {
     pub selenium: Option<Reported<Mass>>,
 }
 
-/// Reported vitamin amounts in the specified forms, with source mass units.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Vitamins {
-    /// Vitamin A as retinol activity equivalents.
     pub vitamin_a: Option<Reported<Mass>>,
-    /// Total ascorbic acid.
     pub vitamin_c: Option<Reported<Mass>>,
-    /// Total vitamin D2 and D3.
     pub vitamin_d: Option<Reported<Mass>>,
-    /// Alpha-tocopherol.
     pub vitamin_e: Option<Reported<Mass>>,
-    /// Phylloquinone.
     pub vitamin_k1: Option<Reported<Mass>>,
-    /// Thiamin.
     pub vitamin_b1: Option<Reported<Mass>>,
-    /// Riboflavin.
     pub vitamin_b2: Option<Reported<Mass>>,
-    /// Niacin, without conversion to niacin equivalents.
     pub vitamin_b3: Option<Reported<Mass>>,
-    /// Pantothenic acid.
     pub vitamin_b5: Option<Reported<Mass>>,
-    /// Total vitamin B6.
     pub vitamin_b6: Option<Reported<Mass>>,
-    /// Total folate, without conversion to dietary folate equivalents.
     pub vitamin_b9: Option<Reported<Mass>>,
-    /// Vitamin B12.
     pub vitamin_b12: Option<Reported<Mass>>,
 }
 
-/// Consumed nutrition totals, separate from source nutrition per 100 units.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsumedNutrition {
     pub calories: Reported<Kcal>,
@@ -117,11 +93,6 @@ pub struct ConsumedNutrition {
 }
 
 impl ConsumedNutrition {
-    /// Builds consumed totals from source nutrition and a portion factor.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for a negative nutrient amount or a strict upper bound of zero.
     pub fn from_source(
         energy: Reported<Energy>,
         nutrients: &Nutrients,
@@ -194,7 +165,6 @@ impl ConsumedNutrition {
     }
 }
 
-/// Reported fat amounts, retaining each supplied unit and qualifier.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fat {
     pub total: Option<Reported<Mass>>,
@@ -204,7 +174,6 @@ pub struct Fat {
     pub trans: Option<Reported<Mass>>,
 }
 
-/// Distinct supplied carbohydrate definitions; fibre is never subtracted here.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Carbohydrates {
     pub including_fibre: Option<Reported<Mass>>,
@@ -214,7 +183,6 @@ pub struct Carbohydrates {
     pub starch: Option<Reported<Mass>>,
 }
 
-/// Reported sugars. Added sugars and lactose can overlap.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sugars {
     pub total: Option<Reported<Mass>>,
@@ -222,8 +190,6 @@ pub struct Sugars {
     pub lactose: Option<Reported<Mass>>,
 }
 
-/// A named portion with a known positive mass or volume.
-/// Nutrition remains on the profile basis and is not copied into servings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ServingSize {
     pub name: ServingName,
@@ -231,7 +197,6 @@ pub struct ServingSize {
 }
 
 impl ServingSize {
-    /// Creates a named serving with a positive mass or volume.
     pub fn new(name: ServingName, quantity: MeasuredQuantity) -> Result<Self, QuantityError> {
         if !quantity.is_positive() {
             return Err(QuantityError::NonPositive);
@@ -239,7 +204,6 @@ impl ServingSize {
         Ok(Self { name, quantity })
     }
 
-    /// Returns the serving's measured mass or volume.
     pub const fn quantity(&self) -> MeasuredQuantity {
         self.quantity
     }
@@ -261,7 +225,6 @@ impl<'de> Deserialize<'de> for ServingSize {
     }
 }
 
-/// Source-supplied display name of a measured portion.
 pub type ServingName = String;
 
 #[cfg(test)]

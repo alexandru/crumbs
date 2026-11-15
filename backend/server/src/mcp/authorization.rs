@@ -1,5 +1,3 @@
-//! Request-local permissions and HTTP scope challenges for MCP tool calls.
-
 use std::sync::{Arc, OnceLock};
 
 use crumbs_database::identity::OAuthScope;

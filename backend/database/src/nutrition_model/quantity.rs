@@ -7,7 +7,6 @@ use rust_decimal::Decimal;
 use rust_decimal::dec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// Invalid source measurements are rejected before entering the domain model.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum QuantityError {
     #[error("invalid or incompatible measurement unit: {0}")]
@@ -22,7 +21,6 @@ pub enum QuantityError {
     ZeroStrictUpperBound,
 }
 
-/// A comparison or approximation supplied by the source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Qualifier {
     #[default]
@@ -34,40 +32,30 @@ pub enum Qualifier {
     Approximate,
 }
 
-/// A decimal measurement in its retained source unit.
 pub trait Measurement: sealed::Sealed + Copy + fmt::Display {
-    /// Returns the decimal value in the retained source unit.
     fn value(self) -> Decimal;
 
-    /// Returns the unit symbol for this measurement.
     fn unit_symbol(self) -> Cow<'static, str>;
 
-    /// Returns whether the measurement is zero.
     fn is_zero(self) -> bool {
         self.value().is_zero()
     }
 
-    /// Returns whether this measurement is negative.
     fn is_negative(self) -> bool {
         self.value().is_sign_negative() && !self.value().is_zero()
     }
 
-    /// Returns whether this measurement is positive.
     fn is_positive(self) -> bool {
         self.value().is_sign_positive() && !self.value().is_zero()
     }
 
-    /// Parses a decimal value and its unit without first formatting them together.
     fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError>;
 }
 
-/// A measurement type with one fixed unit symbol.
 pub trait FixedUnit: Measurement {
-    /// The symbol for this unit.
     const SYMBOL: &'static str;
 }
 
-/// A measured nutrient amount with its source-supplied qualification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reported<T: Measurement> {
     qualifier: Qualifier,
@@ -75,7 +63,6 @@ pub struct Reported<T: Measurement> {
 }
 
 impl<T: Measurement> Reported<T> {
-    /// Creates a reported amount, rejecting an impossible strict upper bound.
     pub fn new(qualifier: Qualifier, amount: T) -> Result<Self, QuantityError> {
         if amount.is_negative() {
             return Err(QuantityError::Negative);
@@ -86,19 +73,16 @@ impl<T: Measurement> Reported<T> {
         Ok(Self { qualifier, amount })
     }
 
-    /// Parses a qualified decimal value and its unit.
     pub fn parse_with_unit(value: &str, unit: &str) -> Result<Self, QuantityError> {
         let value = value.trim();
         let (qualifier, amount) = qualifier_and_amount(value);
         Self::new(qualifier, T::parse_with_unit(amount.trim(), unit)?)
     }
 
-    /// Returns the source-supplied comparison or approximation.
     pub const fn qualifier(&self) -> Qualifier {
         self.qualifier
     }
 
-    /// Returns the measured amount.
     pub const fn amount(&self) -> T {
         self.amount
     }
@@ -161,7 +145,6 @@ macro_rules! ratio_integer_conversions {
     };
 }
 
-// Each concrete unit owns its invariant; dimension enums cannot contain raw decimals.
 macro_rules! measurement {
     ($name:ident, $unit:literal) => {
         #[doc = concat!("An exact signed decimal quantity in ", $unit, ".")]
@@ -171,33 +154,26 @@ macro_rules! measurement {
         unit_numeric_conversions!($name; i8, i16, i32, i64, u8, u16, u32, u64);
 
         impl $name {
-            /// Zero in this unit.
             pub const ZERO: Self = Self(Decimal::ZERO);
 
-            /// One in this unit.
             pub const ONE: Self = Self(Decimal::ONE);
 
-            /// Creates a quantity from an exact fixed-point value.
             pub const fn new(value: Decimal) -> Self {
                 Self(value)
             }
 
-            /// Returns whether the value is zero.
             pub fn is_zero(self) -> bool {
                 self.0.is_zero()
             }
 
-            /// Returns whether the value is negative.
             pub fn is_negative(self) -> bool {
                 self.0.is_sign_negative() && !self.is_zero()
             }
 
-            /// Returns whether the value is positive.
             pub fn is_positive(self) -> bool {
                 self.0.is_sign_positive() && !self.is_zero()
             }
 
-            /// Returns the exact fixed-point value in this unit.
             pub const fn value(self) -> Decimal {
                 self.0
             }
@@ -303,17 +279,11 @@ measurement!(Kilograms, "kg");
 measurement!(Days, "day");
 measurement!(Weeks, "week");
 
-/// A measurement whose value is zero or positive, retaining its unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, crumbs_derive::AliasValue)]
 #[serde(transparent)]
 pub struct NonNegative<T: Measurement>(T);
 
 impl<T: Measurement> NonNegative<T> {
-    /// Creates a measurement without changing its value or unit.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QuantityError::Negative`] if the value is negative.
     pub fn new(value: T) -> Result<Self, QuantityError> {
         if value.is_negative() {
             return Err(QuantityError::Negative);
@@ -323,7 +293,6 @@ impl<T: Measurement> NonNegative<T> {
     }
 }
 
-// A generic TryFrom<T> conflicts with the standard blanket implementation.
 impl TryFrom<Kcal> for NonNegative<Kcal> {
     type Error = QuantityError;
 
@@ -338,17 +307,14 @@ impl<'de, T: Measurement + Deserialize<'de>> Deserialize<'de> for NonNegative<T>
     }
 }
 
-/// A numerator quantity per one unit of the denominator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Ratio<N, D>(N, PhantomData<D>);
 
 impl<N, D> Ratio<N, D> {
-    /// Creates a ratio from the numerator quantity.
     pub const fn new(amount: N) -> Self {
         Self(amount, PhantomData)
     }
 
-    /// Returns the numerator quantity.
     pub fn amount(self) -> N {
         self.0
     }
@@ -438,10 +404,8 @@ impl<N: std::ops::Neg<Output = N>, D> std::ops::Neg for Ratio<N, D> {
     }
 }
 
-/// A quantity expressed per week.
 pub type PerWeek<T> = Ratio<T, Weeks>;
 
-/// A quantity expressed per day.
 pub type PerDay<T> = Ratio<T, Days>;
 
 impl<T: std::ops::Add<Output = T>> std::ops::Add<T> for PerDay<T> {
@@ -463,7 +427,6 @@ impl<T: std::ops::Mul<Decimal, Output = T>> std::ops::Mul<Decimal> for PerDay<T>
     }
 }
 
-/// A mass amount retaining the supplied supported unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mass {
     Kilograms(Kilograms),
@@ -473,7 +436,6 @@ pub enum Mass {
 }
 
 impl Mass {
-    /// Returns the decimal value in the retained source unit.
     pub fn value(self) -> Decimal {
         match self {
             Self::Kilograms(value) => value.value(),
@@ -483,10 +445,6 @@ impl Mass {
         }
     }
 
-    /// Converts this mass to grams using exact metric unit factors.
-    ///
-    /// Arithmetic uses at most 28 fractional decimal places and the `Decimal` 96-bit
-    /// coefficient. When precision must be reduced, midpoint ties round to nearest even.
     pub fn to_grams(self) -> Grams {
         match self {
             Self::Kilograms(value) => Grams::new(value.value() * dec!(1000)),
@@ -557,7 +515,6 @@ impl fmt::Display for Mass {
     }
 }
 
-/// Energy retaining the selected source unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Energy {
     Kcal(Kcal),
@@ -565,7 +522,6 @@ pub enum Energy {
 }
 
 impl Energy {
-    /// Returns the decimal value in the retained source unit.
     pub fn value(self) -> Decimal {
         match self {
             Self::Kcal(value) => value.value(),
@@ -573,10 +529,6 @@ impl Energy {
         }
     }
 
-    /// Converts this energy to kilocalories using `1 kcal = 4.184 kJ`.
-    ///
-    /// Arithmetic uses at most 28 fractional decimal places and the `Decimal` 96-bit
-    /// coefficient. When precision must be reduced, midpoint ties round to nearest even.
     pub fn to_kilocalories(self) -> Kcal {
         match self {
             Self::Kcal(value) => value,
@@ -637,7 +589,6 @@ impl fmt::Display for Energy {
     }
 }
 
-/// A mass or volume that retains its source unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeasuredQuantity {
     Mass(Mass),
@@ -655,7 +606,6 @@ impl MeasuredQuantity {
         }
     }
 
-    /// Returns the decimal value in the retained source unit.
     pub fn value(self) -> Decimal {
         match self {
             Self::Mass(value) => value.value(),
@@ -663,7 +613,6 @@ impl MeasuredQuantity {
         }
     }
 
-    /// Returns the measured mass, when the serving has a mass measurement.
     pub const fn mass(self) -> Option<Mass> {
         match self {
             Self::Mass(mass) => Some(mass),
@@ -671,7 +620,6 @@ impl MeasuredQuantity {
         }
     }
 
-    /// Returns the measured volume, when the serving has a volume measurement.
     pub const fn volume(self) -> Option<Volume> {
         match self {
             Self::Volume(volume) => Some(volume),
@@ -703,7 +651,6 @@ impl FromStr for MeasuredQuantity {
     }
 }
 
-/// A volume amount retaining the supplied supported unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Volume {
     Millilitres(Millilitres),
@@ -711,7 +658,6 @@ pub enum Volume {
 }
 
 impl Volume {
-    /// Returns the decimal value in the retained source unit.
     pub fn value(self) -> Decimal {
         match self {
             Self::Millilitres(value) => value.value(),
@@ -719,10 +665,6 @@ impl Volume {
         }
     }
 
-    /// Converts this volume to millilitres using exact metric unit factors.
-    ///
-    /// Arithmetic uses at most 28 fractional decimal places and the `Decimal` 96-bit
-    /// coefficient. When precision must be reduced, midpoint ties round to nearest even.
     pub fn to_millilitres(self) -> Millilitres {
         match self {
             Self::Millilitres(value) => value,

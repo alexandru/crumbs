@@ -1,5 +1,3 @@
-//! MCP schemas and invocation for profile logs.
-
 use std::sync::Arc;
 
 use axum::http::request::Parts;

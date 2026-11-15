@@ -1,6 +1,6 @@
-.PHONY: tests build docker-build-local
+.PHONY: test build docker-build-local
 
-tests:
+test:
 	cd backend && cargo test --workspace --all-features --locked
 
 build:

@@ -1,5 +1,3 @@
-//! Shared process and HTTP helpers for integration tests.
-
 #![allow(
     dead_code,
     reason = "each integration test binary compiles this shared module independently"
@@ -20,10 +18,8 @@ use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 use tempfile::TempDir;
 
-/// Maximum time to wait for a clean shutdown.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A running `crumbs server start` process listening on an ephemeral port.
 pub struct ServerProcess {
     child: Child,
     address: SocketAddr,
@@ -32,7 +28,6 @@ pub struct ServerProcess {
 }
 
 impl ServerProcess {
-    /// Starts the server with command-line settings in a temporary directory.
     pub fn spawn() -> Result<Self, Box<dyn Error>> {
         Self::spawn_with(
             &server_args(Path::new("crumbs.db"), "127.0.0.1", "0", "http://127.0.0.1"),
@@ -40,7 +35,6 @@ impl ServerProcess {
         )
     }
 
-    /// Starts the server with settings supplied only through environment variables.
     pub fn spawn_env_only() -> Result<Self, Box<dyn Error>> {
         Self::spawn_with(
             &[],
@@ -53,7 +47,6 @@ impl ServerProcess {
         )
     }
 
-    /// Starts the server with the given arguments and environment in a temporary directory.
     pub fn spawn_with(
         arguments: &[OsString],
         environment: &[(&str, &str)],
@@ -84,12 +77,10 @@ impl ServerProcess {
         })
     }
 
-    /// Returns the address advertised in the readiness message.
     pub fn address(&self) -> SocketAddr {
         self.address
     }
 
-    /// Returns the working directory used by the server process.
     pub fn directory(&self) -> &Path {
         self._directory.path()
     }
@@ -100,7 +91,6 @@ impl ServerProcess {
         Ok(())
     }
 
-    /// Waits for the server process to exit, up to `timeout`.
     pub fn wait_for_exit(&mut self, timeout: Duration) -> Result<ExitStatus, Box<dyn Error>> {
         let status = wait_for_status(&mut self.child, timeout)?;
         self.exited = true;
@@ -119,14 +109,12 @@ impl Drop for ServerProcess {
 pub type HttpStatusCode = StatusCode;
 pub type HttpResponse = Response<String>;
 
-/// The result of running the server until it exits on its own.
 pub struct CommandOutput {
     pub status: ExitStatus,
     pub stdout: String,
     pub stderr: String,
 }
 
-/// Builds server options for a process invocation.
 pub fn server_args(database_path: &Path, bind: &str, port: &str, issuer: &str) -> Vec<OsString> {
     [
         OsString::from("--database-path"),
@@ -141,7 +129,6 @@ pub fn server_args(database_path: &Path, bind: &str, port: &str, issuer: &str) -
     .into()
 }
 
-/// Runs `crumbs server start` and waits for it to exit.
 pub fn run_server_to_exit(
     arguments: &[OsString],
     environment: &[(&str, &str)],
@@ -150,7 +137,6 @@ pub fn run_server_to_exit(
     run_server_to_exit_in(directory.path(), arguments, environment)
 }
 
-/// Runs `crumbs server start` from `directory` and waits for it to exit.
 pub fn run_server_to_exit_in(
     directory: &Path,
     arguments: &[OsString],
@@ -175,7 +161,6 @@ pub fn run_server_to_exit_in(
     })
 }
 
-/// Sends `GET <path>` to the server over a raw HTTP/1.1 connection.
 pub fn get(server: &ServerProcess, path: &str) -> Result<HttpResponse, Box<dyn Error>> {
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, server.address().port()));
     let mut stream = TcpStream::connect_timeout(&address, REQUEST_TIMEOUT)?;
@@ -192,7 +177,6 @@ pub fn get(server: &ServerProcess, path: &str) -> Result<HttpResponse, Box<dyn E
     parse_response(response)
 }
 
-/// Creates the executable command with inherited application settings removed.
 pub fn command() -> Command {
     let mut command = Command::new(BIN);
     for variable in CONFIGURATION_ENVIRONMENT {

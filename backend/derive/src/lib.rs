@@ -1,14 +1,8 @@
-//! Derives for domain newtypes.
-
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{Data, DeriveInput, Fields, GenericParam};
 
-/// Generates a fallible `new(value)` constructor for a single-field tuple struct.
-///
-/// Construction delegates to the inner type's `TryFrom` implementation and returns
-/// its error unchanged. The constructor accepts each input type supported by the inner type.
 #[proc_macro_derive(AliasTryNew)]
 pub fn derive_alias_try_new(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
@@ -18,9 +12,6 @@ pub fn derive_alias_try_new(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Generates an infallible `new(value)` constructor for a single-field tuple struct.
-///
-/// Construction delegates to the inner type's `From` implementation.
 #[proc_macro_derive(AliasNew)]
 pub fn derive_alias_new(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
@@ -30,7 +21,6 @@ pub fn derive_alias_new(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Generates a borrowed `value(&self)` accessor for a single-field tuple struct.
 #[proc_macro_derive(AliasValue)]
 pub fn derive_alias_value(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
@@ -40,7 +30,6 @@ pub fn derive_alias_value(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Forwards formatting to the inner value of a single-field tuple struct.
 #[proc_macro_derive(Display)]
 pub fn derive_display(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
@@ -67,11 +56,6 @@ fn expand_alias_try_new(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         impl #impl_generics #name #type_generics #where_clause {
-            /// Constructs the wrapper through the inner type's `TryFrom` implementation.
-            ///
-            /// # Errors
-            ///
-            /// Returns the inner conversion error if the input is invalid.
             pub fn new<#parameter>(value: #parameter)
                 -> ::core::result::Result<Self, <#inner as ::core::convert::TryFrom<#parameter>>::Error>
             where
@@ -99,7 +83,6 @@ fn expand_alias_new(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         impl #impl_generics #name #type_generics #where_clause {
-            /// Constructs the wrapper through the inner type's `From` implementation.
             pub fn new<#parameter>(value: #parameter) -> Self
             where
                 #inner: ::core::convert::From<#parameter>,
@@ -118,7 +101,6 @@ fn expand_alias_value(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         impl #impl_generics #name #type_generics #where_clause {
-            /// Borrows the wrapped value.
             pub const fn value(&self) -> &#inner {
                 &self.0
             }

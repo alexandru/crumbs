@@ -1,5 +1,3 @@
-//! HTTP route table for the server.
-
 use std::sync::Arc;
 
 use axum::Router;

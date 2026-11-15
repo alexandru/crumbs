@@ -19,17 +19,11 @@ use crate::nutrition_model::{
 
 use super::ProfileError;
 
-/// A positive, stable profile identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ProfileId(i64);
 
 impl ProfileId {
-    /// Creates a profile identifier from a positive integer.
-    ///
-    /// # Errors
-    ///
-    /// Returns [ProfileError::InvalidInput] if value is not positive.
     pub fn new(value: i64) -> Result<Self, ProfileError> {
         if value > 0 {
             Ok(Self(value))
@@ -38,7 +32,6 @@ impl ProfileId {
         }
     }
 
-    /// Returns the integer value of this identifier.
     pub const fn get(self) -> i64 {
         self.0
     }
@@ -51,9 +44,6 @@ impl<'de> Deserialize<'de> for ProfileId {
     }
 }
 
-/// A nonblank profile name, retaining its trimmed display spelling.
-///
-/// Equality uses Unicode canonical caseless matching and preserves accents.
 #[derive(Debug, Clone)]
 pub struct ProfileName {
     display: String,
@@ -61,11 +51,6 @@ pub struct ProfileName {
 }
 
 impl ProfileName {
-    /// Creates a profile name and its account-scoped uniqueness key.
-    ///
-    /// # Errors
-    ///
-    /// Returns [ProfileError::InvalidInput] if trimming leaves the name blank.
     pub fn new(value: impl AsRef<str>) -> Result<Self, ProfileError> {
         let display = value.as_ref().trim();
         if display.is_empty() {
@@ -82,7 +67,6 @@ impl ProfileName {
         })
     }
 
-    /// Returns the trimmed display spelling.
     pub fn as_str(&self) -> &str {
         &self.display
     }
@@ -118,18 +102,13 @@ impl<'de> Deserialize<'de> for ProfileName {
     }
 }
 
-/// Precision retained for a partial or complete birth date.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BirthDatePrecision {
-    /// The year is known.
     Year,
-    /// The year and month are known.
     YearMonth,
-    /// The complete calendar date is known.
     FullDate,
 }
 
-/// A validated birth date whose original precision is retained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BirthDate {
     date: NaiveDate,
@@ -137,50 +116,18 @@ pub struct BirthDate {
 }
 
 impl BirthDate {
-    /// Creates a birth date with year precision.
-    ///
-    /// Supported years are 1..=9999.
-    ///
-    /// # Errors
-    ///
-    /// Returns [ProfileError::InvalidInput] if the year is outside that range.
     pub fn year(year: i32) -> Result<Self, ProfileError> {
         Self::from_parts(year, 1, 1, BirthDatePrecision::Year)
     }
 
-    /// Creates a birth date with year-month precision.
-    ///
-    /// Supported years are 1..=9999.
-    ///
-    /// # Errors
-    ///
-    /// Returns [ProfileError::InvalidInput] if the year is outside that range
-    /// or the month is invalid.
     pub fn year_month(year: i32, month: u32) -> Result<Self, ProfileError> {
         Self::from_parts(year, month, 1, BirthDatePrecision::YearMonth)
     }
 
-    /// Creates a birth date with full-date precision.
-    ///
-    /// Supported years are 1..=9999.
-    ///
-    /// # Errors
-    ///
-    /// Returns [ProfileError::InvalidInput] if the year is outside that range
-    /// or the month or day is invalid.
     pub fn full_date(year: i32, month: u32, day: u32) -> Result<Self, ProfileError> {
         Self::from_parts(year, month, day, BirthDatePrecision::FullDate)
     }
 
-    /// Parses a year, year-month, or full ISO date.
-    ///
-    /// Supported years are 1..=9999. Accepted forms are YYYY, YYYY-MM, and
-    /// YYYY-MM-DD.
-    ///
-    /// # Errors
-    ///
-    /// Returns [ProfileError::InvalidInput] for an unsupported year, an
-    /// invalid format, or invalid calendar components.
     pub fn parse(value: &str) -> Result<Self, ProfileError> {
         static FORMAT: LazyLock<Result<Regex, regex::Error>> =
             LazyLock::new(|| Regex::new(r"\A[0-9]{4}(?:-[0-9]{2}(?:-[0-9]{2})?)?\z"));
@@ -212,12 +159,10 @@ impl BirthDate {
         Ok(Self { date, precision })
     }
 
-    /// Returns the retained precision.
     pub const fn precision(self) -> BirthDatePrecision {
         self.precision
     }
 
-    /// Returns the calendar date used for age calculations.
     pub const fn effective_date(self) -> NaiveDate {
         self.date
     }
@@ -284,34 +229,23 @@ impl<'de> Deserialize<'de> for BirthDate {
     }
 }
 
-/// A person's sex used by the selected BMR formula.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Sex {
-    /// Male formula constant.
     Male,
-    /// Female formula constant.
     Female,
 }
 
-/// A validated IANA timezone identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IanaTimezone(Tz);
 
 impl IanaTimezone {
-    /// Parses an IANA timezone identifier.
-    ///
-    /// # Errors
-    ///
-    /// Returns [ProfileError::InvalidInput] if value is not a supported IANA
-    /// timezone identifier.
     pub fn new(value: impl AsRef<str>) -> Result<Self, ProfileError> {
         Tz::from_str(value.as_ref())
             .map(Self)
             .map_err(|_| ProfileError::InvalidInput("invalid IANA timezone".to_owned()))
     }
 
-    /// Returns the canonical timezone identifier.
     pub fn as_str(self) -> &'static str {
         self.0.name()
     }
@@ -347,17 +281,11 @@ impl<'de> Deserialize<'de> for IanaTimezone {
     }
 }
 
-/// A strictly positive body height in centimetres.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct BodyHeight(Centimetres);
 
 impl BodyHeight {
-    /// Creates a positive body height.
-    ///
-    /// # Errors
-    ///
-    /// Returns [ProfileError::InvalidInput] if value is zero or negative.
     pub fn new(value: Centimetres) -> Result<Self, ProfileError> {
         if !value.is_positive() {
             return Err(ProfileError::InvalidInput(
@@ -367,7 +295,6 @@ impl BodyHeight {
         Ok(Self(value))
     }
 
-    /// Returns the height in centimetres.
     pub const fn value(self) -> Centimetres {
         self.0
     }
@@ -379,17 +306,11 @@ impl<'de> Deserialize<'de> for BodyHeight {
     }
 }
 
-/// A strictly positive body weight in kilograms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct BodyWeight(Kilograms);
 
 impl BodyWeight {
-    /// Creates a positive body weight.
-    ///
-    /// # Errors
-    ///
-    /// Returns [ProfileError::InvalidInput] if value is zero or negative.
     pub fn new(value: Kilograms) -> Result<Self, ProfileError> {
         if !value.is_positive() {
             return Err(ProfileError::InvalidInput(
@@ -399,7 +320,6 @@ impl BodyWeight {
         Ok(Self(value))
     }
 
-    /// Returns the weight in kilograms.
     pub const fn value(self) -> Kilograms {
         self.0
     }
@@ -411,39 +331,29 @@ impl<'de> Deserialize<'de> for BodyWeight {
     }
 }
 
-/// A requested signed weight change in kilograms per week.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct WeightChangeGoal(PerWeek<Kilograms>);
 
 impl WeightChangeGoal {
-    /// Creates a goal: negative for loss, positive for gain, or zero for no change.
     pub const fn new(value: PerWeek<Kilograms>) -> Self {
         Self(value)
     }
 
-    /// Returns the requested rate in kilograms per week.
     pub const fn value(self) -> PerWeek<Kilograms> {
         self.0
     }
 
-    /// Estimates the calorie balance goal using 7,700 kcal per kilogram over seven days.
     pub fn calorie_balance_goal(self) -> PerDay<Kcal> {
         PerDay::new(KcalPerKg::from(7700) * self.0.amount() / dec!(7))
     }
 }
 
-/// A positive custom BMR value, stored as kcal/day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct CustomBmr(PerDay<Kcal>);
 
 impl CustomBmr {
-    /// Creates a positive custom BMR value.
-    ///
-    /// # Errors
-    ///
-    /// Returns [ProfileError::InvalidInput] if value is zero or negative.
     pub fn new(value: PerDay<Kcal>) -> Result<Self, ProfileError> {
         if !value.is_positive() {
             return Err(ProfileError::InvalidInput(
@@ -453,7 +363,6 @@ impl CustomBmr {
         Ok(Self(value))
     }
 
-    /// Returns the custom BMR value in kcal/day.
     pub const fn value(self) -> PerDay<Kcal> {
         self.0
     }
@@ -465,15 +374,14 @@ impl<'de> Deserialize<'de> for CustomBmr {
     }
 }
 
-/// Whether BMR is calculated from profile inputs or supplied explicitly.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BmrSetting {
-    /// Calculate BMR from the profile's weight, height, age, and sex.
     #[default]
     Calculated,
-    /// Use a supplied kcal/day value.
-    Custom { value: CustomBmr },
+    Custom {
+        value: CustomBmr,
+    },
 }
 
 impl<'de> Deserialize<'de> for BmrSetting {
@@ -485,29 +393,20 @@ impl<'de> Deserialize<'de> for BmrSetting {
     }
 }
 
-/// A preset used for baseline activity outside separately recorded activity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityLevel {
-    /// No baseline activity addition.
     NoActivity,
-    /// A sedentary baseline.
     Sedentary,
-    /// A lightly active baseline.
     LightlyActive,
-    /// A moderately active baseline.
     ModeratelyActive,
-    /// A very active baseline.
     VeryActive,
 }
 
-/// A preset activity level or a fixed custom baseline kcal/day value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BaselineActivity {
-    /// Calculate the addition from a preset level.
     Preset { level: ActivityLevel },
-    /// Use a fixed kcal/day addition.
     Custom { value: PerDay<Kcal> },
 }
 
@@ -530,64 +429,44 @@ impl BaselineActivity {
     }
 }
 
-/// A profile's writable settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileSettings {
-    /// Optional birth date, with its original precision retained.
     pub birth_date: Option<BirthDate>,
-    /// Sex used by the BMR formula.
     pub sex: Option<Sex>,
-    /// Body height.
     pub height: Option<BodyHeight>,
-    /// Local timezone used to evaluate the current date.
     #[serde(default)]
     pub timezone: IanaTimezone,
-    /// Optional target body weight.
     pub weight_goal: Option<BodyWeight>,
-    /// Optional requested weight change in kilograms per week.
     pub weight_change_goal: Option<WeightChangeGoal>,
-    /// Selected BMR calculation mode.
     #[serde(default)]
     pub bmr: BmrSetting,
-    /// Optional baseline activity addition.
     pub baseline_activity: Option<BaselineActivity>,
 }
 
-/// Read-only cached values derived from profile history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileCache {
-    /// The most recent recorded body weight, initially absent.
     pub current_weight: Option<BodyWeight>,
 }
 
-/// Settings and derived cache stored for a profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileData {
-    /// Writable profile settings.
     pub settings: ProfileSettings,
-    /// Server-maintained values derived from profile history.
     pub cache: ProfileCache,
 }
 
-/// Calorie values calculated from settings and cache at read time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileDerived {
-    /// Effective BMR, or None when required inputs are absent.
     bmr: Option<PerDay<Kcal>>,
-    /// Baseline activity addition, or None when it cannot be calculated.
     baseline_activity: Option<PerDay<Kcal>>,
-    /// Effective BMR plus baseline activity, or None if either is absent.
     maintenance_calories: Option<PerDay<Kcal>>,
-    /// Estimated calorie balance for the weight change goal, or None when unset.
     calorie_balance_goal: Option<PerDay<Kcal>>,
 }
 
 impl ProfileDerived {
-    /// Creates derived values from the effective BMR and activity addition.
     pub fn from_components(
         bmr: Option<PerDay<Kcal>>,
         baseline_activity: Option<PerDay<Kcal>>,
@@ -605,30 +484,20 @@ impl ProfileDerived {
         }
     }
 
-    /// Returns the effective BMR, or None when required inputs are absent.
     pub const fn bmr(&self) -> Option<PerDay<Kcal>> {
         self.bmr
     }
-    /// Returns the baseline activity addition, or None when it cannot be calculated.
     pub const fn baseline_activity(&self) -> Option<PerDay<Kcal>> {
         self.baseline_activity
     }
-    /// Returns the sum of BMR and activity, or None when either is absent.
     pub const fn maintenance_calories(&self) -> Option<PerDay<Kcal>> {
         self.maintenance_calories
     }
 
-    /// Returns the estimated calorie balance, or None when the weight change goal is unset.
     pub const fn calorie_balance_goal(&self) -> Option<PerDay<Kcal>> {
         self.calorie_balance_goal
     }
 
-    /// Calculates profile values from settings and cached weight at `timestamp`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ProfileError::Calculation`] if the timestamp is out of range
-    /// or the calculated BMR is negative.
     pub(crate) fn calculate(
         settings: &ProfileSettings,
         cache: &ProfileCache,
@@ -689,27 +558,16 @@ impl<'de> Deserialize<'de> for ProfileDerived {
     }
 }
 
-/// A profile and its derived calorie values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
-    /// Stable profile identifier.
     pub id: ProfileId,
-    /// Display name.
     pub name: ProfileName,
-    /// Profile settings and read-only cache.
     pub data: ProfileData,
-    /// Values calculated from current settings and cache.
     pub derived: ProfileDerived,
 }
 
 impl Profile {
-    /// Builds a profile with values calculated at `now`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a calculation error if the timestamp is out of range
-    /// or the calculated BMR is negative.
     pub(crate) fn from_data(
         id: ProfileId,
         name: ProfileName,
@@ -727,25 +585,16 @@ impl Profile {
     }
 }
 
-/// Settings accepted when creating a profile.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct CreateProfileSettings {
-    /// Optional birth date.
     pub birth_date: Option<BirthDate>,
-    /// Optional sex used by BMR calculation.
     pub sex: Option<Sex>,
-    /// Optional body height.
     pub height: Option<BodyHeight>,
-    /// Optional IANA timezone; defaults to UTC.
     pub timezone: Option<IanaTimezone>,
-    /// Optional target body weight.
     pub weight_goal: Option<BodyWeight>,
-    /// Optional requested weight change in kilograms per week.
     pub weight_change_goal: Option<WeightChangeGoal>,
-    /// BMR mode; defaults to calculated.
     pub bmr: Option<BmrSetting>,
-    /// Optional baseline activity mode.
     pub baseline_activity: Option<BaselineActivity>,
 }
 
@@ -764,24 +613,18 @@ impl CreateProfileSettings {
     }
 }
 
-/// Input for creating a profile.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateProfile {
-    /// Profile display name.
     pub name: ProfileName,
-    /// Optional profile settings.
     #[serde(default)]
     pub settings: Option<CreateProfileSettings>,
 }
 
-/// An unchanged or replacement value in a profile patch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Patch<T> {
-    /// Keep the stored value.
     #[default]
     Unchanged,
-    /// Replace the stored value.
     Set(T),
 }
 
@@ -791,15 +634,11 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Patch<T> {
     }
 }
 
-/// An unchanged, replacement, or clear operation for a nullable value.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum NullablePatch<T> {
-    /// Keep the stored value.
     #[default]
     Unchanged,
-    /// Replace the stored value.
     Set(T),
-    /// Clear the stored value.
     Clear,
 }
 
@@ -812,50 +651,34 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for NullablePatch<T> {
     }
 }
 
-/// A partial update for a profile.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PatchProfile {
-    /// Optional replacement display name.
     #[serde(default, deserialize_with = "deserialize_name_patch")]
     pub name: Patch<ProfileName>,
-    /// Optional birth date update.
     #[serde(default)]
     pub birth_date: NullablePatch<BirthDate>,
-    /// Optional sex update.
     #[serde(default)]
     pub sex: NullablePatch<Sex>,
-    /// Optional height update.
     #[serde(default)]
     pub height: NullablePatch<BodyHeight>,
-    /// Optional timezone replacement.
     #[serde(default, deserialize_with = "deserialize_timezone_patch")]
     pub timezone: Patch<IanaTimezone>,
-    /// Optional weight-goal update.
     #[serde(default)]
     pub weight_goal: NullablePatch<BodyWeight>,
-    /// Optional weight-change goal update; null clears the goal.
     #[serde(default)]
     pub weight_change_goal: NullablePatch<WeightChangeGoal>,
-    /// Optional BMR mode update; null resets to calculated mode.
     #[serde(default)]
     pub bmr: NullablePatch<BmrSetting>,
-    /// Optional baseline activity update.
     #[serde(default)]
     pub baseline_activity: NullablePatch<BaselineActivity>,
 }
 
-/// A bounded page size for profile listing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct ProfileLimit(i64);
 
 impl ProfileLimit {
-    /// Creates a page size in the range 1..=100.
-    ///
-    /// # Errors
-    ///
-    /// Returns [ProfileError::InvalidInput] if value is outside that range.
     pub fn new(value: i64) -> Result<Self, ProfileError> {
         if (1..=100).contains(&value) {
             Ok(Self(value))
@@ -866,7 +689,6 @@ impl ProfileLimit {
         }
     }
 
-    /// Returns the bounded page size.
     pub const fn get(self) -> i64 {
         self.0
     }
@@ -878,13 +700,10 @@ impl<'de> Deserialize<'de> for ProfileLimit {
     }
 }
 
-/// Query options for an account's profiles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProfileListQuery {
-    /// Exclusive ascending ID cursor.
     pub last_id: Option<ProfileId>,
-    /// Maximum number of returned profiles; defaults to 100.
     pub limit: Option<ProfileLimit>,
 }
 
@@ -897,13 +716,10 @@ impl ProfileListQuery {
     }
 }
 
-/// A page of profiles owned by one account.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileList {
-    /// Profiles in ascending identifier order.
     pub items: Vec<Profile>,
-    /// Exclusive cursor for the next page.
     pub last_id: Option<ProfileId>,
 }
 
@@ -913,7 +729,6 @@ impl From<QuantityError> for ProfileError {
     }
 }
 
-/// Applies a patch while preserving cache and reporting whether writable state changed.
 pub(crate) fn apply_patch(
     current_name: ProfileName,
     current: ProfileData,

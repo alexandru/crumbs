@@ -1,8 +1,3 @@
-//! Process-level shutdown checks for `crumbs server start`.
-//!
-//! Each test performs a real HTTP request first, then verifies that a Unix
-//! signal produces a clean exit.
-
 mod common;
 
 use std::error::Error;

@@ -1,5 +1,3 @@
-//! Food search across the common, branded, and custom datasets.
-
 mod handlers;
 mod mcp;
 mod routes;

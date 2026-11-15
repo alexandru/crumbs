@@ -1,5 +1,3 @@
-//! MCP server protocol and tool dispatch.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -160,8 +158,6 @@ pub(crate) fn config() -> StreamableHttpServerConfig {
     StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
         .with_json_response(true)
-        // This public hosted service accepts its deployment's Host header.
-        // Browser origins are rejected; hosted harnesses do not require one.
         .disable_allowed_hosts()
         .enforce_origin_validation()
 }

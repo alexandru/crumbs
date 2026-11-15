@@ -1,5 +1,3 @@
-//! Process-level HTTP behavior for `crumbs server start`.
-
 mod common;
 
 use std::error::Error;

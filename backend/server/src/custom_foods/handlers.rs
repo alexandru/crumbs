@@ -1,5 +1,3 @@
-//! REST management of foods created in Crumbs.
-
 use std::sync::Arc;
 
 use axum::Json;
