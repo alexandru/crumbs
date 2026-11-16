@@ -1,3 +1,13 @@
+//! # Crumbs
+//!
+//! This is the command line interface tying everything together.
+//!
+//! It depends on:
+//!
+//! - [`crumbs_database`] for database access.
+//! - [`crumbs_import`] for importing of food data (e.g., USDA).
+//! - [`crumbs_server`] for the HTTP server (REST+MCP).
+
 use std::error::Error as StdError;
 use std::io::{self, Write};
 use std::path::PathBuf;

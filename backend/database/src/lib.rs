@@ -1,3 +1,5 @@
+//! This create provides the data model and the database access logic.
+
 mod clock;
 mod config;
 pub mod foods;
