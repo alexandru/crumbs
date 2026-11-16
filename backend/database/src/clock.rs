@@ -2,6 +2,12 @@ use std::time::SystemTime;
 
 pub(crate) type UnixMillis = i64;
 
+/// Clock is a way to inject time in a way that can be overriden and
+/// that is testable.
+///
+/// Getting the current time is always a side-effectful operation with
+/// non-deterministic results. It helps if the time generator is given
+/// as a parameter, for making tests more deterministic, but not only.
 pub(crate) struct Clock {
     source: ClockSource,
 }
