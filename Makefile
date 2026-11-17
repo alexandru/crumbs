@@ -1,4 +1,4 @@
-.PHONY: test build docker-build-local
+.PHONY: test build docker-build-local update-dependencies
 
 test:
 	cd backend && cargo test --workspace --all-features --locked
@@ -8,3 +8,6 @@ build:
 
 docker-build-local:
 	docker build -t crumbs ./backend
+
+update-dependencies:
+	cargo install cargo-edit && cd backend && cargo upgrade

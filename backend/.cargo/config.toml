@@ -1,2 +1,5 @@
 [alias]
 xtask = "run --package xtask --"
+
+[env]
+LIBSQLITE3_FLAGS = "SQLITE_DEFAULT_FILE_PERMISSIONS=0600"

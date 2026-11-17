@@ -11,6 +11,63 @@ const PASSWORD_HASH: &str = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJ
 const NOW: AuthTimestamp = 1_000;
 
 #[tokio::test]
+async fn full_registry_reclaims_oldest_unused_client() -> Result<(), Box<dyn StdError>> {
+    let (_directory, database) = open_database().await?;
+    let pending_client = public_client("pending");
+    let session_client = public_client("session");
+    database.register_client(&pending_client, 1).await?;
+    database.register_client(&session_client, 2).await?;
+    database
+        .begin_authorization(
+            &pending(hash(1), hash(2), &pending_client.id, NOW, 2_000),
+            NOW,
+        )
+        .await?;
+    let (user_id, password_hash) = create_user(&database).await?;
+    let (_, _, redemption) = begin_authorization(
+        &database,
+        AuthorizationSetup {
+            client_id: &session_client.id,
+            user_id,
+            password_hash: &password_hash,
+            request_hash: hash(3),
+            csrf_hash: hash(4),
+            code_hash: hash(5),
+            now: NOW,
+            code_expires_at: 1_200,
+            pending_expires_at: 2_000,
+        },
+    )
+    .await?;
+    database
+        .redeem_code(&redemption, None, &token_pair(6, 7, 1_300, 1_500), 1_100)
+        .await?
+        .ok_or("session missing")?;
+    sqlx::query(
+        "WITH RECURSIVE clients(n) AS (
+             VALUES (1) UNION ALL SELECT n + 1 FROM clients WHERE n < ?
+         )
+         INSERT INTO oauth_clients
+             (id, name, redirect_uris, authentication, allow_refresh, created_at)
+         SELECT printf('unused-%04d', n), 'Unused client', '[]', 'public', 0, 3
+         FROM clients",
+    )
+    .bind(MAX_OAUTH_CLIENTS - 2)
+    .execute(&database.pool)
+    .await?;
+    database
+        .register_client(&public_client("new"), 1_120)
+        .await?;
+    assert!(database.oauth_client("unused-0001").await?.is_none());
+    assert!(database.oauth_client("unused-0002").await?.is_some());
+    assert!(database.oauth_client("pending").await?.is_some());
+    assert!(database.oauth_client("session").await?.is_some());
+    assert!(database.oauth_client("new").await?.is_some());
+    database.close().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn client_registration_persists_hashed_authentication_and_capabilities()
 -> Result<(), Box<dyn StdError>> {
     let (_directory, database) = open_database().await?;

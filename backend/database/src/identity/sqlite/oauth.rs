@@ -37,7 +37,23 @@ impl OAuthStore for Database {
             .await
             .map_err(storage_error)?;
         if count >= MAX_OAUTH_CLIENTS {
-            return Err(AuthStoreError::Capacity);
+            let reclaimed = sqlx::query(
+                "DELETE FROM oauth_clients WHERE id = (
+                    SELECT c.id FROM oauth_clients AS c
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM oauth_authorizations AS a WHERE a.client_id = c.id
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM users_sessions AS s WHERE s.client_id = c.id
+                    )
+                    ORDER BY c.created_at, c.id LIMIT 1
+                 )",
+            )
+            .execute(&mut *transaction)
+            .await
+            .map_err(storage_error)?;
+            if reclaimed.rows_affected() == 0 {
+                return Err(AuthStoreError::Capacity);
+            }
         }
         sqlx::query(
             "INSERT INTO oauth_clients
@@ -90,7 +106,7 @@ impl OAuthStore for Database {
         }
         sqlx::query(
             "DELETE FROM oauth_authorizations
-             WHERE code_hash IS NULL AND expires_at <= ?",
+             WHERE session_id IS NULL AND code_hash IS NULL AND expires_at <= ?",
         )
         .bind(now)
         .execute(&mut *transaction)
@@ -98,7 +114,7 @@ impl OAuthStore for Database {
         .map_err(storage_error)?;
         let pending_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM oauth_authorizations
-             WHERE code_hash IS NULL AND expires_at > ?",
+             WHERE session_id IS NULL AND code_hash IS NULL AND expires_at > ?",
         )
         .bind(now)
         .fetch_one(&mut *transaction)

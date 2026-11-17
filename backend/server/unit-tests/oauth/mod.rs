@@ -1606,3 +1606,104 @@ async fn refresh_replay_revokes_the_family_and_revocation_rejects_other_clients(
     assert_eq!(revoked_token.status, StatusCode::UNAUTHORIZED);
     Ok(())
 }
+
+#[tokio::test]
+async fn protected_routes_require_the_correct_audience_and_scope() -> TestResult<()> {
+    let app = Application::new().await?;
+    let write_only_token = "test-rest-write-only-access-token";
+    seed_session_with_scope(
+        &app.database,
+        "test-rest-write-only-client",
+        TEST_REST_RESOURCE,
+        write_only_token,
+        "test-rest-write-only-refresh-token",
+        FoodScopes::Write,
+    )
+    .await?;
+
+    for (method, path) in [
+        ("GET", "/foods/search?query=chicken"),
+        ("HEAD", "/foods/search?query=chicken"),
+        ("GET", "/foods/custom"),
+        ("HEAD", "/foods/custom"),
+        ("POST", "/foods/custom"),
+        ("GET", "/foods/custom/1"),
+        ("HEAD", "/foods/custom/1"),
+        ("PUT", "/foods/custom/1"),
+        ("DELETE", "/foods/custom/1"),
+        ("GET", "/profiles"),
+        ("HEAD", "/profiles"),
+        ("POST", "/profiles"),
+        ("GET", "/profiles/1"),
+        ("HEAD", "/profiles/1"),
+        ("PATCH", "/profiles/1"),
+        ("GET", "/profiles/1/daily-status"),
+        ("HEAD", "/profiles/1/daily-status"),
+        ("GET", "/profiles/1/logs"),
+        ("HEAD", "/profiles/1/logs"),
+        ("POST", "/profiles/1/logs"),
+        ("POST", "/profiles/1/logs/batch"),
+        ("GET", "/profiles/1/logs/1"),
+        ("HEAD", "/profiles/1/logs/1"),
+        ("PATCH", "/profiles/1/logs/1"),
+        ("DELETE", "/profiles/1/logs/1"),
+        ("GET", "/mcp"),
+        ("POST", "/mcp"),
+        ("DELETE", "/mcp"),
+    ] {
+        let mcp = path == "/mcp";
+        let metadata_path = if mcp {
+            "/.well-known/oauth-protected-resource/mcp"
+        } else {
+            "/.well-known/oauth-protected-resource"
+        };
+        let metadata = format!("resource_metadata=\"{TEST_ISSUER}{metadata_path}\"");
+        for token in [
+            None,
+            Some(if mcp {
+                TEST_REST_ACCESS_TOKEN
+            } else {
+                TEST_MCP_ACCESS_TOKEN
+            }),
+        ] {
+            let mut builder = Request::builder().method(method).uri(path);
+            if let Some(token) = token {
+                builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+            }
+            let response = app.request(builder.body(Body::empty())?).await?;
+            assert_eq!(response.status, StatusCode::UNAUTHORIZED, "{method} {path}");
+            assert!(
+                response
+                    .headers
+                    .get(header::WWW_AUTHENTICATE)
+                    .is_some_and(|value| value
+                        .to_str()
+                        .is_ok_and(|value| value.contains(&metadata))),
+                "{method} {path}"
+            );
+        }
+        if !mcp {
+            let (token, required_scope) = if matches!(method, "GET" | "HEAD") {
+                (write_only_token, "crumbs:read")
+            } else {
+                (TEST_REST_ACCESS_TOKEN, "crumbs:write")
+            };
+            let request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())?;
+            let response = app.request(request).await?;
+            assert_eq!(response.status, StatusCode::FORBIDDEN, "{method} {path}");
+            let scope = format!("scope=\"{required_scope}\"");
+            assert!(
+                response
+                    .headers
+                    .get(header::WWW_AUTHENTICATE)
+                    .is_some_and(|value| value.to_str().is_ok_and(|value| value.contains(&scope))),
+                "{method} {path}"
+            );
+        }
+    }
+    Ok(())
+}

@@ -1488,7 +1488,7 @@ async fn migration_has_generated_projection_columns_indexes_and_profile_restrict
 
     for index_name in [
         "profile_logs_profile_id_id",
-        "profile_logs_profile_day_id",
+        "profile_logs_profile_day_time_id",
         "profile_logs_latest_weight",
         "profile_logs_profile_entry_type_id",
     ] {
