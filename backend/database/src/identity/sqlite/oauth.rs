@@ -37,23 +37,7 @@ impl OAuthStore for Database {
             .await
             .map_err(storage_error)?;
         if count >= MAX_OAUTH_CLIENTS {
-            let reclaimed = sqlx::query(
-                "DELETE FROM oauth_clients WHERE id = (
-                    SELECT c.id FROM oauth_clients AS c
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM oauth_authorizations AS a WHERE a.client_id = c.id
-                    ) AND NOT EXISTS (
-                        SELECT 1 FROM users_sessions AS s WHERE s.client_id = c.id
-                    )
-                    ORDER BY c.created_at, c.id LIMIT 1
-                 )",
-            )
-            .execute(&mut *transaction)
-            .await
-            .map_err(storage_error)?;
-            if reclaimed.rows_affected() == 0 {
-                return Err(AuthStoreError::Capacity);
-            }
+            return Err(AuthStoreError::Capacity);
         }
         sqlx::query(
             "INSERT INTO oauth_clients
