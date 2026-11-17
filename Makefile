@@ -10,4 +10,4 @@ docker-build-local:
 	docker build -t crumbs ./backend
 
 update-dependencies:
-	cargo install cargo-edit && cd backend && cargo upgrade
+	cargo install cargo-edit && cd backend && cargo upgrade --incompatible

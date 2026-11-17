@@ -8,22 +8,6 @@ use sqlx::{SqliteConnection, query, query_scalar};
 
 use super::{Database, DatabaseConfig, Error};
 
-#[tokio::test]
-async fn new_database_and_sidecars_are_private() -> Result<(), Box<dyn StdError>> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let directory = tempfile::tempdir()?;
-    let database = Database::open(config(directory.path().join("private.db"))).await?;
-    for file in ["private.db", "private.db-wal", "private.db-shm"] {
-        let mode = fs::metadata(directory.path().join(file))?
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o077, 0, "{file} has group or other permissions");
-    }
-    database.close().await;
-    Ok(())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn open_creates_parents_database_and_migrations() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;

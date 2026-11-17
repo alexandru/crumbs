@@ -10,16 +10,16 @@ publish = false
 
 [workspace.dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["form", "http1", "json", "matched-path", "query", "tokio"] }
-base64 = "0.22"
+base64 = "0.23"
 bcrypt = "0.19.3"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde"] }
 chrono-tz = { version = "0.10.4", default-features = false, features = ["std", "serde"] }
-getrandom = "0.3"
+getrandom = "0.4"
 maud = { version = "0.27", features = ["axum"] }
 rpassword = "7"
 regex = "1.13.1"
 rust-embed = "8.14"
-sha2 = "0.10"
+sha2 = "0.11"
 subtle = "2.6"
 url = { version = "2", features = ["serde"] }
 zeroize = "1"
@@ -32,10 +32,10 @@ futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 http = "1"
 humantime = "2.4.0"
-nix = { version = "0.31.4", features = ["process", "signal"] }
+nix = { version = "0.32.0", features = ["process", "signal"] }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
-syn = "2.0.119"
+syn = "3.0.10"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["raw_value"] }
 rmcp = { version = "3.11.0", default-features = false, features = ["server", "transport-streamable-http-server"] }
