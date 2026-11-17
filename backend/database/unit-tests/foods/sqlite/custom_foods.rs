@@ -1,6 +1,7 @@
 use std::error::Error as StdError;
 use std::io;
 
+use crate::Database;
 use crate::foods::tests::{ids_with_tag, make_food, open_database};
 use crate::foods::*;
 
@@ -52,34 +53,16 @@ async fn custom_food_crud_replaces_fields_preserves_identity_and_cleans_search()
     assert_eq!(summary.notes.as_deref(), Some("familyonlysecret"));
     assert_eq!(summary.barcode.as_deref(), Some("0012345678905"));
     for expression in ["0012345678905", "barcode:0012345678905", "barcode:001234*"] {
-        let query = SearchQuery::new(expression)?;
-        let results = database.search_foods(&query, FoodLimit::default()).await?;
-        assert_eq!(results.custom.len(), 1);
-        assert_eq!(results.custom[0].id, id);
+        assert_custom_matches(&database, expression, &[id]).await?;
     }
 
     let barcode_only = CustomFoodInput {
         barcode: Some("0001234567890".to_owned()),
-        ..initial.clone()
+        ..initial
     };
     database.update_custom_food(id, &barcode_only).await?;
-    let old_barcode = SearchQuery::new("barcode:0012345678905")?;
-    assert!(
-        database
-            .search_foods(&old_barcode, FoodLimit::default())
-            .await?
-            .custom
-            .is_empty()
-    );
-    let changed_barcode = SearchQuery::new("barcode:0001234567890")?;
-    assert_eq!(
-        database
-            .search_foods(&changed_barcode, FoodLimit::default())
-            .await?
-            .custom
-            .len(),
-        1
-    );
+    assert_custom_matches(&database, "barcode:0012345678905", &[]).await?;
+    assert_custom_matches(&database, "barcode:0001234567890", &[id]).await?;
 
     let replacement = CustomFoodInput {
         description: CustomFoodDescription::new("Updated lentils")?,
@@ -98,22 +81,8 @@ async fn custom_food_crud_replaces_fields_preserves_identity_and_cleans_search()
     assert!(updated.food.category.is_none());
     assert!(updated.food.notes.is_none());
     assert_eq!(updated.food.barcode.as_deref(), Some("0098765432100"));
-    assert!(
-        database
-            .search_foods(&changed_barcode, FoodLimit::default())
-            .await?
-            .custom
-            .is_empty()
-    );
-    let new_barcode = SearchQuery::new("barcode:0098765432100")?;
-    assert_eq!(
-        database
-            .search_foods(&new_barcode, FoodLimit::default())
-            .await?
-            .custom
-            .len(),
-        1
-    );
+    assert_custom_matches(&database, "barcode:0001234567890", &[]).await?;
+    assert_custom_matches(&database, "barcode:0098765432100", &[id]).await?;
     assert_eq!(
         updated
             .food
@@ -169,14 +138,20 @@ async fn custom_food_crud_replaces_fields_preserves_identity_and_cleans_search()
     assert!(ids_with_tag(&database, &favorite).await?.is_empty());
     let remaining = database.search_foods(&query, FoodLimit::default()).await?;
     assert!(remaining.custom.is_empty());
-    assert!(
-        database
-            .search_foods(&new_barcode, FoodLimit::default())
-            .await?
-            .custom
-            .is_empty()
-    );
+    assert_custom_matches(&database, "barcode:0098765432100", &[]).await?;
 
     database.close().await;
+    Ok(())
+}
+
+async fn assert_custom_matches(
+    database: &Database,
+    expression: &str,
+    expected: &[FoodId],
+) -> Result<(), Box<dyn StdError>> {
+    let query = SearchQuery::new(expression)?;
+    let results = database.search_foods(&query, FoodLimit::default()).await?;
+    let ids: Vec<FoodId> = results.custom.into_iter().map(|food| food.id).collect();
+    assert_eq!(ids, expected, "query: {expression}");
     Ok(())
 }
