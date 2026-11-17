@@ -5,7 +5,7 @@ use crate::activity::{ActivityDuration, StepCount};
 use crate::nutrition_model::{Kcal, Millilitres};
 use crate::profiles::{ProfileDerived, ProfileSettings};
 
-use super::DailyStatus;
+use super::model::DailyTotals;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DailyGoals {
@@ -17,7 +17,8 @@ pub struct DailyGoals {
 
 impl DailyGoals {
     pub(super) fn calculate(
-        status: &DailyStatus,
+        totals: &DailyTotals,
+        water: Millilitres,
         settings: &ProfileSettings,
         derived: &ProfileDerived,
     ) -> Self {
@@ -28,20 +29,20 @@ impl DailyGoals {
 
         Self {
             calories: calorie_target.map(|target| {
-                GoalProgress::new(target, Some(status.calories_consumed), Kcal::value)
+                GoalProgress::new(target, Some(totals.calories_consumed), Kcal::value)
             }),
             water: settings.daily_water_goal.map(|target| {
                 GoalProgress::new(
                     target.value().to_millilitres(),
-                    Some(status.water),
+                    Some(water),
                     Millilitres::value,
                 )
             }),
             steps: settings.daily_step_goal.map(|target| {
-                GoalProgress::new(target, status.steps, |steps| Decimal::from(*steps.value()))
+                GoalProgress::new(target, totals.steps, |steps| Decimal::from(*steps.value()))
             }),
             active_time: settings.daily_active_time_goal.map(|target| {
-                GoalProgress::new(target, status.active_time, |duration| {
+                GoalProgress::new(target, totals.active_time, |duration| {
                     let duration = duration.value();
                     Decimal::from(duration.as_secs())
                         + Decimal::new(i64::from(duration.subsec_nanos()), 9)

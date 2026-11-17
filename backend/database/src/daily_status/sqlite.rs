@@ -8,6 +8,7 @@ use crate::profile_logs::{DailyActivityReading, ExerciseCalories, LogDay};
 use crate::profiles::{ProfileData, ProfileDerived, ProfileId};
 use crate::runtime::Database;
 
+use super::model::DailyTotals;
 use super::{DailyStatus, DailyStatusError, DailyStatusQuery, DailyStatusReport, DailyStatusStore};
 
 impl DailyStatusStore for Database {
@@ -62,7 +63,7 @@ impl DailyStatusStore for Database {
         let mut next = rows.try_next().await.map_err(DailyStatusError::storage)?;
         let mut days = Vec::new();
         for day in range.days() {
-            let mut status = DailyStatus::empty(day, &derived);
+            let mut totals = DailyTotals::default();
             let day_text = day.to_string();
             while let Some(row) = next {
                 if row.day != day_text {
@@ -70,12 +71,16 @@ impl DailyStatusStore for Database {
                     break;
                 }
 
-                row.add_to(&mut status)?;
+                row.add_to(&mut totals)?;
                 next = rows.try_next().await.map_err(DailyStatusError::storage)?;
             }
 
-            status.finish(&data.settings, &derived);
-            days.push(status);
+            days.push(DailyStatus::calculate(
+                day,
+                totals,
+                &data.settings,
+                &derived,
+            ));
         }
         if next.is_some() {
             return Err(DailyStatusError::InvalidStoredData);
@@ -103,28 +108,27 @@ struct StatusRow {
 }
 
 impl StatusRow {
-    fn add_to(self, status: &mut DailyStatus) -> Result<(), DailyStatusError> {
+    fn add_to(self, totals: &mut DailyTotals) -> Result<(), DailyStatusError> {
         match self.entry_type.as_str() {
             "food" => {
                 let nutrition: ConsumedNutrition = serde_json::from_str(&self.payload)
                     .map_err(|_| DailyStatusError::InvalidStoredData)?;
-                status.add_food(&nutrition);
+                totals.add_food(&nutrition);
             }
             "exercise" => {
                 let calories: ExerciseCalories = serde_json::from_str(&self.payload)
                     .map_err(|_| DailyStatusError::InvalidStoredData)?;
-                status.expenditure.exercise =
-                    status.expenditure.exercise + *calories.value().value();
+                totals.exercise = totals.exercise + *calories.value().value();
             }
             "daily_activity" => {
                 let reading: DailyActivityReading = serde_json::from_str(&self.payload)
                     .map_err(|_| DailyStatusError::InvalidStoredData)?;
                 match reading {
                     DailyActivityReading::Steps(steps) => {
-                        status.steps.get_or_insert(steps);
+                        totals.steps.get_or_insert(steps);
                     }
                     DailyActivityReading::ActiveTime(duration) => {
-                        status.active_time.get_or_insert(duration);
+                        totals.active_time.get_or_insert(duration);
                     }
                 }
             }

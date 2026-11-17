@@ -56,42 +56,30 @@ pub struct DailyStatus {
 }
 
 impl DailyStatus {
-    pub(super) fn empty(day: LogDay, derived: &ProfileDerived) -> Self {
+    pub(super) fn calculate(
+        day: LogDay,
+        totals: DailyTotals,
+        settings: &ProfileSettings,
+        derived: &ProfileDerived,
+    ) -> Self {
         let maintenance = derived.maintenance_calories().map(|value| value.amount());
+        let water = water_volume_estimate(totals.nutrients.water);
+        let goals = DailyGoals::calculate(&totals, water, settings, derived);
 
         Self {
             day,
-            calories_consumed: Kcal::ZERO,
-            nutrients: Nutrients::default(),
-            water: Millilitres::ZERO,
-            steps: None,
-            active_time: None,
+            calories_consumed: totals.calories_consumed,
+            nutrients: totals.nutrients,
+            water,
+            steps: totals.steps,
+            active_time: totals.active_time,
             expenditure: DailyExpenditure {
                 maintenance,
-                exercise: Kcal::ZERO,
-                total: maintenance,
+                exercise: totals.exercise,
+                total: maintenance.map(|maintenance| maintenance + totals.exercise),
             },
-            goals: DailyGoals::default(),
+            goals,
         }
-    }
-
-    pub(super) fn add_food(&mut self, nutrition: &ConsumedNutrition) {
-        self.calories_consumed = self.calories_consumed + nutrition.calories.amount();
-        self.nutrients
-            .zip_mut(&nutrition.nutrients, |total, amount| {
-                if let Some(amount) = amount {
-                    *total = *total + amount.amount().to_grams();
-                }
-            });
-    }
-
-    pub(super) fn finish(&mut self, settings: &ProfileSettings, derived: &ProfileDerived) {
-        self.water = water_volume_estimate(self.nutrients.water);
-        self.expenditure.total = self
-            .expenditure
-            .maintenance
-            .map(|maintenance| maintenance + self.expenditure.exercise);
-        self.goals = DailyGoals::calculate(self, settings, derived);
     }
 }
 
@@ -100,6 +88,22 @@ pub struct DailyExpenditure {
     pub maintenance: Option<Kcal>,
     pub exercise: Kcal,
     pub total: Option<Kcal>,
+}
+
+#[derive(Default)]
+pub(super) struct DailyTotals {
+    pub(super) calories_consumed: Kcal,
+    pub(super) nutrients: Nutrients<Grams>,
+    pub(super) steps: Option<StepCount>,
+    pub(super) active_time: Option<ActivityDuration>,
+    pub(super) exercise: Kcal,
+}
+
+impl DailyTotals {
+    pub(super) fn add_food(&mut self, nutrition: &ConsumedNutrition) {
+        self.calories_consumed = self.calories_consumed + nutrition.calories.amount();
+        self.nutrients += &nutrition.nutrients;
+    }
 }
 
 pub(super) struct DateRange {

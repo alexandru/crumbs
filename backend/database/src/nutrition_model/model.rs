@@ -1,7 +1,7 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use super::quantity::{Energy, Kcal, Mass, MeasuredQuantity, QuantityError, Reported};
+use super::quantity::{Energy, Grams, Kcal, Mass, MeasuredQuantity, QuantityError, Reported};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FoodData {
@@ -56,63 +56,69 @@ pub struct Nutrients<T = Option<Reported<Mass>>> {
     pub vitamins: Vitamins<T>,
 }
 
-impl<T> Nutrients<T> {
-    pub(crate) fn zip_mut<U>(&mut self, other: &Nutrients<U>, mut f: impl FnMut(&mut T, &U)) {
-        f(&mut self.fat.total, &other.fat.total);
-        f(&mut self.fat.saturated, &other.fat.saturated);
-        f(&mut self.fat.monounsaturated, &other.fat.monounsaturated);
-        f(&mut self.fat.polyunsaturated, &other.fat.polyunsaturated);
-        f(&mut self.fat.trans, &other.fat.trans);
-        f(
+impl std::ops::AddAssign<&Nutrients> for Nutrients<Grams> {
+    fn add_assign(&mut self, other: &Nutrients) {
+        let add = |total: &mut Grams, amount: Option<Reported<Mass>>| {
+            if let Some(amount) = amount {
+                *total = *total + amount.amount().to_grams();
+            }
+        };
+
+        add(&mut self.fat.total, other.fat.total);
+        add(&mut self.fat.saturated, other.fat.saturated);
+        add(&mut self.fat.monounsaturated, other.fat.monounsaturated);
+        add(&mut self.fat.polyunsaturated, other.fat.polyunsaturated);
+        add(&mut self.fat.trans, other.fat.trans);
+        add(
             &mut self.carbohydrates.including_fibre,
-            &other.carbohydrates.including_fibre,
+            other.carbohydrates.including_fibre,
         );
-        f(
+        add(
             &mut self.carbohydrates.excluding_fibre,
-            &other.carbohydrates.excluding_fibre,
+            other.carbohydrates.excluding_fibre,
         );
-        f(
+        add(
             &mut self.carbohydrates.sugars.total,
-            &other.carbohydrates.sugars.total,
+            other.carbohydrates.sugars.total,
         );
-        f(
+        add(
             &mut self.carbohydrates.sugars.added,
-            &other.carbohydrates.sugars.added,
+            other.carbohydrates.sugars.added,
         );
-        f(
+        add(
             &mut self.carbohydrates.sugars.lactose,
-            &other.carbohydrates.sugars.lactose,
+            other.carbohydrates.sugars.lactose,
         );
-        f(&mut self.carbohydrates.starch, &other.carbohydrates.starch);
-        f(&mut self.fibre, &other.fibre);
-        f(&mut self.protein, &other.protein);
-        f(&mut self.sodium, &other.sodium);
-        f(&mut self.salt, &other.salt);
-        f(&mut self.cholesterol, &other.cholesterol);
-        f(&mut self.water, &other.water);
-        f(&mut self.caffeine, &other.caffeine);
-        f(&mut self.choline, &other.choline);
-        f(&mut self.minerals.calcium, &other.minerals.calcium);
-        f(&mut self.minerals.iron, &other.minerals.iron);
-        f(&mut self.minerals.magnesium, &other.minerals.magnesium);
-        f(&mut self.minerals.phosphorus, &other.minerals.phosphorus);
-        f(&mut self.minerals.potassium, &other.minerals.potassium);
-        f(&mut self.minerals.zinc, &other.minerals.zinc);
-        f(&mut self.minerals.copper, &other.minerals.copper);
-        f(&mut self.minerals.manganese, &other.minerals.manganese);
-        f(&mut self.minerals.selenium, &other.minerals.selenium);
-        f(&mut self.vitamins.vitamin_a, &other.vitamins.vitamin_a);
-        f(&mut self.vitamins.vitamin_c, &other.vitamins.vitamin_c);
-        f(&mut self.vitamins.vitamin_d, &other.vitamins.vitamin_d);
-        f(&mut self.vitamins.vitamin_e, &other.vitamins.vitamin_e);
-        f(&mut self.vitamins.vitamin_k1, &other.vitamins.vitamin_k1);
-        f(&mut self.vitamins.vitamin_b1, &other.vitamins.vitamin_b1);
-        f(&mut self.vitamins.vitamin_b2, &other.vitamins.vitamin_b2);
-        f(&mut self.vitamins.vitamin_b3, &other.vitamins.vitamin_b3);
-        f(&mut self.vitamins.vitamin_b5, &other.vitamins.vitamin_b5);
-        f(&mut self.vitamins.vitamin_b6, &other.vitamins.vitamin_b6);
-        f(&mut self.vitamins.vitamin_b9, &other.vitamins.vitamin_b9);
-        f(&mut self.vitamins.vitamin_b12, &other.vitamins.vitamin_b12);
+        add(&mut self.carbohydrates.starch, other.carbohydrates.starch);
+        add(&mut self.fibre, other.fibre);
+        add(&mut self.protein, other.protein);
+        add(&mut self.sodium, other.sodium);
+        add(&mut self.salt, other.salt);
+        add(&mut self.cholesterol, other.cholesterol);
+        add(&mut self.water, other.water);
+        add(&mut self.caffeine, other.caffeine);
+        add(&mut self.choline, other.choline);
+        add(&mut self.minerals.calcium, other.minerals.calcium);
+        add(&mut self.minerals.iron, other.minerals.iron);
+        add(&mut self.minerals.magnesium, other.minerals.magnesium);
+        add(&mut self.minerals.phosphorus, other.minerals.phosphorus);
+        add(&mut self.minerals.potassium, other.minerals.potassium);
+        add(&mut self.minerals.zinc, other.minerals.zinc);
+        add(&mut self.minerals.copper, other.minerals.copper);
+        add(&mut self.minerals.manganese, other.minerals.manganese);
+        add(&mut self.minerals.selenium, other.minerals.selenium);
+        add(&mut self.vitamins.vitamin_a, other.vitamins.vitamin_a);
+        add(&mut self.vitamins.vitamin_c, other.vitamins.vitamin_c);
+        add(&mut self.vitamins.vitamin_d, other.vitamins.vitamin_d);
+        add(&mut self.vitamins.vitamin_e, other.vitamins.vitamin_e);
+        add(&mut self.vitamins.vitamin_k1, other.vitamins.vitamin_k1);
+        add(&mut self.vitamins.vitamin_b1, other.vitamins.vitamin_b1);
+        add(&mut self.vitamins.vitamin_b2, other.vitamins.vitamin_b2);
+        add(&mut self.vitamins.vitamin_b3, other.vitamins.vitamin_b3);
+        add(&mut self.vitamins.vitamin_b5, other.vitamins.vitamin_b5);
+        add(&mut self.vitamins.vitamin_b6, other.vitamins.vitamin_b6);
+        add(&mut self.vitamins.vitamin_b9, other.vitamins.vitamin_b9);
+        add(&mut self.vitamins.vitamin_b12, other.vitamins.vitamin_b12);
     }
 }
 
