@@ -757,6 +757,24 @@ pub struct JournalLogEntry {
     pub text: JournalText,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum DailyActivityReading {
+    Steps(crate::activity::StepCount),
+    ActiveTime(crate::activity::ActivityDuration),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DailyActivityLogEntry {
+    pub reading: DailyActivityReading,
+}
+
 #[allow(
     clippy::large_enum_variant,
     reason = "Log payloads remain inline; log pages are bounded to 100 entries."
@@ -768,6 +786,7 @@ pub enum ProfileLogData {
     Food(FoodLogEntry),
     Journal(JournalLogEntry),
     Exercise(ExerciseLogEntry),
+    DailyActivity(DailyActivityLogEntry),
 }
 
 impl ProfileLogData {
@@ -788,6 +807,7 @@ pub enum LogInput {
     Food(FoodLogInput),
     Journal(JournalLogEntry),
     Exercise(ExerciseLogEntry),
+    DailyActivity(DailyActivityLogEntry),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -798,6 +818,48 @@ pub struct CreateLog {
     pub entry: LogInput,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateLogBatch(Vec<CreateLog>);
+
+impl CreateLogBatch {
+    pub fn new(logs: Vec<CreateLog>) -> Result<Self, ProfileLogError> {
+        Self::validate_length(logs.len())?;
+        Ok(Self(logs))
+    }
+
+    pub fn logs(&self) -> &[CreateLog] {
+        &self.0
+    }
+
+    fn validate_length(length: usize) -> Result<(), ProfileLogError> {
+        if (1..=100).contains(&length) {
+            Ok(())
+        } else {
+            Err(ProfileLogError::InvalidInput(
+                "batch must contain 1 to 100 logs".to_owned(),
+            ))
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CreateLogBatch {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+
+        let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+        Self::validate_length(values.len()).map_err(D::Error::custom)?;
+        let logs = values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                serde_json::from_value(value)
+                    .map_err(|error| D::Error::custom(format!("log {}: {error}", index + 1)))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self(logs))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LogEntryPatch {
@@ -805,6 +867,7 @@ pub enum LogEntryPatch {
     Food(FoodLogPatch),
     Journal(JournalLogEntry),
     Exercise(ExerciseLogPatch),
+    DailyActivity(DailyActivityLogEntry),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -825,6 +888,7 @@ pub enum LogEntryType {
     Biometric,
     Journal,
     Exercise,
+    DailyActivity,
 }
 
 impl LogEntryType {
@@ -834,6 +898,7 @@ impl LogEntryType {
             Self::Biometric => "biometric",
             Self::Journal => "journal",
             Self::Exercise => "exercise",
+            Self::DailyActivity => "daily_activity",
         }
     }
 }

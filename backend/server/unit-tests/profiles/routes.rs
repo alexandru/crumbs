@@ -43,6 +43,9 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
             json!({
                 "name": " Alex ",
                 "settings": {
+                    "daily_water_goal": "3 l",
+                    "daily_step_goal": 10000,
+                    "daily_active_time_goal": "45 min",
                     "weight_goal": "60 kg",
                     "weight_change_goal": "-0.5 kg/week",
                     "bmr": {"mode": "custom", "value": "1700 kcal/day"},
@@ -54,6 +57,12 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
     assert_eq!(created.status, StatusCode::CREATED, "{:?}", created.json,);
     let profile_id = created.json["id"].as_i64().ok_or("profile has no ID")?;
     assert_eq!(created.json["name"], "Alex");
+    assert_eq!(created.json["data"]["settings"]["daily_water_goal"], "3 l");
+    assert_eq!(created.json["data"]["settings"]["daily_step_goal"], 10000);
+    assert_eq!(
+        created.json["data"]["settings"]["daily_active_time_goal"],
+        "2700 s"
+    );
     assert_eq!(created.json["data"]["settings"]["timezone"], "UTC");
     assert_eq!(created.json["data"]["settings"]["weight_goal"], "60 kg");
     assert_eq!(
@@ -108,7 +117,7 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
             "PATCH",
             &profile_uri,
             TEST_REST_WRITE_ACCESS_TOKEN,
-            json!({"weight_goal": null}),
+            json!({"weight_goal": null, "daily_water_goal": null}),
         )?)
         .await?;
     assert_eq!(
@@ -118,6 +127,15 @@ async fn rest_profiles_support_defaults_custom_calories_and_patch_nulls()
         omitted_patch.json
     );
     assert_eq!(omitted_patch.json["name"], "Alex");
+    assert!(omitted_patch.json["data"]["settings"]["daily_water_goal"].is_null());
+    assert_eq!(
+        omitted_patch.json["data"]["settings"]["daily_step_goal"],
+        10000
+    );
+    assert_eq!(
+        omitted_patch.json["data"]["settings"]["daily_active_time_goal"],
+        "2700 s"
+    );
     assert_eq!(
         omitted_patch.json["data"]["settings"]["weight_change_goal"],
         "-0.5 kg/week"

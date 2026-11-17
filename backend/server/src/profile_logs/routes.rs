@@ -15,6 +15,10 @@ where
             axum::routing::get(handlers::list::<S>).post(handlers::create::<S>),
         )
         .route(
+            "/profiles/{profile_id}/logs/batch",
+            axum::routing::post(handlers::create_batch::<S>),
+        )
+        .route(
             "/profiles/{profile_id}/logs/{log_id}",
             axum::routing::get(handlers::get::<S>)
                 .patch(handlers::patch::<S>)

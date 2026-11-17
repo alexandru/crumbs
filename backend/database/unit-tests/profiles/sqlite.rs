@@ -427,3 +427,37 @@ async fn weight_change_goal_persists_and_recalculates_without_changing_other_val
     reopened.close().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn daily_goals_persist_and_patch_independently() -> Result<(), Box<dyn Error>> {
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
+    let user = insert_user(&database, 1).await?;
+    let created = database.create_profile(user, &create_input(
+        r#"{"name":"Alex","settings":{"daily_water_goal":"3 l","daily_step_goal":10000,"daily_active_time_goal":"45 min"}}"#
+    )?).await?;
+    let stored = database
+        .profile(user, created.id)
+        .await?
+        .ok_or("missing profile")?;
+    assert_eq!(stored.data.settings, created.data.settings);
+    let patch: PatchProfile =
+        serde_json::from_str(r#"{"daily_water_goal":null,"daily_active_time_goal":"1 h"}"#)?;
+    let updated = database
+        .patch_profile(user, created.id, &patch)
+        .await?
+        .ok_or("missing profile")?;
+    assert_eq!(updated.data.settings.daily_water_goal, None);
+    assert_eq!(
+        updated.data.settings.daily_step_goal,
+        created.data.settings.daily_step_goal
+    );
+    assert_eq!(
+        serde_json::to_value(updated.data.settings.daily_active_time_goal)?,
+        "3600 s"
+    );
+    let listed = database
+        .list_profiles(user, &ProfileListQuery::default())
+        .await?;
+    assert_eq!(listed.items[0].data.settings, updated.data.settings);
+    Ok(())
+}

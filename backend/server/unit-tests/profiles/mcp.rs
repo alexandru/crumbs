@@ -75,6 +75,13 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
         };
         let settings = &profile["properties"]["data"]["properties"]["settings"]["properties"];
         assert_eq!(settings["weight_change_goal"]["anyOf"][1]["type"], "null");
+        for goal in [
+            "daily_water_goal",
+            "daily_step_goal",
+            "daily_active_time_goal",
+        ] {
+            assert_eq!(settings[goal]["anyOf"][1]["type"], "null");
+        }
         assert_eq!(
             settings["bmr"]["oneOf"][1]["properties"]["value"]["type"],
             "string"
@@ -164,6 +171,9 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
             "profile": {
                 "name": "Amalia",
                 "settings": {
+                    "daily_water_goal": "3000 ml",
+                    "daily_step_goal": 10000,
+                    "daily_active_time_goal": "45 min",
                     "weight_change_goal": "-0.5 kg/week",
                     "bmr": {"mode":"custom", "value":"1650 kcal/day"},
                     "baseline_activity": {"mode":"preset", "level":"sedentary"}
@@ -197,6 +207,12 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
         assert_schema_keys(schema, value)?;
     }
     let profile_id = profile["id"].as_i64().ok_or("profile has no ID")?;
+    assert_eq!(profile["data"]["settings"]["daily_water_goal"], "3000 ml");
+    assert_eq!(profile["data"]["settings"]["daily_step_goal"], 10000);
+    assert_eq!(
+        profile["data"]["settings"]["daily_active_time_goal"],
+        "2700 s"
+    );
     assert_eq!(
         profile["data"]["settings"]["weight_change_goal"],
         "-0.5 kg/week"
@@ -228,11 +244,19 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
         &app.router,
         6,
         "update_profile",
-        json!({"id":profile_id, "patch":{"weight_goal":"64 kg"}}),
+        json!({"id":profile_id, "patch":{"weight_goal":"64 kg", "daily_water_goal":null}}),
         TEST_MCP_WRITE_ACCESS_TOKEN,
     )
     .await?;
     assert_eq!(updated.json["result"]["isError"], false);
+    assert!(
+        updated.json["result"]["structuredContent"]["data"]["settings"]["daily_water_goal"]
+            .is_null()
+    );
+    assert_eq!(
+        updated.json["result"]["structuredContent"]["data"]["settings"]["daily_step_goal"],
+        10000
+    );
     assert_eq!(
         updated.json["result"]["structuredContent"]["data"]["settings"]["weight_change_goal"],
         "-0.5 kg/week"

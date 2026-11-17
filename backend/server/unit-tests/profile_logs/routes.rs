@@ -1111,3 +1111,53 @@ async fn exercise_rest_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
     assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
     Ok(())
 }
+
+#[tokio::test]
+async fn rest_batch_creates_readings_in_order_and_rejects_invalid_batches()
+-> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    app.seed_profile_owner().await?;
+    let (profile_id, _) = create_test_profile(&app, "Alex", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    let uri = format!("/profiles/{profile_id}/logs/batch");
+    let denied = app
+        .request(http_json_request(
+            "POST",
+            &uri,
+            TEST_REST_ACCESS_TOKEN,
+            json!({"logs":[]}),
+        )?)
+        .await?;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN);
+    let response = app.request(http_json_request("POST", &uri, TEST_REST_WRITE_ACCESS_TOKEN, json!({
+        "logs":[
+            {"day":"2026-11-17","time":"16:00","entry":{"type":"daily_activity","reading":{"type":"steps","value":8500}}},
+            {"day":"2026-11-17","time":"20:00","entry":{"type":"daily_activity","reading":{"type":"steps","value":10000}}}
+        ]
+    }))?).await?;
+    assert_eq!(response.status, StatusCode::CREATED, "{:?}", response.json);
+    assert_eq!(response.json["items"][0]["data"]["reading"]["value"], 8500);
+    assert_eq!(response.json["items"][1]["data"]["reading"]["value"], 10000);
+    let invalid = app
+        .request(http_json_request(
+            "POST",
+            &uri,
+            TEST_REST_WRITE_ACCESS_TOKEN,
+            json!({"logs":[]}),
+        )?)
+        .await?;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+    let invalid_item = app.request(http_json_request("POST", &uri, TEST_REST_WRITE_ACCESS_TOKEN, json!({
+        "logs":[
+            {"day":"2026-11-17","entry":{"type":"daily_activity","reading":{"type":"steps","value":1}}},
+            {"day":"2026-11-17","entry":{"type":"daily_activity","reading":{"type":"steps","value":-1}}}
+        ]
+    }))?).await?;
+    assert_eq!(invalid_item.status, StatusCode::BAD_REQUEST);
+    assert!(
+        invalid_item.json["error"]
+            .as_str()
+            .ok_or("missing error")?
+            .contains("log 2")
+    );
+    Ok(())
+}
