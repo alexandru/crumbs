@@ -117,6 +117,7 @@ async fn create_common_food(
         description: description.to_owned(),
         category: None,
         notes: None,
+        barcode: None,
         parsed_data,
     };
     Ok(database.upsert_food(&food).await?)

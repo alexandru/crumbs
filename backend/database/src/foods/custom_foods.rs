@@ -3,7 +3,7 @@ use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 
-use super::model::{FoodCategory, FoodId, FoodLimit, FoodNotes, StoredFood};
+use super::model::{FoodBarcode, FoodCategory, FoodId, FoodLimit, FoodNotes, StoredFood};
 use crate::nutrition_model::FoodData;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +46,8 @@ pub struct CustomFoodInput {
     pub description: CustomFoodDescription,
     #[serde(default)]
     pub category: Option<FoodCategory>,
+    #[serde(default)]
+    pub barcode: Option<FoodBarcode>,
     #[serde(default)]
     pub notes: Option<FoodNotes>,
     #[serde(default)]

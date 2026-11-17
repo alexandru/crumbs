@@ -20,6 +20,7 @@ pub(super) fn make_food(
         description: description.to_owned(),
         category: category.map(str::to_owned),
         notes: None,
+        barcode: None,
         parsed_data: serde_json::from_str(parsed_data)?,
     })
 }

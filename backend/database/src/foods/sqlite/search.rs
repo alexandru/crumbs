@@ -74,7 +74,7 @@ async fn search_dataset(
 
 const SEARCH_SQL: &str = "
 SELECT f.id, f.source, f.source_food_id, f.dataset,
-       f.description, f.category, f.notes, f.parsed_data
+       f.description, f.category, f.notes, f.barcode, f.parsed_data
 FROM crumbs_foods_fts
 JOIN crumbs_foods AS f ON f.id = crumbs_foods_fts.rowid
 WHERE crumbs_foods_fts MATCH ? AND f.dataset = ?

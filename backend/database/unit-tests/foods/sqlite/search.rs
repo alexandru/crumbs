@@ -70,6 +70,7 @@ mod queries {
                     description: CustomFoodDescription::new(format!("Chicken custom {index}"))?,
                     category: None,
                     notes: None,
+                    barcode: None,
                     parsed_data: crate::nutrition_model::FoodData::default(),
                 })
                 .await?;

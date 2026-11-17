@@ -67,7 +67,13 @@ async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Resul
     for tool in [create_tool, update_tool] {
         let schema = &tool["inputSchema"];
         crate::tests::assert_inline_schema(schema)?;
-        let data = &schema["properties"]["food"]["properties"]["parsed_data"];
+        let food_schema = &schema["properties"]["food"];
+        assert_eq!(food_schema["required"], json!(["description"]));
+        assert_eq!(
+            food_schema["properties"]["barcode"]["type"],
+            json!(["string", "null"])
+        );
+        let data = &food_schema["properties"]["parsed_data"];
         let vitamin = &data["properties"]["nutrition"]["anyOf"][0]["properties"]["vitamins"]["properties"]
             ["vitamin_b12"];
         assert_eq!(vitamin["type"], json!(["string", "null"]));
@@ -88,6 +94,7 @@ async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Resul
     let create_arguments = json!({
         "food": {
             "description": "MCP sesame noodles",
+            "barcode": "0012345678905",
             "notes": "Noodles, sesame paste, lime",
             "parsed_data": {
                 "nutrition": { "per": "100 g", "energy": "315 kcal", "protein": "9 g", "caffeine": "20 mg", "minerals": {"potassium": "100 mg"}, "vitamins": {"vitamin_b12": "1 µg"} },
@@ -152,10 +159,24 @@ async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Resul
     let id = created_food["id"].as_i64().ok_or("MCP food has no ID")?;
     assert_eq!(created_food["source"], "custom");
     assert_eq!(created_food["dataset"], "custom");
+    assert_eq!(created_food["barcode"], "0012345678905");
     assert_eq!(created_food["notes"], "Noodles, sesame paste, lime");
     assert_eq!(
         created_food["parsed_data"]["nutrition"]["energy"],
         "315 kcal"
+    );
+
+    let found = mcp_call_router_with_token(
+        &app.router,
+        44,
+        "search_foods",
+        json!({"query":"barcode:0012345678905"}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(
+        found.json["result"]["structuredContent"]["custom"][0]["barcode"],
+        "0012345678905"
     );
 
     let fetched = mcp_call_router_with_token(
@@ -287,6 +308,7 @@ async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Resul
             description: "Imported lentils".to_owned(),
             category: None,
             notes: None,
+            barcode: None,
             parsed_data: FoodData::default(),
         })
         .await?;

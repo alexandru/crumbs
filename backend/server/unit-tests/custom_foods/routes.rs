@@ -15,6 +15,7 @@ async fn rest_custom_foods_support_full_crud_and_search_notes_are_not_indexed()
     let input = json!({
         "description": "My mozzarella toast",
         "category": "Breakfast",
+        "barcode": "0012345678905",
         "notes": "Mozzarella, basil, and shallot",
         "parsed_data": {
             "nutrition": { "per": "100 g", "energy": "280 kcal", "protein": "14 g", "water": "10 g", "minerals": {"magnesium": "30 mg"}, "vitamins": {"vitamin_a": "15 µg"} },
@@ -36,6 +37,7 @@ async fn rest_custom_foods_support_full_crud_and_search_notes_are_not_indexed()
     assert_eq!(created.json["source"], "custom");
     assert_eq!(created.json["dataset"], "custom");
     assert_eq!(created.json["notes"], "Mozzarella, basil, and shallot");
+    assert_eq!(created.json["barcode"], "0012345678905");
     assert_eq!(created.json["parsed_data"]["nutrition"]["protein"], "14 g");
     assert_eq!(created.json["parsed_data"]["nutrition"]["water"], "10 g");
     assert_eq!(
@@ -73,6 +75,16 @@ async fn rest_custom_foods_support_full_crud_and_search_notes_are_not_indexed()
     assert_eq!(visible.status, StatusCode::OK);
     assert_eq!(visible.json["custom"].as_array().map(Vec::len), Some(1));
     assert_eq!(visible.json["custom"][0]["notes"], created.json["notes"]);
+    for expression in [
+        "0012345678905",
+        "barcode%3A0012345678905",
+        "barcode%3A001234*",
+    ] {
+        let result = app
+            .request(http_request(&format!("/foods/search?query={expression}"))?)
+            .await?;
+        assert_eq!(result.json["custom"][0]["barcode"], "0012345678905");
+    }
     let notes_only = app
         .request(http_request("/foods/search?query=shallot")?)
         .await?;
@@ -93,6 +105,11 @@ async fn rest_custom_foods_support_full_crud_and_search_notes_are_not_indexed()
     assert_eq!(replaced.json["id"], json!(id));
     assert_eq!(replaced.json["description"], "Updated cheese toast");
     assert_eq!(replaced.json["category"], Value::Null);
+    assert_eq!(replaced.json["barcode"], Value::Null);
+    let cleared = app
+        .request(http_request("/foods/search?query=0012345678905")?)
+        .await?;
+    assert_eq!(cleared.json["custom"].as_array().map(Vec::len), Some(0));
     assert_eq!(replaced.json["notes"], Value::Null);
     assert_eq!(replaced.json["parsed_data"]["nutrition"], Value::Null);
     let old_name = app
@@ -162,6 +179,7 @@ async fn rest_custom_foods_reject_invalid_input_and_protect_imported_foods()
             description: "Imported oats".to_owned(),
             category: None,
             notes: None,
+            barcode: None,
             parsed_data: FoodData::default(),
         })
         .await?;

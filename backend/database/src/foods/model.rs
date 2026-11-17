@@ -66,6 +66,7 @@ impl InvalidDataset {
 
 pub type FoodDescription = String;
 pub type FoodCategory = String;
+pub type FoodBarcode = String;
 pub type FoodNotes = String;
 
 #[derive(Debug, Serialize)]
@@ -75,6 +76,7 @@ pub struct Food {
     pub dataset: Dataset,
     pub description: FoodDescription,
     pub category: Option<FoodCategory>,
+    pub barcode: Option<FoodBarcode>,
     pub notes: Option<FoodNotes>,
     pub parsed_data: FoodData,
 }
@@ -90,6 +92,7 @@ pub struct FoodSummary {
     pub dataset: Dataset,
     pub description: FoodDescription,
     pub category: Option<FoodCategory>,
+    pub barcode: Option<FoodBarcode>,
     pub notes: Option<FoodNotes>,
 }
 

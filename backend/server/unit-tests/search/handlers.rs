@@ -29,6 +29,7 @@ async fn search_handler_returns_food_nutrition_and_reports_invalid_fts_syntax()
             description: "Hummus, commercial".to_owned(),
             category: Some("Legumes".to_owned()),
             notes: Some("Chickpeas, tahini, lemon".to_owned()),
+            barcode: None,
             parsed_data: serde_json::from_value(json!({
                 "nutrition": {
                     "per": "100 g",

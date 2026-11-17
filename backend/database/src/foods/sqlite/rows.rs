@@ -1,8 +1,8 @@
 use sqlx::FromRow;
 
 use crate::foods::{
-    Dataset, Food, FoodCategory, FoodDescription, FoodId, FoodNotes, FoodSummary, Source,
-    SourceFoodId, StoredFood,
+    Dataset, Food, FoodBarcode, FoodCategory, FoodDescription, FoodId, FoodNotes, FoodSummary,
+    Source, SourceFoodId, StoredFood,
 };
 use crate::nutrition_model::FoodData;
 
@@ -16,6 +16,7 @@ pub(super) struct StoredFoodRow {
     dataset: DatasetText,
     description: FoodDescription,
     category: Option<FoodCategory>,
+    barcode: Option<FoodBarcode>,
     notes: Option<FoodNotes>,
     parsed_data: ParsedFoodDataText,
 }
@@ -36,6 +37,7 @@ impl StoredFoodRow {
                 dataset,
                 description: self.description,
                 category: self.category,
+                barcode: self.barcode,
                 notes: self.notes,
                 parsed_data,
             },
@@ -57,6 +59,7 @@ pub(super) struct FoodRow {
     dataset: DatasetText,
     description: FoodDescription,
     category: Option<FoodCategory>,
+    barcode: Option<FoodBarcode>,
     notes: Option<FoodNotes>,
 }
 
@@ -74,6 +77,7 @@ impl FoodRow {
             dataset,
             description: row.description,
             category: row.category,
+            barcode: row.barcode,
             notes: row.notes,
         })
     }

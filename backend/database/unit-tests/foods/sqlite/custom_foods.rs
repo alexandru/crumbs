@@ -1,6 +1,7 @@
 use std::error::Error as StdError;
 use std::io;
 
+use crate::Database;
 use crate::foods::tests::{ids_with_tag, make_food, open_database};
 use crate::foods::*;
 
@@ -12,6 +13,7 @@ async fn custom_food_crud_replaces_fields_preserves_identity_and_cleans_search()
         description: CustomFoodDescription::new("  House lentils  ")?,
         category: Some("Beans".to_owned()),
         notes: Some("familyonlysecret".to_owned()),
+        barcode: Some("0012345678905".to_owned()),
         parsed_data: crate::nutrition_model::FoodData::default(),
     };
     let created = database.create_custom_food(&initial).await?;
@@ -29,6 +31,7 @@ async fn custom_food_crud_replaces_fields_preserves_identity_and_cleans_search()
         .ok_or_else(|| io::Error::other("created custom food was not found by local ID"))?;
     assert_eq!(fetched.id, id);
     assert_eq!(fetched.food.notes.as_deref(), Some("familyonlysecret"));
+    assert_eq!(fetched.food.barcode.as_deref(), Some("0012345678905"));
 
     let private_note_query = SearchQuery::new("familyonlysecret")?;
     let note_results = database
@@ -48,11 +51,24 @@ async fn custom_food_crud_replaces_fields_preserves_identity_and_cleans_search()
         .await?
         .ok_or_else(|| io::Error::other("created custom food was not found by source identity"))?;
     assert_eq!(summary.notes.as_deref(), Some("familyonlysecret"));
+    assert_eq!(summary.barcode.as_deref(), Some("0012345678905"));
+    for expression in ["0012345678905", "barcode:0012345678905", "barcode:001234*"] {
+        assert_custom_matches(&database, expression, &[id]).await?;
+    }
+
+    let barcode_only = CustomFoodInput {
+        barcode: Some("0001234567890".to_owned()),
+        ..initial
+    };
+    database.update_custom_food(id, &barcode_only).await?;
+    assert_custom_matches(&database, "barcode:0012345678905", &[]).await?;
+    assert_custom_matches(&database, "barcode:0001234567890", &[id]).await?;
 
     let replacement = CustomFoodInput {
         description: CustomFoodDescription::new("Updated lentils")?,
         category: None,
         notes: None,
+        barcode: Some("0098765432100".to_owned()),
         parsed_data: serde_json::from_str(r#"{"nutrition":{"per":"100 g"},"serving_sizes":[]}"#)?,
     };
     let updated = database
@@ -64,6 +80,9 @@ async fn custom_food_crud_replaces_fields_preserves_identity_and_cleans_search()
     assert_eq!(updated.food.description, "Updated lentils");
     assert!(updated.food.category.is_none());
     assert!(updated.food.notes.is_none());
+    assert_eq!(updated.food.barcode.as_deref(), Some("0098765432100"));
+    assert_custom_matches(&database, "barcode:0001234567890", &[]).await?;
+    assert_custom_matches(&database, "barcode:0098765432100", &[id]).await?;
     assert_eq!(
         updated
             .food
@@ -119,7 +138,20 @@ async fn custom_food_crud_replaces_fields_preserves_identity_and_cleans_search()
     assert!(ids_with_tag(&database, &favorite).await?.is_empty());
     let remaining = database.search_foods(&query, FoodLimit::default()).await?;
     assert!(remaining.custom.is_empty());
+    assert_custom_matches(&database, "barcode:0098765432100", &[]).await?;
 
     database.close().await;
+    Ok(())
+}
+
+async fn assert_custom_matches(
+    database: &Database,
+    expression: &str,
+    expected: &[FoodId],
+) -> Result<(), Box<dyn StdError>> {
+    let query = SearchQuery::new(expression)?;
+    let results = database.search_foods(&query, FoodLimit::default()).await?;
+    let ids: Vec<FoodId> = results.custom.into_iter().map(|food| food.id).collect();
+    assert_eq!(ids, expected, "query: {expression}");
     Ok(())
 }

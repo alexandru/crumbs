@@ -24,13 +24,14 @@ impl FoodWriter for Database {
         .await?;
         let id = sqlx::query_scalar(
             "INSERT INTO crumbs_foods (
-                source, source_food_id, dataset, description, category, notes, parsed_data, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                source, source_food_id, dataset, description, category, notes, barcode, parsed_data, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (source, source_food_id) DO UPDATE SET
                 dataset = excluded.dataset,
                 description = excluded.description,
                 category = excluded.category,
                 notes = excluded.notes,
+                barcode = excluded.barcode,
                 parsed_data = excluded.parsed_data,
                 updated_at = ?
             RETURNING id",
@@ -41,6 +42,7 @@ impl FoodWriter for Database {
         .bind(&food.description)
         .bind(food.category.as_deref())
         .bind(food.notes.as_deref())
+        .bind(food.barcode.as_deref())
         .bind(parsed_data)
         .bind(now)
         .bind(now)
@@ -64,7 +66,7 @@ impl FoodLookup for Database {
     ) -> Result<Option<FoodSummary>, Self::Error> {
         let operation: Result<Option<FoodSummary>, sqlx::Error> = async {
             let row = sqlx::query_as::<_, FoodRow>(
-                "SELECT id, source, source_food_id, dataset, description, category, notes
+                "SELECT id, source, source_food_id, dataset, description, category, notes, barcode
              FROM crumbs_foods WHERE source = ? AND source_food_id = ?",
             )
             .bind(source)

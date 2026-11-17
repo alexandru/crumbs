@@ -36,6 +36,7 @@ impl PreparedFood {
             description: self.description.0,
             category: self.category.map(|category| category.0),
             notes: None,
+            barcode: None,
             parsed_data: self.parsed_data,
         }
     }

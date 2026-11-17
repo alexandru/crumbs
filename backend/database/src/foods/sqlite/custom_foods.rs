@@ -23,12 +23,13 @@ impl CustomFoodStore for Database {
         .await?;
         let row = sqlx::query_as::<_, StoredFoodRow>(
             "INSERT INTO crumbs_foods (
-                source, source_food_id, dataset, description, category, notes, parsed_data, created_at
-            ) VALUES ('custom', lower(hex(randomblob(16))), 'custom', ?, ?, ?, ?, ?)
-            RETURNING id, source, source_food_id, dataset, description, category, notes, parsed_data",
+                source, source_food_id, dataset, description, category, barcode, notes, parsed_data, created_at
+            ) VALUES ('custom', lower(hex(randomblob(16))), 'custom', ?, ?, ?, ?, ?, ?)
+            RETURNING id, source, source_food_id, dataset, description, category, barcode, notes, parsed_data",
         )
         .bind(input.description.as_str())
         .bind(input.category.as_deref())
+        .bind(input.barcode.as_deref())
         .bind(input.notes.as_deref())
         .bind(parsed_data)
         .bind(now)
@@ -45,7 +46,7 @@ impl CustomFoodStore for Database {
     async fn custom_food(&self, id: FoodId) -> Result<Option<StoredFood>, Self::Error> {
         let operation: Result<Option<StoredFood>, sqlx::Error> = async {
             let row = sqlx::query_as::<_, StoredFoodRow>(
-            "SELECT id, source, source_food_id, dataset, description, category, notes, parsed_data
+            "SELECT id, source, source_food_id, dataset, description, category, barcode, notes, parsed_data
              FROM crumbs_foods
              WHERE id = ? AND source = 'custom' AND dataset = 'custom'",
         )
@@ -61,7 +62,7 @@ impl CustomFoodStore for Database {
     async fn list_custom_foods(&self, limit: FoodLimit) -> Result<Vec<StoredFood>, Self::Error> {
         let operation: Result<Vec<StoredFood>, sqlx::Error> = async {
             sqlx::query_as::<_, StoredFoodRow>(
-            "SELECT id, source, source_food_id, dataset, description, category, notes, parsed_data
+            "SELECT id, source, source_food_id, dataset, description, category, barcode, notes, parsed_data
              FROM crumbs_foods
              WHERE source = 'custom' AND dataset = 'custom'
              ORDER BY id ASC
@@ -89,12 +90,13 @@ impl CustomFoodStore for Database {
             .map_err(|source| sqlx::Error::Encode(Box::new(source)))?;
         let row = sqlx::query_as::<_, StoredFoodRow>(
             "UPDATE crumbs_foods
-             SET description = ?, category = ?, notes = ?, parsed_data = ?, updated_at = ?
+             SET description = ?, category = ?, barcode = ?, notes = ?, parsed_data = ?, updated_at = ?
              WHERE id = ? AND source = 'custom' AND dataset = 'custom'
-             RETURNING id, source, source_food_id, dataset, description, category, notes, parsed_data",
+             RETURNING id, source, source_food_id, dataset, description, category, barcode, notes, parsed_data",
         )
         .bind(input.description.as_str())
         .bind(input.category.as_deref())
+        .bind(input.barcode.as_deref())
         .bind(input.notes.as_deref())
         .bind(parsed_data)
         .bind(now)
