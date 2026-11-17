@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::http::request::Parts;
 use crumbs_database::identity::{OAuthScope, UserId, UserSession};
 use crumbs_database::profile_logs::{
-    CreateLog, LogFilter, PatchLog, ProfileLogError, ProfileLogId, ProfileLogs,
+    CreateLog, CreateLogBatch, LogFilter, PatchLog, ProfileLogError, ProfileLogId, ProfileLogs,
 };
 use crumbs_database::profiles::ProfileId;
 use rmcp::ErrorData;
@@ -24,6 +24,7 @@ where
         ProfileLogTool::List,
         ProfileLogTool::Get,
         ProfileLogTool::Create,
+        ProfileLogTool::CreateBatch,
         ProfileLogTool::Update,
         ProfileLogTool::Delete,
     ]
@@ -65,19 +66,23 @@ enum ProfileLogTool {
     List,
     Get,
     Create,
+    CreateBatch,
     Update,
     Delete,
 }
 
 impl ProfileLogTool {
     const fn requires_write(self) -> bool {
-        matches!(self, Self::Create | Self::Update | Self::Delete)
+        matches!(
+            self,
+            Self::Create | Self::CreateBatch | Self::Update | Self::Delete
+        )
     }
 
     fn tool(self) -> Tool {
         let description = match self {
             Self::List => {
-                r#"List food, biometric, journal, and exercise logs for one profile owned by the authenticated account.
+                r#"List food, biometric, journal, exercise, and daily activity logs for one profile owned by the authenticated account.
 
 Example arguments:
 ```json
@@ -96,6 +101,7 @@ Example arguments:
 - For weight logs, set entry_type to "biometric" and subtype to "weight".
 - For journal entries, set entry_type to "journal".
 - For exercise entries, set entry_type to "exercise".
+- For daily activity readings, set entry_type to "daily_activity". Each is a cumulative total since the start of the day. Use the latest observation for each subtype and day, including lower corrections; for equal times use the latest created ID. Never sum readings, add exercise sessions, or convert readings to calories.
 - Results contain at most 100 logs, ordered by ID descending.
 - For the next page, set filter.last_id to the last returned ID. Only smaller IDs are returned.
 
@@ -118,8 +124,11 @@ Example arguments:
 
 Requires crumbs:read."#
             }
+            Self::CreateBatch => {
+                r#"Create 1 to 100 logs for one profile in a single atomic batch. Pass logs in request order; the response contains items in that order. If one log fails, none are saved, and the error identifies the failing log. Daily activity readings are cumulative since the start of the day: use the latest observation for each subtype and day, including a lower correction. For equal observation times use the latest created entry (ID). Never sum readings, add exercise sessions to them, or convert them to calories. Requires crumbs:write."#
+            }
             Self::Create => {
-                r#"Create one food, weight, journal, or exercise log for a profile owned by the authenticated account.
+                r#"Create one food, weight, journal, exercise, or daily activity log for a profile owned by the authenticated account.
 
 Food arguments:
 ```json
@@ -165,6 +174,7 @@ Weight arguments:
 ```
 
 - Food amount is a positive decimal string without a unit.
+- A daily activity reading uses {"type":"daily_activity","reading":{"type":"steps","value":8500}} or {"type":"daily_activity","reading":{"type":"active_time","value":"45 min"}}. It is cumulative since the start of the day; use the latest observation per subtype and day, including lower corrections, and the latest created ID for equal times. Never sum readings, add exercise sessions, or convert readings to calories.
 - A journal entry uses {"type":"journal","text":"..."} with nonblank text.
 - An exercise entry uses {"type":"exercise","exercise_type":"walking","intensity":"moderate","duration":"30 min","calories_burned":"150 kcal","notes":"..."}. Notes are optional.
 - Put the unit or exact named serving in the separate serving_size string.
@@ -269,6 +279,7 @@ Requires crumbs:write."#
             Self::List => "list_profile_logs",
             Self::Get => "get_profile_log",
             Self::Create => "create_profile_log",
+            Self::CreateBatch => "create_profile_logs",
             Self::Update => "update_profile_log",
             Self::Delete => "delete_profile_log",
         }
@@ -310,6 +321,13 @@ Requires crumbs:write."#
                         "log": create_log_schema()
                     }),
                 );
+            }
+            Self::CreateBatch => {
+                schema.insert("required".to_owned(), json!(["profile_id", "logs"]));
+                schema.insert("properties".to_owned(), json!({
+                    "profile_id": profile_id,
+                    "logs": {"type": "array", "minItems": 1, "maxItems": 100, "items": create_log_schema()}
+                }));
             }
             Self::Update => {
                 schema.insert("required".to_owned(), json!(["profile_id", "id", "patch"]));
@@ -386,6 +404,15 @@ Requires crumbs:write."#
                     .ok_or(ToolFailure::NotFound)?;
                 serialize(log)
             }
+            Self::CreateBatch => {
+                let request: CreateBatchRequest = parse(arguments)?;
+                let logs = store
+                    .create_profile_logs(user, request.profile_id, &request.logs)
+                    .await
+                    .map_err(ToolFailure::Profile)?
+                    .ok_or(ToolFailure::NotFound)?;
+                Ok(json!({"items": logs}))
+            }
             Self::Update => {
                 let request: PatchRequest = parse(arguments)?;
                 let log = store
@@ -422,6 +449,13 @@ struct IdRequest {
 struct CreateRequest {
     profile_id: ProfileId,
     log: CreateLog,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateBatchRequest {
+    profile_id: ProfileId,
+    logs: CreateLogBatch,
 }
 
 #[derive(Deserialize)]
@@ -490,7 +524,7 @@ fn patch_log_schema() -> Value {
         "properties": {
             "day": schema_with_description(log_day_schema(), "Replace the occurrence day. Omission preserves the stored day."),
             "time": schema_with_description(local_time_schema(), "Replace the occurrence time. Null is invalid; omission preserves the stored time."),
-            "entry": schema_with_description(log_entry_patch_schema(), "Patch the weight measurement, food input, journal text, or exercise entry without changing the entry category. Food input fields refresh the snapshot; an empty food patch preserves it.")
+            "entry": schema_with_description(log_entry_patch_schema(), "Patch the weight measurement, food input, journal text, exercise, or daily activity entry without changing the entry category. Food input fields refresh the snapshot; an empty food patch preserves it.")
         }
     })
 }
@@ -502,7 +536,7 @@ fn log_filter_schema() -> Value {
         "properties": {
             "from": {"anyOf": [log_day_schema(), {"type": "null"}], "description": "Inclusive lower day bound."},
             "to": {"anyOf": [log_day_schema(), {"type": "null"}], "description": "Inclusive upper day bound."},
-            "entry_type": {"anyOf": [{"type": "string", "enum": ["food", "biometric", "journal", "exercise"]}, {"type": "null"}]},
+            "entry_type": {"anyOf": [{"type": "string", "enum": ["food", "biometric", "journal", "exercise", "daily_activity"]}, {"type": "null"}]},
             "subtype": {"anyOf": [{"type": "string", "enum": ["weight"]}, {"type": "null"}], "description": "Biometric subtype; when set to weight, requires entry_type=biometric."},
             "last_id": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}], "description": "Exclusive cursor. Results are ordered by ID descending; next page uses id < last_id."}
         },
@@ -549,7 +583,8 @@ fn log_entry_schema() -> Value {
             biometric_log_entry_schema(),
             food_log_entry_schema(),
             journal_log_entry_schema(),
-            exercise_log_entry_schema()
+            exercise_log_entry_schema(),
+            daily_activity_entry_schema()
         ]
     })
 }
@@ -561,9 +596,24 @@ fn log_entry_patch_schema() -> Map<String, Value> {
             biometric_log_entry_schema(),
             food_log_entry_patch_schema(),
             journal_log_entry_schema(),
-            exercise_log_entry_patch_schema()
+            exercise_log_entry_patch_schema(),
+            daily_activity_entry_schema()
         ]),
     )])
+}
+
+fn daily_activity_entry_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["type", "reading"],
+        "properties": {
+            "type": {"const": "daily_activity"},
+            "reading": {"oneOf": [
+                {"type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": {"type": {"const": "steps"}, "value": {"type": "integer", "minimum": 0}}},
+                {"type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": {"type": {"const": "active_time"}, "value": {"type": "string", "description": "Duration such as 45 min or 1 h 15 min."}}}
+            ], "description": "Cumulative device-reported total from the start of the day to the observation time. Use the latest observation per subtype and day, including lower corrections; for equal times use the latest created ID. Do not sum readings, add exercise sessions, or convert to calories."}
+        }
+    })
 }
 
 fn exercise_log_entry_schema() -> Value {

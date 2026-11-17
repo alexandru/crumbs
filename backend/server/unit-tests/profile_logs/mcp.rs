@@ -59,6 +59,7 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
 
     for name in [
         "create_profile_log",
+        "create_profile_logs",
         "list_profile_logs",
         "get_profile_log",
         "update_profile_log",
@@ -146,7 +147,7 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
     );
     assert_eq!(
         log_filter["properties"]["entry_type"]["anyOf"][0]["enum"],
-        json!(["food", "biometric", "journal", "exercise"])
+        json!(["food", "biometric", "journal", "exercise", "daily_activity"])
     );
     let update_tool = tools
         .iter()
@@ -777,6 +778,62 @@ async fn exercise_mcp_round_trip_and_filter() -> Result<(), Box<dyn Error>> {
             .as_array()
             .map(Vec::len),
         Some(1)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_batch_creates_separate_readings_and_reports_invalid_positions()
+-> Result<(), Box<dyn Error>> {
+    let app = TestApplication::new().await?;
+    app.seed_profile_owner().await?;
+    let (profile_id, _) = create_test_profile(&app, "Alex", TEST_REST_WRITE_ACCESS_TOKEN).await?;
+    mcp_initialize(&app).await?;
+    let denied = mcp_call_router_with_token(
+        &app.router,
+        199,
+        "create_profile_logs",
+        json!({"profile_id":profile_id, "logs":[]}),
+        TEST_MCP_ACCESS_TOKEN,
+    )
+    .await?;
+    assert_eq!(
+        denied.json["result"]["structuredContent"]["error"],
+        "insufficient_scope"
+    );
+    let response = mcp_call_router_with_token(&app.router, 200, "create_profile_logs", json!({
+        "profile_id":profile_id,
+        "logs":[
+            {"day":"2026-11-17","time":"16:00","entry":{"type":"daily_activity","reading":{"type":"steps","value":8500}}},
+            {"day":"2026-11-17","time":"16:00","entry":{"type":"daily_activity","reading":{"type":"active_time","value":"45 min"}}}
+        ]
+    }), TEST_MCP_WRITE_ACCESS_TOKEN).await?;
+    assert_eq!(
+        response.json["result"]["isError"], false,
+        "{:?}",
+        response.json
+    );
+    assert_eq!(
+        response.json["result"]["structuredContent"]["items"][0]["data"]["reading"]["value"],
+        8500
+    );
+    assert_eq!(
+        response.json["result"]["structuredContent"]["items"][1]["data"]["reading"]["value"],
+        "2700 s"
+    );
+    let invalid = mcp_call_router_with_token(&app.router, 201, "create_profile_logs", json!({
+        "profile_id":profile_id,
+        "logs":[
+            {"day":"2026-11-17","entry":{"type":"daily_activity","reading":{"type":"steps","value":1}}},
+            {"day":"2026-11-17","entry":{"type":"daily_activity","reading":{"type":"steps","value":-1}}}
+        ]
+    }), TEST_MCP_WRITE_ACCESS_TOKEN).await?;
+    assert_eq!(invalid.json["result"]["isError"], true);
+    assert!(
+        invalid.json["result"]["structuredContent"]["error"]
+            .as_str()
+            .ok_or("missing error")?
+            .contains("log 2")
     );
     Ok(())
 }

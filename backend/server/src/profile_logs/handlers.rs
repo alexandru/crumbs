@@ -7,9 +7,10 @@ use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use crumbs_database::identity::UserSession;
 use crumbs_database::profile_logs::{
-    CreateLog, LogFilter, PatchLog, ProfileLogError, ProfileLogId, ProfileLogs,
+    CreateLog, CreateLogBatch, LogFilter, PatchLog, ProfileLogError, ProfileLogId, ProfileLogs,
 };
 use crumbs_database::profiles::ProfileId;
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::ErrorResponse;
@@ -53,6 +54,28 @@ pub(super) async fn create<S: ProfileLogs + Send + 'static>(
         )],
         Json(log),
     ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CreateBatchRequest {
+    logs: CreateLogBatch,
+}
+
+pub(super) async fn create_batch<S: ProfileLogs + Send + 'static>(
+    State(store): State<Arc<S>>,
+    Extension(session): Extension<UserSession>,
+    id: Result<Path<ProfileId>, PathRejection>,
+    input: Result<Json<CreateBatchRequest>, JsonRejection>,
+) -> Result<impl IntoResponse, ErrorResponse> {
+    let Path(profile_id) = id.map_err(invalid_request)?;
+    let Json(input) = input.map_err(invalid_request)?;
+    let logs = store
+        .create_profile_logs(session.user_id, profile_id, &input.logs)
+        .await
+        .map_err(profile_log_error)?
+        .ok_or_else(not_found)?;
+    Ok((StatusCode::CREATED, Json(json!({"items": logs}))))
 }
 
 pub(super) async fn get<S: ProfileLogs + Send + 'static>(

@@ -3,7 +3,10 @@ use std::future::Future;
 use crate::identity::UserId;
 use crate::profiles::ProfileId;
 
-use super::{CreateLog, LogFilter, LogPage, PatchLog, ProfileLog, ProfileLogError, ProfileLogId};
+use super::{
+    CreateLog, CreateLogBatch, LogFilter, LogPage, PatchLog, ProfileLog, ProfileLogError,
+    ProfileLogId,
+};
 
 pub trait ProfileLogs: Sync {
     fn create_profile_log(
@@ -12,6 +15,13 @@ pub trait ProfileLogs: Sync {
         profile: ProfileId,
         input: &CreateLog,
     ) -> impl Future<Output = Result<Option<ProfileLog>, ProfileLogError>> + Send;
+
+    fn create_profile_logs(
+        &self,
+        user: UserId,
+        profile: ProfileId,
+        input: &CreateLogBatch,
+    ) -> impl Future<Output = Result<Option<Vec<ProfileLog>>, ProfileLogError>> + Send;
 
     fn profile_log(
         &self,

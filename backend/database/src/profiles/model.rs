@@ -12,9 +12,11 @@ use std::sync::LazyLock;
 use unicase::UniCase;
 use unicode_normalization::UnicodeNormalization;
 
+use crate::activity::{ActivityDuration, StepCount};
 use crate::clock::UnixMillis;
 use crate::nutrition_model::{
-    Centimetres, Kcal, KcalPerCm, KcalPerKg, Kilograms, Measurement, PerDay, PerWeek, QuantityError,
+    Centimetres, Kcal, KcalPerCm, KcalPerKg, Kilograms, Measurement, NonNegative, PerDay, PerWeek,
+    QuantityError, Volume,
 };
 
 use super::ProfileError;
@@ -429,6 +431,20 @@ impl BaselineActivity {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DailyWaterGoal(NonNegative<Volume>);
+
+impl DailyWaterGoal {
+    pub fn new(value: Volume) -> Result<Self, QuantityError> {
+        NonNegative::new(value).map(Self)
+    }
+
+    pub fn value(self) -> Volume {
+        *self.0.value()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileSettings {
@@ -439,6 +455,9 @@ pub struct ProfileSettings {
     pub timezone: IanaTimezone,
     pub weight_goal: Option<BodyWeight>,
     pub weight_change_goal: Option<WeightChangeGoal>,
+    pub daily_water_goal: Option<DailyWaterGoal>,
+    pub daily_step_goal: Option<StepCount>,
+    pub daily_active_time_goal: Option<ActivityDuration>,
     #[serde(default)]
     pub bmr: BmrSetting,
     pub baseline_activity: Option<BaselineActivity>,
@@ -594,6 +613,9 @@ pub struct CreateProfileSettings {
     pub timezone: Option<IanaTimezone>,
     pub weight_goal: Option<BodyWeight>,
     pub weight_change_goal: Option<WeightChangeGoal>,
+    pub daily_water_goal: Option<DailyWaterGoal>,
+    pub daily_step_goal: Option<StepCount>,
+    pub daily_active_time_goal: Option<ActivityDuration>,
     pub bmr: Option<BmrSetting>,
     pub baseline_activity: Option<BaselineActivity>,
 }
@@ -607,6 +629,9 @@ impl CreateProfileSettings {
             timezone: self.timezone.unwrap_or_default(),
             weight_goal: self.weight_goal,
             weight_change_goal: self.weight_change_goal,
+            daily_water_goal: self.daily_water_goal,
+            daily_step_goal: self.daily_step_goal,
+            daily_active_time_goal: self.daily_active_time_goal,
             bmr: self.bmr.unwrap_or_default(),
             baseline_activity: self.baseline_activity,
         }
@@ -668,6 +693,12 @@ pub struct PatchProfile {
     pub weight_goal: NullablePatch<BodyWeight>,
     #[serde(default)]
     pub weight_change_goal: NullablePatch<WeightChangeGoal>,
+    #[serde(default)]
+    pub daily_water_goal: NullablePatch<DailyWaterGoal>,
+    #[serde(default)]
+    pub daily_step_goal: NullablePatch<StepCount>,
+    #[serde(default)]
+    pub daily_active_time_goal: NullablePatch<ActivityDuration>,
     #[serde(default)]
     pub bmr: NullablePatch<BmrSetting>,
     #[serde(default)]
@@ -751,6 +782,13 @@ pub(crate) fn apply_patch(
     settings.weight_goal = patched_optional(settings.weight_goal, &patch.weight_goal);
     settings.weight_change_goal =
         patched_optional(settings.weight_change_goal, &patch.weight_change_goal);
+    settings.daily_water_goal =
+        patched_optional(settings.daily_water_goal, &patch.daily_water_goal);
+    settings.daily_step_goal = patched_optional(settings.daily_step_goal, &patch.daily_step_goal);
+    settings.daily_active_time_goal = patched_optional(
+        settings.daily_active_time_goal,
+        &patch.daily_active_time_goal,
+    );
     match patch.bmr {
         NullablePatch::Unchanged => {}
         NullablePatch::Set(value) => settings.bmr = value,

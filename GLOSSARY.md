@@ -62,7 +62,7 @@ The association of a food with a tag. Assignments are managed by Crumbs and surv
 The personal context for one person. One user can have multiple profiles, whose names are unique within that user after ignoring case and surrounding whitespace.
 
 **Profile log entry**:
-A record of food consumed, a biometric measurement, a journal entry, or an exercise session for one profile.
+A record of food consumed, a biometric measurement, a journal entry, an exercise session, or a daily activity reading for one profile.
 
 **Journal entry**:
 A free-text record of a person's feelings, experiences, or observations for one profile. A person can record multiple journal entries on the same day.
@@ -76,11 +76,30 @@ A record of food consumed, its quantity, calories and nutrition information, and
 **Exercise log entry**:
 A record of an exercise session with its activity type, intensity, duration, calories burned, and optional notes.
 
+**Daily activity reading**:
+A reported total for one activity measure from the start of a day up to an observation time. Each reading contains either a daily step count or daily active time.
+Successive readings are cumulative totals, not separate amounts to add together.
+
+**Daily active time**:
+The cumulative duration of activity reported by a person's device for a day up to an observation time, using that device's definition of activity.
+
 **Current weight**:
 The weight from a profile’s most recent recorded weight measurement. It is unknown when the profile has no weight measurements.
 
 **Weight goal**:
 An optional body weight that a person wants to reach.
+
+**Daily water goal**:
+An optional current target for the amount of water from all food and drinks that a person wants to consume per day.
+
+**Daily step goal**:
+An optional current target for the total number of steps that a person wants to take per day, including ordinary movement and exercise.
+
+**Daily active time goal**:
+An optional current target for the duration of activity reported by a person's device per day.
+
+**Daily step count**:
+The total number of steps reported for a day up to a specified time, including ordinary movement and exercise.
 
 **Weight change goal**:
 The change in body mass that a person wants over time. Negative values mean weight loss, strictly positive values mean weight gain, and zero means no weight change.

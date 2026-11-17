@@ -1,5 +1,6 @@
 //! This create provides the data model and the database access logic.
 
+pub mod activity;
 mod clock;
 mod config;
 pub mod foods;

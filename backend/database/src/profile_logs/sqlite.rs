@@ -12,9 +12,9 @@ use crate::runtime::Database;
 
 use super::error::ProfileLogError;
 use super::model::{
-    BiometricEntry, BiometricLogEntry, CreateLog, FoodLogEntry, FoodLogInput, LocalTime, LogDay,
-    LogEntryPatch, LogFilter, LogInput, LogPage, PatchLog, ProfileLog, ProfileLogData,
-    ProfileLogId,
+    BiometricEntry, BiometricLogEntry, CreateLog, CreateLogBatch, FoodLogEntry, FoodLogInput,
+    LocalTime, LogDay, LogEntryPatch, LogFilter, LogInput, LogPage, PatchLog, ProfileLog,
+    ProfileLogData, ProfileLogId,
 };
 use super::store::ProfileLogs;
 
@@ -38,29 +38,10 @@ impl ProfileLogs for Database {
         };
 
         let now = self.clock.now().map_err(ProfileLogError::clock)?;
-        let time = match input.time {
-            Some(time) => time,
-            None => local_time_at(owned_profile.data.settings.timezone, now)?,
-        };
-        let data = resolve_log_input(&mut transaction, &input.entry).await?;
-        let data_json = encode_data(&data)?;
-        let id = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO profile_logs (
-                 profile_id, day, time, data_json, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, NULL)
-             RETURNING id",
-        )
-        .bind(profile.get())
-        .bind(input.day.to_string())
-        .bind(time.to_string())
-        .bind(data_json)
-        .bind(now)
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(ProfileLogError::storage)?;
-
-        let id = ProfileLogId::new(id).map_err(|_| ProfileLogError::InvalidStoredData)?;
-        if data.is_weight() {
+        let log = owned_profile
+            .insert_log(&mut transaction, now, input)
+            .await?;
+        if log.data.is_weight() {
             owned_profile
                 .update_current_weight_if_changed(&mut transaction, now)
                 .await?;
@@ -70,13 +51,54 @@ impl ProfileLogs for Database {
             .commit()
             .await
             .map_err(ProfileLogError::storage)?;
-        Ok(Some(ProfileLog {
-            id,
-            profile_id: profile,
-            day: input.day,
-            time,
-            data,
-        }))
+        Ok(Some(log))
+    }
+
+    async fn create_profile_logs(
+        &self,
+        user: UserId,
+        profile: ProfileId,
+        input: &CreateLogBatch,
+    ) -> Result<Option<Vec<ProfileLog>>, ProfileLogError> {
+        let mut transaction = begin_immediate(self).await?;
+
+        let Some(owned_profile) = OwnedProfile::load(&mut transaction, user, profile).await? else {
+            transaction
+                .commit()
+                .await
+                .map_err(ProfileLogError::storage)?;
+            return Ok(None);
+        };
+
+        let now = self.clock.now().map_err(ProfileLogError::clock)?;
+        let mut logs = Vec::with_capacity(input.logs().len());
+        let mut has_weight = false;
+
+        for (index, input) in input.logs().iter().enumerate() {
+            let log = owned_profile
+                .insert_log(&mut transaction, now, input)
+                .await
+                .map_err(|error| match error {
+                    ProfileLogError::InvalidInput(message) => {
+                        ProfileLogError::InvalidInput(format!("log {}: {message}", index + 1))
+                    }
+                    other => other,
+                })?;
+            has_weight |= log.data.is_weight();
+            logs.push(log);
+        }
+
+        if has_weight {
+            owned_profile
+                .update_current_weight_if_changed(&mut transaction, now)
+                .await?;
+        }
+
+        transaction
+            .commit()
+            .await
+            .map_err(ProfileLogError::storage)?;
+        Ok(Some(logs))
     }
 
     async fn profile_log(
@@ -313,6 +335,38 @@ impl OwnedProfile {
             .transpose()
     }
 
+    async fn insert_log(
+        &self,
+        transaction: &mut sqlx::Transaction<'_, Sqlite>,
+        now: UnixMillis,
+        input: &CreateLog,
+    ) -> Result<ProfileLog, ProfileLogError> {
+        let time = match input.time {
+            Some(time) => time,
+            None => local_time_at(self.data.settings.timezone, now)?,
+        };
+        let data = resolve_log_input(transaction, &input.entry).await?;
+        let id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO profile_logs (profile_id, day, time, data_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, NULL) RETURNING id",
+        )
+        .bind(self.id.get())
+        .bind(input.day.to_string())
+        .bind(time.to_string())
+        .bind(encode_data(&data)?)
+        .bind(now)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(ProfileLogError::storage)?;
+        Ok(ProfileLog {
+            id: ProfileLogId::new(id).map_err(|_| ProfileLogError::InvalidStoredData)?,
+            profile_id: self.id,
+            day: input.day,
+            time,
+            data,
+        })
+    }
+
     async fn load_log(
         &self,
         transaction: &mut sqlx::Transaction<'_, Sqlite>,
@@ -357,7 +411,8 @@ impl OwnedProfile {
                     }) => Ok(measurement.value),
                     ProfileLogData::Food(_)
                     | ProfileLogData::Journal(_)
-                    | ProfileLogData::Exercise(_) => Err(ProfileLogError::InvalidStoredData),
+                    | ProfileLogData::Exercise(_)
+                    | ProfileLogData::DailyActivity(_) => Err(ProfileLogError::InvalidStoredData),
                 }
             })
             .transpose()?;
@@ -399,6 +454,7 @@ async fn resolve_log_input(
         )),
         LogInput::Journal(entry) => Ok(ProfileLogData::Journal(entry.clone())),
         LogInput::Exercise(entry) => Ok(ProfileLogData::Exercise(entry.clone())),
+        LogInput::DailyActivity(entry) => Ok(ProfileLogData::DailyActivity(*entry)),
     }
 }
 
@@ -410,6 +466,9 @@ async fn replace_same_variant(
     match (current, patch) {
         (ProfileLogData::Biometric(_), LogEntryPatch::Biometric(entry)) => {
             Ok(Some(ProfileLogData::Biometric(*entry)))
+        }
+        (ProfileLogData::DailyActivity(_), LogEntryPatch::DailyActivity(entry)) => {
+            Ok(Some(ProfileLogData::DailyActivity(*entry)))
         }
         (ProfileLogData::Journal(_), LogEntryPatch::Journal(entry)) => {
             Ok(Some(ProfileLogData::Journal(entry.clone())))

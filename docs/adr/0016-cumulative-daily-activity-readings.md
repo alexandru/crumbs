@@ -1,0 +1,3 @@
+# Keep daily activity readings separate from exercise sessions
+
+A daily activity reading records one cumulative device-reported value, either steps or active time, from the start of a day up to an observation time. Keep successive readings and use the latest observation for each subtype and day, including a lower corrected value; do not add readings together or add exercise-session values to them. These readings do not change calorie calculations because daily activity totals overlap with ordinary activity and separately recorded exercise; current daily goals for water, steps, and active time provide targets for agent reports.

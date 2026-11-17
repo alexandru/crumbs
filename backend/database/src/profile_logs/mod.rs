@@ -10,11 +10,12 @@ pub use exercise::{
     ExerciseNotes, ExerciseType,
 };
 pub use model::{
-    Amount, BiometricEntry, BiometricLogEntry, BiometricType, CreateLog, FoodInputSnapshot,
-    FoodLogEntry, FoodLogInput, FoodLogPatch, JournalLogEntry, JournalText, LocalTime, LogDay,
-    LogEntryPatch, LogEntryType, LogFilter, LogInput, LogPage, MassUnit, MeasurementUnit, PatchLog,
-    ProfileLog, ProfileLogData, ProfileLogId, SelectedServingName, ServingSelector,
-    ServingSnapshot, VolumeUnit, WeightMeasurement,
+    Amount, BiometricEntry, BiometricLogEntry, BiometricType, CreateLog, CreateLogBatch,
+    DailyActivityLogEntry, DailyActivityReading, FoodInputSnapshot, FoodLogEntry, FoodLogInput,
+    FoodLogPatch, JournalLogEntry, JournalText, LocalTime, LogDay, LogEntryPatch, LogEntryType,
+    LogFilter, LogInput, LogPage, MassUnit, MeasurementUnit, PatchLog, ProfileLog, ProfileLogData,
+    ProfileLogId, SelectedServingName, ServingSelector, ServingSnapshot, VolumeUnit,
+    WeightMeasurement,
 };
 pub use store::ProfileLogs;
 

@@ -310,6 +310,9 @@ fn create_settings_schema() -> Value {
             "sex": {"anyOf": [sex_schema(), {"type": "null"}]},
             "height": {"anyOf": [height_schema(), {"type": "null"}]},
             "timezone": {"type": ["string", "null"], "description": "IANA timezone name. Defaults to UTC."},
+            "daily_water_goal": {"anyOf": [daily_water_goal_schema(), {"type": "null"}]},
+            "daily_step_goal": {"anyOf": [daily_step_goal_schema(), {"type": "null"}]},
+            "daily_active_time_goal": {"anyOf": [daily_active_time_goal_schema(), {"type": "null"}]},
             "weight_goal": {"anyOf": [weight_schema(), {"type": "null"}]},
             "weight_change_goal": {"anyOf": [weight_change_goal_schema(), {"type": "null"}]},
             "bmr": {"anyOf": [bmr_schema(), {"type": "null"}]},
@@ -328,6 +331,9 @@ fn patch_profile_schema() -> Value {
             "sex": {"anyOf": [sex_schema(), {"type": "null"}]},
             "height": {"anyOf": [height_schema(), {"type": "null"}]},
             "timezone": {"type": "string", "description": "IANA timezone name."},
+            "daily_water_goal": {"anyOf": [daily_water_goal_schema(), {"type": "null"}]},
+            "daily_step_goal": {"anyOf": [daily_step_goal_schema(), {"type": "null"}]},
+            "daily_active_time_goal": {"anyOf": [daily_active_time_goal_schema(), {"type": "null"}]},
             "weight_goal": {"anyOf": [weight_schema(), {"type": "null"}]},
             "weight_change_goal": {"anyOf": [weight_change_goal_schema(), {"type": "null"}], "description": "Omit to preserve the goal; null clears it."},
             "bmr": {"anyOf": [bmr_schema(), {"type": "null"}], "description": "Null resets BMR to calculated mode."},
@@ -350,6 +356,18 @@ fn height_schema() -> Value {
 
 fn weight_schema() -> Value {
     json!({"type": "string", "description": "Positive body weight with the kg unit, for example 70 kg."})
+}
+
+fn daily_water_goal_schema() -> Value {
+    json!({"type": "string", "description": "Daily water from all food and drinks in l or ml, for example 3 l or 3000 ml. Zero is allowed."})
+}
+
+fn daily_step_goal_schema() -> Value {
+    json!({"type": "integer", "minimum": 0, "description": "Daily total step goal, including ordinary movement and exercise."})
+}
+
+fn daily_active_time_goal_schema() -> Value {
+    json!({"type": "string", "description": "Daily device-reported active time goal, for example 45 min or 1 h 15 min. Zero is allowed."})
 }
 
 fn weight_change_goal_schema() -> Value {
@@ -386,12 +404,15 @@ fn profile_data_schema() -> Value {
 fn profile_settings_schema() -> Value {
     json!({
         "type": "object", "additionalProperties": false,
-        "required": ["birth_date", "sex", "height", "timezone", "weight_goal", "weight_change_goal", "bmr", "baseline_activity"],
+        "required": ["birth_date", "sex", "height", "timezone", "weight_goal", "weight_change_goal", "daily_water_goal", "daily_step_goal", "daily_active_time_goal", "bmr", "baseline_activity"],
         "properties": {
             "birth_date": {"anyOf": [birth_date_schema(), {"type": "null"}]},
             "sex": {"anyOf": [sex_schema(), {"type": "null"}]},
             "height": {"anyOf": [height_schema(), {"type": "null"}]},
             "timezone": {"type": "string", "description": "IANA timezone name."},
+            "daily_water_goal": {"anyOf": [daily_water_goal_schema(), {"type": "null"}]},
+            "daily_step_goal": {"anyOf": [daily_step_goal_schema(), {"type": "null"}]},
+            "daily_active_time_goal": {"anyOf": [daily_active_time_goal_schema(), {"type": "null"}]},
             "weight_goal": {"anyOf": [weight_schema(), {"type": "null"}]},
             "weight_change_goal": {"anyOf": [weight_change_goal_schema(), {"type": "null"}]},
             "bmr": bmr_schema(),

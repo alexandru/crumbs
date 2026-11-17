@@ -1757,3 +1757,144 @@ async fn exercise_entries_preserve_fields_and_weight() -> Result<(), Box<dyn Err
     database.close().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn daily_activity_readings_remain_separate_and_support_lifecycle()
+-> Result<(), Box<dyn Error>> {
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
+    let user = insert_user(&database, 1).await?;
+    let profile = create_profile(
+        &database,
+        user,
+        serde_json::json!({"name": "Alex", "settings": {
+            "bmr":{"mode":"custom","value":"1500 kcal/day"},
+            "baseline_activity":{"mode":"custom","value":"100 kcal/day"},
+            "daily_step_goal":10000, "daily_active_time_goal":"30 min", "daily_water_goal":"3 l"
+        }}),
+    )
+    .await?;
+    create_weight_log(&database, user, profile.id, "2026-11-17", None, "75 kg").await?;
+    let before = get_profile(&database, user, profile.id).await?;
+    assert!(before.derived.maintenance_calories().is_some());
+    let batch: CreateLogBatch = serde_json::from_value(serde_json::json!([
+        {"day":"2026-11-17","time":"16:00","entry":{"type":"daily_activity","reading":{"type":"steps","value":8500}}},
+        {"day":"2026-11-17","time":"20:00","entry":{"type":"daily_activity","reading":{"type":"steps","value":8000}}},
+        {"day":"2026-11-17","time":"20:00","entry":{"type":"daily_activity","reading":{"type":"active_time","value":"1 h 15 min"}}}
+    ]))?;
+    let logs = database
+        .create_profile_logs(user, profile.id, &batch)
+        .await?
+        .ok_or("profile missing")?;
+    let [initial_steps, corrected_steps, active_time] = logs.as_slice() else {
+        return Err("expected three daily activity readings".into());
+    };
+    assert!(initial_steps.id.get() < corrected_steps.id.get());
+    assert_eq!(
+        serde_json::to_value(&initial_steps.data)?,
+        serde_json::json!({"type":"daily_activity","reading":{"type":"steps","value":8500}})
+    );
+    assert_eq!(
+        serde_json::to_value(&corrected_steps.data)?,
+        serde_json::json!({"type":"daily_activity","reading":{"type":"steps","value":8000}})
+    );
+    assert_eq!(
+        serde_json::to_value(&active_time.data)?,
+        serde_json::json!({"type":"daily_activity","reading":{"type":"active_time","value":"4500 s"}})
+    );
+    let filter: LogFilter =
+        serde_json::from_value(serde_json::json!({"entry_type":"daily_activity"}))?;
+    assert_eq!(
+        database
+            .list_profile_logs(user, profile.id, &filter)
+            .await?
+            .ok_or("profile missing")?
+            .items
+            .len(),
+        3
+    );
+    let patch: PatchLog = serde_json::from_value(
+        serde_json::json!({"entry":{"type":"daily_activity","reading":{"type":"steps","value":8100}}}),
+    )?;
+    let updated = database
+        .patch_profile_log(user, profile.id, corrected_steps.id, &patch)
+        .await?
+        .ok_or("log missing")?;
+    assert_eq!(
+        serde_json::to_value(updated.data)?,
+        serde_json::json!({"type":"daily_activity","reading":{"type":"steps","value":8100}})
+    );
+    assert!(
+        database
+            .delete_profile_log(user, profile.id, corrected_steps.id)
+            .await?
+    );
+    assert!(
+        database
+            .profile_log(user, profile.id, corrected_steps.id)
+            .await?
+            .is_none()
+    );
+    let after = get_profile(&database, user, profile.id).await?;
+    assert_eq!(current_weight(&after), Some(Decimal::from(75)));
+    assert_eq!(after.derived, before.derived);
+    Ok(())
+}
+
+#[tokio::test]
+async fn batch_rolls_back_when_a_later_log_cannot_be_resolved() -> Result<(), Box<dyn Error>> {
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
+    let user = insert_user(&database, 1).await?;
+    let other = insert_user(&database, 2).await?;
+    let profile = create_profile(&database, user, serde_json::json!({"name": "Alex"})).await?;
+    let batch: CreateLogBatch = serde_json::from_value(serde_json::json!([
+        {"day":"2026-11-17","entry":{"type":"biometric","measurement":{"type":"weight","value":"75 kg"}}},
+        {"day":"2026-11-17","entry":{"type":"food","food_id":999999,"amount":"1","serving_size":"100 g"}}
+    ]))?;
+    assert!(
+        database
+            .create_profile_logs(other, profile.id, &batch)
+            .await?
+            .is_none()
+    );
+    let error = database
+        .create_profile_logs(user, profile.id, &batch)
+        .await
+        .err()
+        .ok_or("batch succeeded")?;
+    assert!(error.to_string().contains("log 2"), "{error}");
+    assert!(
+        database
+            .list_profile_logs(user, profile.id, &LogFilter::default())
+            .await?
+            .ok_or("profile missing")?
+            .items
+            .is_empty()
+    );
+    assert_eq!(
+        current_weight(&get_profile(&database, user, profile.id).await?),
+        None
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mixed_batch_weight_cache_uses_latest_occurrence() -> Result<(), Box<dyn Error>> {
+    let (_directory, database, _) = open_database_with_clock(1_000).await?;
+    let user = insert_user(&database, 1).await?;
+    let profile = create_profile(&database, user, serde_json::json!({"name":"Alex"})).await?;
+    let batch: CreateLogBatch = serde_json::from_value(serde_json::json!([
+        {"day":"2026-11-18","entry":{"type":"biometric","measurement":{"type":"weight","value":"75 kg"}}},
+        {"day":"2026-11-18","entry":{"type":"daily_activity","reading":{"type":"steps","value":8500}}},
+        {"day":"2026-11-17","entry":{"type":"biometric","measurement":{"type":"weight","value":"80 kg"}}}
+    ]))?;
+    let logs = database
+        .create_profile_logs(user, profile.id, &batch)
+        .await?
+        .ok_or("profile missing")?;
+    assert_eq!(logs.len(), 3);
+    assert_eq!(
+        current_weight(&get_profile(&database, user, profile.id).await?),
+        Some(Decimal::from(75))
+    );
+    Ok(())
+}

@@ -605,3 +605,42 @@ fn weight_change_goal_validates_units_and_calculates_balance() -> Result<(), Box
     );
     Ok(())
 }
+
+#[test]
+fn daily_goals_validate_and_read_legacy_settings() -> Result<(), Box<dyn Error>> {
+    let legacy: ProfileSettings = serde_json::from_str("{}")?;
+    assert_eq!(legacy.daily_water_goal, None);
+    assert_eq!(legacy.daily_step_goal, None);
+    assert_eq!(legacy.daily_active_time_goal, None);
+
+    for water in ["3 l", "3000 ml"] {
+        let settings: ProfileSettings = serde_json::from_value(serde_json::json!({
+            "daily_water_goal": water, "daily_step_goal": 10000, "daily_active_time_goal": "1 h 15 min"
+        }))?;
+        let encoded = serde_json::to_value(&settings)?;
+        assert_eq!(encoded["daily_water_goal"], water);
+        assert_eq!(encoded["daily_step_goal"], 10000);
+        assert_eq!(encoded["daily_active_time_goal"], "4500 s");
+        assert_eq!(
+            serde_json::from_value::<ProfileSettings>(encoded)?,
+            settings
+        );
+    }
+
+    for invalid in [
+        serde_json::json!({"daily_water_goal":"-1 l"}),
+        serde_json::json!({"daily_water_goal":"3 kg"}),
+        serde_json::json!({"daily_step_goal":-1}),
+        serde_json::json!({"daily_step_goal":1.5}),
+        serde_json::json!({"daily_active_time_goal":"-1 min"}),
+    ] {
+        assert!(serde_json::from_value::<PatchProfile>(invalid).is_err());
+    }
+    let zero: PatchProfile = serde_json::from_value(serde_json::json!({
+        "daily_water_goal":"0 l", "daily_step_goal":0, "daily_active_time_goal":"0 s"
+    }))?;
+    assert!(matches!(zero.daily_water_goal, NullablePatch::Set(_)));
+    assert!(matches!(zero.daily_step_goal, NullablePatch::Set(_)));
+    assert!(matches!(zero.daily_active_time_goal, NullablePatch::Set(_)));
+    Ok(())
+}

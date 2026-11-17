@@ -11,7 +11,8 @@ use crumbs_database::foods::{
 use crumbs_database::identity::UserId;
 use crumbs_database::nutrition_model::FoodData;
 use crumbs_database::profile_logs::{
-    CreateLog, LogFilter, LogPage, PatchLog, ProfileLog, ProfileLogError, ProfileLogId, ProfileLogs,
+    CreateLog, CreateLogBatch, LogFilter, LogPage, PatchLog, ProfileLog, ProfileLogError,
+    ProfileLogId, ProfileLogs,
 };
 use crumbs_database::profiles::{
     CreateProfile, PatchProfile, Profile, ProfileError, ProfileId, ProfileList, ProfileListQuery,
@@ -473,6 +474,15 @@ impl ProfileLogs for RecordingFoodReader {
         _profile_id: ProfileId,
         _input: &CreateLog,
     ) -> Result<Option<ProfileLog>, ProfileLogError> {
+        Err(profile_log_storage_error())
+    }
+
+    async fn create_profile_logs(
+        &self,
+        _user: UserId,
+        _profile_id: ProfileId,
+        _input: &CreateLogBatch,
+    ) -> Result<Option<Vec<ProfileLog>>, ProfileLogError> {
         Err(profile_log_storage_error())
     }
 

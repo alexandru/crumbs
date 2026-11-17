@@ -181,7 +181,10 @@ fn patch_fields_preserve_omission_and_reject_nulls() -> Result<(), Box<dyn Error
     ));
     let patch_data = match patch_entry {
         LogEntryPatch::Biometric(entry) => ProfileLogData::Biometric(entry),
-        LogEntryPatch::Food(_) | LogEntryPatch::Journal(_) | LogEntryPatch::Exercise(_) => {
+        LogEntryPatch::Food(_)
+        | LogEntryPatch::Journal(_)
+        | LogEntryPatch::Exercise(_)
+        | LogEntryPatch::DailyActivity(_) => {
             return Err(std::io::Error::other("expected biometric patch entry").into());
         }
     };
@@ -537,5 +540,24 @@ fn exercise_intensities_and_optional_notes_round_trip() -> Result<(), Box<dyn Er
     let mut expected = input;
     expected["duration"] = serde_json::json!("1800 s");
     assert_eq!(serde_json::to_value(data)?, expected);
+    Ok(())
+}
+
+#[test]
+fn batch_validation_reports_failing_log_position() -> Result<(), Box<dyn Error>> {
+    for value in [
+        serde_json::json!([]),
+        serde_json::json!(vec![serde_json::json!({}); 101]),
+    ] {
+        assert!(serde_json::from_value::<CreateLogBatch>(value).is_err());
+    }
+    let invalid = serde_json::json!([
+        {"day":"2026-11-17","entry":{"type":"daily_activity","reading":{"type":"steps","value":8500}}},
+        {"day":"2026-11-17","entry":{"type":"daily_activity","reading":{"type":"steps","value":-1}}}
+    ]);
+    let error = serde_json::from_value::<CreateLogBatch>(invalid)
+        .err()
+        .ok_or("invalid batch accepted")?;
+    assert!(error.to_string().contains("log 2"));
     Ok(())
 }
