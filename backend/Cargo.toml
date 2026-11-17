@@ -29,6 +29,7 @@ crumbs-derive = { path = "derive" }
 crumbs-import = { path = "import" }
 crumbs-server = { path = "server" }
 futures-executor = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 http = "1"
 humantime = "2.4.0"
 nix = { version = "0.31.3", features = ["process", "signal"] }

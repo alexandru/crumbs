@@ -455,6 +455,7 @@ dependencies = [
  "chrono-tz",
  "crumbs-derive",
  "futures-executor",
+ "futures-util",
  "humantime",
  "regex",
  "rust_decimal",

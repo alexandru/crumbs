@@ -2,6 +2,7 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use crumbs_database::daily_status::DailyStatusStore;
 use crumbs_database::foods::{CustomFoodStore, FoodSearch};
 use crumbs_database::identity::{OAuthStore, Users};
 use crumbs_database::profile_logs::ProfileLogs;
@@ -40,6 +41,7 @@ where
         + CustomFoodStore
         + Profiles
         + ProfileLogs
+        + DailyStatusStore
         + Users
         + OAuthStore
         + Send

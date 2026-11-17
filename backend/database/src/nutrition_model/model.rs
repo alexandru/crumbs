@@ -37,52 +37,112 @@ impl NutritionProfile {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Nutrients {
+pub struct Nutrients<T = Option<Reported<Mass>>> {
     #[serde(default)]
-    pub fat: Fat,
+    pub fat: Fat<T>,
     #[serde(default)]
-    pub carbohydrates: Carbohydrates,
-    pub fibre: Option<Reported<Mass>>,
-    pub protein: Option<Reported<Mass>>,
-    pub sodium: Option<Reported<Mass>>,
-    pub salt: Option<Reported<Mass>>,
-    pub cholesterol: Option<Reported<Mass>>,
-    pub water: Option<Reported<Mass>>,
-    pub caffeine: Option<Reported<Mass>>,
-    pub choline: Option<Reported<Mass>>,
+    pub carbohydrates: Carbohydrates<T>,
+    pub fibre: T,
+    pub protein: T,
+    pub sodium: T,
+    pub salt: T,
+    pub cholesterol: T,
+    pub water: T,
+    pub caffeine: T,
+    pub choline: T,
     #[serde(default)]
-    pub minerals: Minerals,
+    pub minerals: Minerals<T>,
     #[serde(default)]
-    pub vitamins: Vitamins,
+    pub vitamins: Vitamins<T>,
+}
+
+impl<T> Nutrients<T> {
+    pub(crate) fn zip_mut<U>(&mut self, other: &Nutrients<U>, mut f: impl FnMut(&mut T, &U)) {
+        f(&mut self.fat.total, &other.fat.total);
+        f(&mut self.fat.saturated, &other.fat.saturated);
+        f(&mut self.fat.monounsaturated, &other.fat.monounsaturated);
+        f(&mut self.fat.polyunsaturated, &other.fat.polyunsaturated);
+        f(&mut self.fat.trans, &other.fat.trans);
+        f(
+            &mut self.carbohydrates.including_fibre,
+            &other.carbohydrates.including_fibre,
+        );
+        f(
+            &mut self.carbohydrates.excluding_fibre,
+            &other.carbohydrates.excluding_fibre,
+        );
+        f(
+            &mut self.carbohydrates.sugars.total,
+            &other.carbohydrates.sugars.total,
+        );
+        f(
+            &mut self.carbohydrates.sugars.added,
+            &other.carbohydrates.sugars.added,
+        );
+        f(
+            &mut self.carbohydrates.sugars.lactose,
+            &other.carbohydrates.sugars.lactose,
+        );
+        f(&mut self.carbohydrates.starch, &other.carbohydrates.starch);
+        f(&mut self.fibre, &other.fibre);
+        f(&mut self.protein, &other.protein);
+        f(&mut self.sodium, &other.sodium);
+        f(&mut self.salt, &other.salt);
+        f(&mut self.cholesterol, &other.cholesterol);
+        f(&mut self.water, &other.water);
+        f(&mut self.caffeine, &other.caffeine);
+        f(&mut self.choline, &other.choline);
+        f(&mut self.minerals.calcium, &other.minerals.calcium);
+        f(&mut self.minerals.iron, &other.minerals.iron);
+        f(&mut self.minerals.magnesium, &other.minerals.magnesium);
+        f(&mut self.minerals.phosphorus, &other.minerals.phosphorus);
+        f(&mut self.minerals.potassium, &other.minerals.potassium);
+        f(&mut self.minerals.zinc, &other.minerals.zinc);
+        f(&mut self.minerals.copper, &other.minerals.copper);
+        f(&mut self.minerals.manganese, &other.minerals.manganese);
+        f(&mut self.minerals.selenium, &other.minerals.selenium);
+        f(&mut self.vitamins.vitamin_a, &other.vitamins.vitamin_a);
+        f(&mut self.vitamins.vitamin_c, &other.vitamins.vitamin_c);
+        f(&mut self.vitamins.vitamin_d, &other.vitamins.vitamin_d);
+        f(&mut self.vitamins.vitamin_e, &other.vitamins.vitamin_e);
+        f(&mut self.vitamins.vitamin_k1, &other.vitamins.vitamin_k1);
+        f(&mut self.vitamins.vitamin_b1, &other.vitamins.vitamin_b1);
+        f(&mut self.vitamins.vitamin_b2, &other.vitamins.vitamin_b2);
+        f(&mut self.vitamins.vitamin_b3, &other.vitamins.vitamin_b3);
+        f(&mut self.vitamins.vitamin_b5, &other.vitamins.vitamin_b5);
+        f(&mut self.vitamins.vitamin_b6, &other.vitamins.vitamin_b6);
+        f(&mut self.vitamins.vitamin_b9, &other.vitamins.vitamin_b9);
+        f(&mut self.vitamins.vitamin_b12, &other.vitamins.vitamin_b12);
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Minerals {
-    pub calcium: Option<Reported<Mass>>,
-    pub iron: Option<Reported<Mass>>,
-    pub magnesium: Option<Reported<Mass>>,
-    pub phosphorus: Option<Reported<Mass>>,
-    pub potassium: Option<Reported<Mass>>,
-    pub zinc: Option<Reported<Mass>>,
-    pub copper: Option<Reported<Mass>>,
-    pub manganese: Option<Reported<Mass>>,
-    pub selenium: Option<Reported<Mass>>,
+pub struct Minerals<T = Option<Reported<Mass>>> {
+    pub calcium: T,
+    pub iron: T,
+    pub magnesium: T,
+    pub phosphorus: T,
+    pub potassium: T,
+    pub zinc: T,
+    pub copper: T,
+    pub manganese: T,
+    pub selenium: T,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Vitamins {
-    pub vitamin_a: Option<Reported<Mass>>,
-    pub vitamin_c: Option<Reported<Mass>>,
-    pub vitamin_d: Option<Reported<Mass>>,
-    pub vitamin_e: Option<Reported<Mass>>,
-    pub vitamin_k1: Option<Reported<Mass>>,
-    pub vitamin_b1: Option<Reported<Mass>>,
-    pub vitamin_b2: Option<Reported<Mass>>,
-    pub vitamin_b3: Option<Reported<Mass>>,
-    pub vitamin_b5: Option<Reported<Mass>>,
-    pub vitamin_b6: Option<Reported<Mass>>,
-    pub vitamin_b9: Option<Reported<Mass>>,
-    pub vitamin_b12: Option<Reported<Mass>>,
+pub struct Vitamins<T = Option<Reported<Mass>>> {
+    pub vitamin_a: T,
+    pub vitamin_c: T,
+    pub vitamin_d: T,
+    pub vitamin_e: T,
+    pub vitamin_k1: T,
+    pub vitamin_b1: T,
+    pub vitamin_b2: T,
+    pub vitamin_b3: T,
+    pub vitamin_b5: T,
+    pub vitamin_b6: T,
+    pub vitamin_b9: T,
+    pub vitamin_b12: T,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,28 +226,28 @@ impl ConsumedNutrition {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Fat {
-    pub total: Option<Reported<Mass>>,
-    pub saturated: Option<Reported<Mass>>,
-    pub monounsaturated: Option<Reported<Mass>>,
-    pub polyunsaturated: Option<Reported<Mass>>,
-    pub trans: Option<Reported<Mass>>,
+pub struct Fat<T = Option<Reported<Mass>>> {
+    pub total: T,
+    pub saturated: T,
+    pub monounsaturated: T,
+    pub polyunsaturated: T,
+    pub trans: T,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Carbohydrates {
-    pub including_fibre: Option<Reported<Mass>>,
-    pub excluding_fibre: Option<Reported<Mass>>,
+pub struct Carbohydrates<T = Option<Reported<Mass>>> {
+    pub including_fibre: T,
+    pub excluding_fibre: T,
     #[serde(default)]
-    pub sugars: Sugars,
-    pub starch: Option<Reported<Mass>>,
+    pub sugars: Sugars<T>,
+    pub starch: T,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Sugars {
-    pub total: Option<Reported<Mass>>,
-    pub added: Option<Reported<Mass>>,
-    pub lactose: Option<Reported<Mass>>,
+pub struct Sugars<T = Option<Reported<Mass>>> {
+    pub total: T,
+    pub added: T,
+    pub lactose: T,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
