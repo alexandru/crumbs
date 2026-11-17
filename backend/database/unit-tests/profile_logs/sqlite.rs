@@ -1785,18 +1785,20 @@ async fn daily_activity_readings_remain_separate_and_support_lifecycle()
         .create_profile_logs(user, profile.id, &batch)
         .await?
         .ok_or("profile missing")?;
-    assert_eq!(logs.len(), 3);
-    assert!(logs[0].id.get() < logs[1].id.get());
+    let [initial_steps, corrected_steps, active_time] = logs.as_slice() else {
+        return Err("expected three daily activity readings".into());
+    };
+    assert!(initial_steps.id.get() < corrected_steps.id.get());
     assert_eq!(
-        serde_json::to_value(&logs[0].data)?,
+        serde_json::to_value(&initial_steps.data)?,
         serde_json::json!({"type":"daily_activity","reading":{"type":"steps","value":8500}})
     );
     assert_eq!(
-        serde_json::to_value(&logs[1].data)?,
+        serde_json::to_value(&corrected_steps.data)?,
         serde_json::json!({"type":"daily_activity","reading":{"type":"steps","value":8000}})
     );
     assert_eq!(
-        serde_json::to_value(&logs[2].data)?,
+        serde_json::to_value(&active_time.data)?,
         serde_json::json!({"type":"daily_activity","reading":{"type":"active_time","value":"4500 s"}})
     );
     let filter: LogFilter =
@@ -1814,7 +1816,7 @@ async fn daily_activity_readings_remain_separate_and_support_lifecycle()
         serde_json::json!({"entry":{"type":"daily_activity","reading":{"type":"steps","value":8100}}}),
     )?;
     let updated = database
-        .patch_profile_log(user, profile.id, logs[1].id, &patch)
+        .patch_profile_log(user, profile.id, corrected_steps.id, &patch)
         .await?
         .ok_or("log missing")?;
     assert_eq!(
@@ -1823,12 +1825,12 @@ async fn daily_activity_readings_remain_separate_and_support_lifecycle()
     );
     assert!(
         database
-            .delete_profile_log(user, profile.id, logs[1].id)
+            .delete_profile_log(user, profile.id, corrected_steps.id)
             .await?
     );
     assert!(
         database
-            .profile_log(user, profile.id, logs[1].id)
+            .profile_log(user, profile.id, corrected_steps.id)
             .await?
             .is_none()
     );

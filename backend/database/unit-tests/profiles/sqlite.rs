@@ -458,6 +458,9 @@ async fn daily_goals_persist_and_patch_independently() -> Result<(), Box<dyn Err
     let listed = database
         .list_profiles(user, &ProfileListQuery::default())
         .await?;
-    assert_eq!(listed.items[0].data.settings, updated.data.settings);
+    let [listed_profile] = listed.items.as_slice() else {
+        return Err("expected one profile".into());
+    };
+    assert_eq!(listed_profile.data.settings, updated.data.settings);
     Ok(())
 }
