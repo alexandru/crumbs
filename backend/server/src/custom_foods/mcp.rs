@@ -111,7 +111,7 @@ Example arguments:
 - Crumbs assigns source, dataset, and IDs. Requires crumbs:write."#
             }
             Self::Update => {
-                r#"Replace a custom food's description, category, notes, nutrition, and servings.
+                r#"Replace a custom food's description, category, barcode, notes, nutrition, and servings.
 
 Example arguments:
 ```json
@@ -333,6 +333,7 @@ fn food_schema() -> Value {
         "properties": {
             "description": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank food name or description without NUL characters."},
             "category": {"type": ["string", "null"]},
+            "barcode": {"type": ["string", "null"]},
             "notes": {"type": ["string", "null"], "description": "Free text such as ingredients. Returned with the food but excluded from full-text search."},
             "parsed_data": food_data_schema()
         }

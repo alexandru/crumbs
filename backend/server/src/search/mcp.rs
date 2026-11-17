@@ -67,6 +67,7 @@ Syntax:
 Search fields:
 - `description`: food descriptions.
 - `category`: food categories.
+- `barcode`: food barcodes.
 - `tags`: assigned tags.
 - `source`: data provider. USDA source values are stored as `usda`.
 - `dataset`: source-independent search classification: `common`, `branded`, or `custom`.

@@ -22,6 +22,13 @@ fn dataset_and_custom_food_input_enforce_their_wire_contracts() -> Result<(), Bo
     assert_eq!(input.description.as_str(), "  House sauce  ");
     assert!(input.category.is_none());
     assert!(input.notes.is_none());
+    assert!(input.barcode.is_none());
+    let null_barcode: CustomFoodInput =
+        serde_json::from_str(r#"{"description":"Food","barcode":null}"#)?;
+    assert!(null_barcode.barcode.is_none());
+    let barcode: CustomFoodInput =
+        serde_json::from_str(r#"{"description":"Food","barcode":"0012345678905"}"#)?;
+    assert_eq!(barcode.barcode.as_deref(), Some("0012345678905"));
     assert_eq!(
         input.parsed_data,
         crate::nutrition_model::FoodData::default()

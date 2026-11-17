@@ -49,6 +49,7 @@ impl TestApplication {
                 description: description.to_owned(),
                 category: Some("Protein".to_owned()),
                 notes: None,
+                barcode: None,
                 parsed_data,
             })
             .await?;
@@ -73,6 +74,7 @@ async fn add_usda_food(
             description: description.to_owned(),
             category: None,
             notes: None,
+            barcode: None,
             parsed_data: FoodData::default(),
         })
         .await?;
@@ -365,6 +367,7 @@ impl FoodSearch for RecordingFoodReader {
                             description: "Test lentils".to_owned(),
                             category: Some("Legumes".to_owned()),
                             notes: Some("Lentils, water".to_owned()),
+                            barcode: None,
                             parsed_data,
                         },
                     }],

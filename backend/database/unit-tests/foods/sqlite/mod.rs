@@ -51,6 +51,7 @@ pub(super) fn make_food(
         description: description.to_owned(),
         category: None,
         notes: None,
+        barcode: None,
         parsed_data: crate::nutrition_model::FoodData::default(),
     })
 }

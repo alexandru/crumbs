@@ -9,8 +9,9 @@ pub use custom_foods::{
     CustomFoodDescription, CustomFoodInput, CustomFoodStore, InvalidCustomFoodDescription,
 };
 pub use model::{
-    Dataset, Food, FoodCategory, FoodDescription, FoodId, FoodLimit, FoodNotes, FoodStoreError,
-    FoodSummary, InvalidDataset, Source, SourceFoodId, SourceFoodIdRef, SourceRef, StoredFood,
+    Dataset, Food, FoodBarcode, FoodCategory, FoodDescription, FoodId, FoodLimit, FoodNotes,
+    FoodStoreError, FoodSummary, InvalidDataset, Source, SourceFoodId, SourceFoodIdRef, SourceRef,
+    StoredFood,
 };
 pub use search::{FoodSearch, SearchError, SearchQuery, SearchQueryError, SearchResults};
 pub use source_foods::{FoodLookup, FoodWriter};
