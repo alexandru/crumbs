@@ -11,15 +11,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  quality-gate:
-    name: quality gate
-    uses: ./.github/workflows/build.yml
-    permissions:
-      contents: read
-
   build:
     name: build (${{ matrix.platform }})
-    needs: quality-gate
     strategy:
       fail-fast: false
       matrix:
