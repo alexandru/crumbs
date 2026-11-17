@@ -58,33 +58,37 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
         for schema_name in ["inputSchema", "outputSchema"] {
             let schema = &tool[schema_name];
             assert!(schema.is_object(), "{name} missing {schema_name}");
-            crate::tests::assert_local_references(schema, schema)?;
+            crate::tests::assert_inline_schema(schema)?;
         }
 
         let output = &tool["outputSchema"];
         assert_eq!(output["type"], "object");
-        assert_eq!(output["oneOf"][1]["$ref"], "#/$defs/error");
-        assert_eq!(output["oneOf"][2]["$ref"], "#/$defs/scope_error");
-
-        let defs = &output["$defs"];
-        if name == "list_profiles" {
-            assert_eq!(output["oneOf"][0]["$ref"], "#/$defs/profile_list");
-            assert_eq!(
-                defs["profile_list"]["properties"]["items"]["items"]["$ref"],
-                "#/$defs/profile"
-            );
+        assert_eq!(output["oneOf"][1]["required"], json!(["code", "error"]));
+        assert_eq!(
+            output["oneOf"][2]["properties"]["error"]["const"],
+            "insufficient_scope"
+        );
+        let profile = if name == "list_profiles" {
+            &output["oneOf"][0]["properties"]["items"]["items"]
         } else {
-            assert_eq!(output["oneOf"][0]["$ref"], "#/$defs/profile");
-        }
+            &output["oneOf"][0]
+        };
+        let settings = &profile["properties"]["data"]["properties"]["settings"]["properties"];
+        assert_eq!(settings["weight_change_goal"]["anyOf"][1]["type"], "null");
         assert_eq!(
-            defs["profile_settings"]["properties"]["bmr"]["$ref"],
-            "#/$defs/bmr"
+            settings["bmr"]["oneOf"][1]["properties"]["value"]["type"],
+            "string"
         );
         assert_eq!(
-            defs["profile_settings"]["properties"]["weight_change_goal"]["anyOf"][1]["type"],
-            "null"
+            settings["baseline_activity"]["anyOf"][0]["oneOf"][0]["properties"]["level"]["enum"],
+            json!([
+                "no_activity",
+                "sedentary",
+                "lightly_active",
+                "moderately_active",
+                "very_active"
+            ])
         );
-        assert_eq!(defs["daily_energy"]["type"], json!(["string", "null"]));
     }
     assert!(!tools.iter().any(|tool| tool["name"] == "delete_profile"));
 
@@ -93,22 +97,11 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
         .find(|tool| tool["name"] == "create_profile")
         .ok_or("create_profile schema is missing")?;
     assert_eq!(create_tool["inputSchema"]["required"], json!(["profile"]));
+    let settings = &create_tool["inputSchema"]["properties"]["profile"]["properties"]["settings"]["anyOf"]
+        [0]["properties"];
+    assert_eq!(settings["weight_change_goal"]["anyOf"][0]["type"], "string");
     assert_eq!(
-        create_tool["inputSchema"]["$defs"]["create_settings"]["properties"]["weight_change_goal"]
-            ["anyOf"][0]["$ref"],
-        "#/$defs/weight_change_goal"
-    );
-    assert_eq!(
-        create_tool["inputSchema"]["$defs"]["weight_change_goal"]["type"],
-        "string"
-    );
-    assert_eq!(
-        create_tool["inputSchema"]["$defs"]["create_profile"]["properties"]["settings"]["anyOf"][0]
-            ["$ref"],
-        "#/$defs/create_settings"
-    );
-    assert_eq!(
-        create_tool["inputSchema"]["$defs"]["bmr"]["oneOf"][1]["properties"]["value"]["type"],
+        settings["bmr"]["anyOf"][0]["oneOf"][1]["properties"]["value"]["type"],
         "string"
     );
     let update_tool = tools
@@ -119,20 +112,13 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
         update_tool["inputSchema"]["required"],
         json!(["id", "patch"])
     );
+    let patch = &update_tool["inputSchema"]["properties"]["patch"]["properties"];
     assert_eq!(
-        update_tool["inputSchema"]["$defs"]["patch_profile"]["properties"]["bmr"]["description"],
+        patch["bmr"]["description"],
         "Null resets BMR to calculated mode."
     );
+    assert_eq!(patch["weight_change_goal"]["anyOf"][0]["type"], "string");
     assert_eq!(update_tool["annotations"]["destructiveHint"], true);
-    assert_eq!(
-        update_tool["inputSchema"]["$defs"]["patch_profile"]["properties"]["weight_change_goal"]["anyOf"]
-            [0]["$ref"],
-        "#/$defs/weight_change_goal"
-    );
-    assert_eq!(
-        update_tool["inputSchema"]["$defs"]["weight_change_goal"]["type"],
-        "string"
-    );
 
     let denied_create = mcp_call_router_with_token(
         &app.router,
@@ -144,7 +130,7 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
     .await?;
     assert_eq!(denied_create.json["result"]["isError"], true);
     assert_schema_keys(
-        &create_tool["outputSchema"]["$defs"]["scope_error"],
+        &create_tool["outputSchema"]["oneOf"][2],
         &denied_create.json["result"]["structuredContent"],
     )?;
     assert_eq!(
@@ -162,7 +148,7 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
     .await?;
     assert_eq!(invalid_birth_date.json["result"]["isError"], true);
     let error = &invalid_birth_date.json["result"]["structuredContent"];
-    assert_schema_keys(&create_tool["outputSchema"]["$defs"]["error"], error)?;
+    assert_schema_keys(&create_tool["outputSchema"]["oneOf"][1], error)?;
     assert!(error["code"].is_string());
     assert!(error["error"].is_string());
     assert_eq!(
@@ -190,15 +176,25 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
     assert_eq!(created.status, StatusCode::OK, "{:?}", created.json);
     assert_eq!(created.json["result"]["isError"], false);
     let profile = &created.json["result"]["structuredContent"];
-    let defs = &create_tool["outputSchema"]["$defs"];
-    for (name, value) in [
-        ("profile", profile),
-        ("profile_data", &profile["data"]),
-        ("profile_settings", &profile["data"]["settings"]),
-        ("profile_cache", &profile["data"]["cache"]),
-        ("profile_derived", &profile["derived"]),
+    let profile_schema = &create_tool["outputSchema"]["oneOf"][0];
+    let data_schema = &profile_schema["properties"]["data"];
+    for (schema, value) in [
+        (profile_schema, profile),
+        (data_schema, &profile["data"]),
+        (
+            &data_schema["properties"]["settings"],
+            &profile["data"]["settings"],
+        ),
+        (
+            &data_schema["properties"]["cache"],
+            &profile["data"]["cache"],
+        ),
+        (
+            &profile_schema["properties"]["derived"],
+            &profile["derived"],
+        ),
     ] {
-        assert_schema_keys(&defs[name], value)?;
+        assert_schema_keys(schema, value)?;
     }
     let profile_id = profile["id"].as_i64().ok_or("profile has no ID")?;
     assert_eq!(
@@ -292,7 +288,7 @@ async fn mcp_profile_tools_validate_schemas_scopes_and_per_call_account_identity
         .find(|tool| tool["name"] == "list_profiles")
         .ok_or("list tool is missing")?;
     assert_schema_keys(
-        &list_tool["outputSchema"]["$defs"]["profile_list"],
+        &list_tool["outputSchema"]["oneOf"][0],
         &other_list.json["result"]["structuredContent"],
     )?;
     assert_eq!(

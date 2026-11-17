@@ -71,7 +71,7 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
 
         let schema = &tool["inputSchema"];
         assert!(schema.is_object(), "missing inputSchema for {name}");
-        crate::tests::assert_local_references(schema, schema)?;
+        crate::tests::assert_inline_schema(schema)?;
     }
 
     let create_tool = tools
@@ -84,41 +84,35 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
         json!(["profile_id", "log"])
     );
     assert_eq!(
-        create_tool["inputSchema"]["$defs"]["create_log"]["required"],
+        create_tool["inputSchema"]["properties"]["log"]["required"],
         json!(["day", "entry"])
     );
     assert!(
-        create_tool["inputSchema"]["$defs"]["create_log"]["properties"]["time"]["anyOf"].is_array()
+        create_tool["inputSchema"]["properties"]["log"]["properties"]["time"]["anyOf"].is_array()
     );
     assert_eq!(
-        create_tool["inputSchema"]["$defs"]["create_log"]["additionalProperties"],
+        create_tool["inputSchema"]["properties"]["log"]["additionalProperties"],
         false
     );
     assert_eq!(
-        create_tool["inputSchema"]["$defs"]["log_entry"]["oneOf"][0]["$ref"],
-        "#/$defs/biometric_log_entry"
-    );
-    assert_eq!(
-        create_tool["inputSchema"]["$defs"]["log_entry"]["oneOf"][1]["$ref"],
-        "#/$defs/food_log_entry"
-    );
-    assert_eq!(
-        create_tool["inputSchema"]["$defs"]["food_log_entry"]["required"],
+        create_tool["inputSchema"]["properties"]["log"]["properties"]["entry"]["oneOf"][1]["required"],
         json!(["type", "food_id", "amount", "serving_size"])
     );
     assert_eq!(
-        create_tool["inputSchema"]["$defs"]["food_log_entry"]["additionalProperties"],
+        create_tool["inputSchema"]["properties"]["log"]["properties"]["entry"]["oneOf"][1]["additionalProperties"],
         false
     );
     assert_eq!(
-        create_tool["inputSchema"]["$defs"]["food_log_entry"]["properties"]["type"]["const"],
+        create_tool["inputSchema"]["properties"]["log"]["properties"]["entry"]["oneOf"][1]["properties"]
+            ["type"]["const"],
         "food"
     );
     assert_eq!(
-        create_tool["inputSchema"]["$defs"]["food_log_entry"]["properties"]["food_id"]["minimum"],
+        create_tool["inputSchema"]["properties"]["log"]["properties"]["entry"]["oneOf"][1]["properties"]
+            ["food_id"]["minimum"],
         1
     );
-    assert!(create_tool["inputSchema"]["$defs"]["food_log_entry"]["properties"]["serving_size"]["description"]
+    assert!(create_tool["inputSchema"]["properties"]["log"]["properties"]["entry"]["oneOf"][1]["properties"]["serving_size"]["description"]
         .as_str()
         .is_some_and(|description| description.contains("µg") && description.contains("case-sensitive")));
     assert!(
@@ -127,7 +121,8 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
         )
     );
     assert_eq!(
-        create_tool["inputSchema"]["$defs"]["biometric_entry"]["properties"]["value"]["description"],
+        create_tool["inputSchema"]["properties"]["log"]["properties"]["entry"]["oneOf"][0]["properties"]
+            ["measurement"]["properties"]["value"]["description"],
         "Positive fixed-point weight in kilograms, for example 90 kg."
     );
     let list_tool = tools
@@ -135,14 +130,10 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
         .find(|tool| tool["name"] == "list_profile_logs")
         .ok_or("list tool is missing")?;
     assert_eq!(
-        list_tool["inputSchema"]["properties"]["filter"]["anyOf"][0]["$ref"],
-        "#/$defs/log_filter"
-    );
-    assert_eq!(
-        list_tool["inputSchema"]["$defs"]["log_filter"]["properties"]["last_id"]["description"],
+        list_tool["inputSchema"]["properties"]["filter"]["anyOf"][0]["properties"]["last_id"]["description"],
         "Exclusive cursor. Results are ordered by ID descending; next page uses id < last_id."
     );
-    let log_filter = &list_tool["inputSchema"]["$defs"]["log_filter"];
+    let log_filter = &list_tool["inputSchema"]["properties"]["filter"]["anyOf"][0];
     for field in ["from", "to", "entry_type", "subtype", "last_id"] {
         assert_eq!(
             log_filter["properties"][field]["anyOf"][1],
@@ -161,21 +152,39 @@ async fn mcp_profile_log_tools_cover_schema_scope_dispatch_and_account_isolation
         .iter()
         .find(|tool| tool["name"] == "update_profile_log")
         .ok_or("update tool is missing")?;
+    let create_exercise =
+        &create_tool["inputSchema"]["properties"]["log"]["properties"]["entry"]["oneOf"][3];
+    let update_exercise =
+        &update_tool["inputSchema"]["properties"]["patch"]["properties"]["entry"]["oneOf"][3];
+    for exercise in [create_exercise, update_exercise] {
+        assert_eq!(exercise["properties"]["type"]["const"], "exercise");
+        assert_eq!(
+            exercise["properties"]["intensity"]["enum"],
+            json!(["easy", "moderate", "hard", "very_hard"])
+        );
+    }
+    assert_eq!(
+        create_exercise["required"],
+        json!([
+            "type",
+            "exercise_type",
+            "intensity",
+            "duration",
+            "calories_burned"
+        ])
+    );
+    assert_eq!(update_exercise["required"], json!(["type"]));
     assert_eq!(update_tool["annotations"]["destructiveHint"], true);
     assert_eq!(
-        update_tool["inputSchema"]["$defs"]["log_entry_patch"]["oneOf"][1]["$ref"],
-        "#/$defs/food_log_entry_patch"
-    );
-    assert_eq!(
-        update_tool["inputSchema"]["$defs"]["food_log_entry_patch"]["required"],
+        update_tool["inputSchema"]["properties"]["patch"]["properties"]["entry"]["oneOf"][1]["required"],
         json!(["type"])
     );
     assert_eq!(
-        update_tool["inputSchema"]["$defs"]["food_log_entry_patch"]["additionalProperties"],
+        update_tool["inputSchema"]["properties"]["patch"]["properties"]["entry"]["oneOf"][1]["additionalProperties"],
         false
     );
     assert!(
-        update_tool["inputSchema"]["$defs"]["food_log_entry_patch"]["description"]
+        update_tool["inputSchema"]["properties"]["patch"]["properties"]["entry"]["oneOf"][1]["description"]
             .as_str()
             .is_some_and(|description| description.contains("preserves the existing snapshot"))
     );

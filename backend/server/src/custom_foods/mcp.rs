@@ -215,11 +215,7 @@ Example arguments:
             }
             Self::Create => {
                 schema.insert("required".to_owned(), json!(["food"]));
-                schema.insert(
-                    "properties".to_owned(),
-                    json!({"food": {"$ref": "#/$defs/food"}}),
-                );
-                schema.insert("$defs".to_owned(), food_definitions());
+                schema.insert("properties".to_owned(), json!({"food": food_schema()}));
             }
             Self::Update => {
                 schema.insert("required".to_owned(), json!(["id", "food"]));
@@ -227,10 +223,9 @@ Example arguments:
                     "properties".to_owned(),
                     json!({
                         "id": id,
-                        "food": {"$ref": "#/$defs/food"}
+                        "food": food_schema()
                     }),
                 );
-                schema.insert("$defs".to_owned(), food_definitions());
             }
         }
         schema
@@ -330,94 +325,132 @@ fn tool_error(message: impl Into<String>) -> CallToolResult {
     CallToolResult::structured_error(json!({"error": message.into()}))
 }
 
-fn food_definitions() -> Value {
+fn food_schema() -> Value {
     json!({
-        "food": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["description"],
-            "properties": {
-                "description": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank food name or description without NUL characters."},
-                "category": {"type": ["string", "null"]},
-                "notes": {"type": ["string", "null"], "description": "Free text such as ingredients. Returned with the food but excluded from full-text search."},
-                "parsed_data": {"$ref": "#/$defs/food_data", "description": "Optional object containing nutrition and serving_sizes."}
-            }
-        },
-        "food_data": {
-            "type": "object",
-            "description": "Nutrition applies per 100 g or 100 ml. Omitted nutrient amounts are unknown. Amounts are unit-bearing decimal strings, such as 7 g or 120 kcal.",
-            "properties": {
-                "nutrition": {"anyOf": [{"$ref": "#/$defs/nutrition"}, {"type": "null"}], "description": "Optional nutrition object; use null when nutrition is unknown."},
-                "serving_sizes": {"type": "array", "items": {"$ref": "#/$defs/serving"}, "description": "Named measured servings, each with name and quantity."}
-            }
-        },
-        "mass": {"type": ["string", "null"], "description": "Nonnegative reported mass with a unit, for example 7 g. Use a string to preserve decimal precision."},
-        "nutrition": {
-            "type": "object",
-            "required": ["per"],
-            "properties": {
-                "per": {"type": "string", "enum": ["100 g", "100 ml"]},
-                "energy": {"type": ["string", "null"], "description": "Reported energy with a unit, for example 120 kcal or 500 kJ."},
-                "fat": {"$ref": "#/$defs/fat", "description": "Object with optional mass fields such as total and saturated; each value is a unit-bearing string."},
-                "carbohydrates": {"$ref": "#/$defs/carbohydrates", "description": "Object with optional mass fields and a sugars object; each mass value is a unit-bearing string."},
-                "fibre": {"$ref": "#/$defs/mass"},
-                "protein": {"$ref": "#/$defs/mass"},
-                "water": {"$ref": "#/$defs/mass"},
-                "caffeine": {"$ref": "#/$defs/mass"},
-                "choline": {"$ref": "#/$defs/mass", "description": "Total choline."},
-                "minerals": {"$ref": "#/$defs/minerals"},
-                "vitamins": {"$ref": "#/$defs/vitamins"},
-                "sodium": {"$ref": "#/$defs/mass"},
-                "salt": {"$ref": "#/$defs/mass"},
-                "cholesterol": {"$ref": "#/$defs/mass"}
-            }
-        },
-        "fat": mass_properties(&["total", "saturated", "monounsaturated", "polyunsaturated", "trans"]),
-        "minerals": mass_properties(&["calcium", "iron", "magnesium", "phosphorus", "potassium", "zinc", "copper", "manganese", "selenium"]),
-        "vitamins": {
-            "type": "object",
-            "properties": {
-                "vitamin_a": {"$ref": "#/$defs/mass", "description": "Vitamin A as retinol activity equivalents."},
-                "vitamin_c": {"$ref": "#/$defs/mass", "description": "Total ascorbic acid."},
-                "vitamin_d": {"$ref": "#/$defs/mass", "description": "Vitamin D2 and D3 combined."},
-                "vitamin_e": {"$ref": "#/$defs/mass", "description": "Alpha-tocopherol."},
-                "vitamin_k1": {"$ref": "#/$defs/mass", "description": "Phylloquinone."},
-                "vitamin_b1": {"$ref": "#/$defs/mass", "description": "Thiamin."},
-                "vitamin_b2": {"$ref": "#/$defs/mass", "description": "Riboflavin."},
-                "vitamin_b3": {"$ref": "#/$defs/mass", "description": "Niacin."},
-                "vitamin_b5": {"$ref": "#/$defs/mass", "description": "Pantothenic acid."},
-                "vitamin_b6": {"$ref": "#/$defs/mass", "description": "Total vitamin B6."},
-                "vitamin_b9": {"$ref": "#/$defs/mass", "description": "Total folate."},
-                "vitamin_b12": {"$ref": "#/$defs/mass", "description": "Vitamin B12."}
-            }
-        },
-        "carbohydrates": {
-            "type": "object",
-            "properties": {
-                "including_fibre": {"$ref": "#/$defs/mass"},
-                "excluding_fibre": {"$ref": "#/$defs/mass"},
-                "starch": {"$ref": "#/$defs/mass"},
-                "sugars": {"$ref": "#/$defs/sugars"}
-            }
-        },
-        "sugars": mass_properties(&["total", "added", "lactose"]),
-        "serving": {
-            "type": "object",
-            "required": ["name", "quantity"],
-            "properties": {
-                "name": {"type": "string"},
-                "quantity": {"type": "string", "description": "Positive measured mass or volume, for example 30 g or 250 ml."}
-            }
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["description"],
+        "properties": {
+            "description": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank food name or description without NUL characters."},
+            "category": {"type": ["string", "null"]},
+            "notes": {"type": ["string", "null"], "description": "Free text such as ingredients. Returned with the food but excluded from full-text search."},
+            "parsed_data": food_data_schema()
         }
     })
 }
 
-fn mass_properties(names: &[&str]) -> Value {
+fn food_data_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Optional object containing nutrition and serving_sizes. Nutrition applies per 100 g or 100 ml. Omitted nutrient amounts are unknown. Amounts are unit-bearing decimal strings, such as 7 g or 120 kcal.",
+        "properties": {
+            "nutrition": {"anyOf": [nutrition_schema(), {"type": "null"}], "description": "Optional nutrition object; use null when nutrition is unknown."},
+            "serving_sizes": {"type": "array", "items": serving_schema(), "description": "Named measured servings, each with name and quantity."}
+        }
+    })
+}
+
+fn nutrition_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["per"],
+        "properties": {
+            "per": {"type": "string", "enum": ["100 g", "100 ml"]},
+            "energy": {"type": ["string", "null"], "description": "Reported energy with a unit, for example 120 kcal or 500 kJ."},
+            "fat": fat_schema(),
+            "carbohydrates": carbohydrates_schema(),
+            "fibre": mass_schema(""),
+            "protein": mass_schema(""),
+            "water": mass_schema(""),
+            "caffeine": mass_schema(""),
+            "choline": mass_schema("Total choline."),
+            "minerals": mass_properties(&["calcium", "iron", "magnesium", "phosphorus", "potassium", "zinc", "copper", "manganese", "selenium"]),
+            "vitamins": vitamins_schema(),
+            "sodium": mass_schema(""),
+            "salt": mass_schema(""),
+            "cholesterol": mass_schema("")
+        }
+    })
+}
+
+fn fat_schema() -> Map<String, Value> {
+    let mut schema = mass_properties(&[
+        "total",
+        "saturated",
+        "monounsaturated",
+        "polyunsaturated",
+        "trans",
+    ]);
+    schema.insert("description".to_owned(), json!(
+        "Object with optional mass fields such as total and saturated; each value is a unit-bearing string."
+    ));
+    schema
+}
+
+fn vitamins_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "vitamin_a": mass_schema("Vitamin A as retinol activity equivalents."),
+            "vitamin_c": mass_schema("Total ascorbic acid."),
+            "vitamin_d": mass_schema("Vitamin D2 and D3 combined."),
+            "vitamin_e": mass_schema("Alpha-tocopherol."),
+            "vitamin_k1": mass_schema("Phylloquinone."),
+            "vitamin_b1": mass_schema("Thiamin."),
+            "vitamin_b2": mass_schema("Riboflavin."),
+            "vitamin_b3": mass_schema("Niacin."),
+            "vitamin_b5": mass_schema("Pantothenic acid."),
+            "vitamin_b6": mass_schema("Total vitamin B6."),
+            "vitamin_b9": mass_schema("Total folate."),
+            "vitamin_b12": mass_schema("Vitamin B12.")
+        }
+    })
+}
+
+fn carbohydrates_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Object with optional mass fields and a sugars object; each mass value is a unit-bearing string.",
+        "properties": {
+            "including_fibre": mass_schema(""),
+            "excluding_fibre": mass_schema(""),
+            "starch": mass_schema(""),
+            "sugars": mass_properties(&["total", "added", "lactose"])
+        }
+    })
+}
+
+fn serving_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["name", "quantity"],
+        "properties": {
+            "name": {"type": "string"},
+            "quantity": {"type": "string", "description": "Positive measured mass or volume, for example 30 g or 250 ml."}
+        }
+    })
+}
+
+fn mass_schema(detail: &str) -> Value {
+    let description = if detail.is_empty() {
+        "Nonnegative reported mass with a unit, for example 7 g. Use a string to preserve decimal precision.".to_owned()
+    } else {
+        format!(
+            "{detail} Nonnegative reported mass with a unit, for example 7 g. Use a string to preserve decimal precision."
+        )
+    };
+    json!({"type": ["string", "null"], "description": description})
+}
+
+fn mass_properties(names: &[&str]) -> Map<String, Value> {
     let properties: Map<String, Value> = names
         .iter()
-        .map(|name| ((*name).to_owned(), json!({"$ref": "#/$defs/mass"})))
+        .map(|name| ((*name).to_owned(), mass_schema("")))
         .collect();
-    json!({"type": "object", "properties": properties})
+    Map::from_iter([
+        ("type".to_owned(), json!("object")),
+        ("properties".to_owned(), Value::Object(properties)),
+    ])
 }
 
 #[cfg(test)]

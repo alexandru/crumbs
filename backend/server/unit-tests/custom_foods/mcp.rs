@@ -64,6 +64,21 @@ async fn mcp_custom_food_tools_cover_crud_and_check_scope_per_request() -> Resul
         .ok_or("MCP update tool is missing")?;
     assert_eq!(update_tool["annotations"]["readOnlyHint"], false);
     assert_eq!(update_tool["annotations"]["destructiveHint"], true);
+    for tool in [create_tool, update_tool] {
+        let schema = &tool["inputSchema"];
+        crate::tests::assert_inline_schema(schema)?;
+        let data = &schema["properties"]["food"]["properties"]["parsed_data"];
+        let vitamin = &data["properties"]["nutrition"]["anyOf"][0]["properties"]["vitamins"]["properties"]
+            ["vitamin_b12"];
+        assert_eq!(vitamin["type"], json!(["string", "null"]));
+        assert_eq!(
+            vitamin["description"],
+            "Vitamin B12. Nonnegative reported mass with a unit, for example 7 g. Use a string to preserve decimal precision."
+        );
+        let serving = &data["properties"]["serving_sizes"]["items"];
+        assert_eq!(serving["required"], json!(["name", "quantity"]));
+        assert_eq!(serving["properties"]["quantity"]["type"], "string");
+    }
     let delete_tool = tools
         .iter()
         .find(|tool| tool["name"] == "delete_custom_food")

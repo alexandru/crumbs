@@ -290,10 +290,9 @@ Requires crumbs:write."#
                     "properties".to_owned(),
                     json!({
                         "profile_id": profile_id,
-                        "filter": {"anyOf": [{"$ref": "#/$defs/log_filter"}, {"type": "null"}]}
+                        "filter": {"anyOf": [log_filter_schema(), {"type": "null"}]}
                     }),
                 );
-                schema.insert("$defs".to_owned(), definitions());
             }
             Self::Get | Self::Delete => {
                 schema.insert("required".to_owned(), json!(["profile_id", "id"]));
@@ -308,10 +307,9 @@ Requires crumbs:write."#
                     "properties".to_owned(),
                     json!({
                         "profile_id": profile_id,
-                        "log": {"$ref": "#/$defs/create_log"}
+                        "log": create_log_schema()
                     }),
                 );
-                schema.insert("$defs".to_owned(), definitions());
             }
             Self::Update => {
                 schema.insert("required".to_owned(), json!(["profile_id", "id", "patch"]));
@@ -320,10 +318,9 @@ Requires crumbs:write."#
                     json!({
                         "profile_id": profile_id,
                         "id": log_id,
-                        "patch": {"$ref": "#/$defs/patch_log"}
+                        "patch": patch_log_schema()
                     }),
                 );
-                schema.insert("$defs".to_owned(), definitions());
             }
         }
         schema
@@ -473,140 +470,213 @@ fn tool_error(code: &'static str, message: impl Into<String>) -> CallToolResult 
     CallToolResult::structured_error(json!({"code": code, "error": message.into()}))
 }
 
-fn definitions() -> Value {
+fn create_log_schema() -> Value {
     json!({
-        "create_log": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["day", "entry"],
-            "properties": {
-                "day": {"$ref": "#/$defs/log_day"},
-                "time": {"anyOf": [{"$ref": "#/$defs/local_time"}, {"type": "null"}], "description": "Profile-local time. Omit or use null to resolve the current local time in the profile timezone."},
-                "entry": {"$ref": "#/$defs/log_entry"}
-            }
-        },
-        "patch_log": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "day": {"$ref": "#/$defs/log_day", "description": "Replace the occurrence day. Omission preserves the stored day."},
-                "time": {"$ref": "#/$defs/local_time", "description": "Replace the occurrence time. Null is invalid; omission preserves the stored time."},
-                "entry": {"$ref": "#/$defs/log_entry_patch", "description": "Patch the weight measurement, food input, journal text, or exercise entry without changing the entry category. Food input fields refresh the snapshot; an empty food patch preserves it."}
-            }
-        },
-        "log_filter": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "from": {"anyOf": [{"$ref": "#/$defs/log_day"}, {"type": "null"}], "description": "Inclusive lower day bound."},
-                "to": {"anyOf": [{"$ref": "#/$defs/log_day"}, {"type": "null"}], "description": "Inclusive upper day bound."},
-                "entry_type": {"anyOf": [{"type": "string", "enum": ["food", "biometric", "journal", "exercise"]}, {"type": "null"}]},
-                "subtype": {"anyOf": [{"type": "string", "enum": ["weight"]}, {"type": "null"}], "description": "Biometric subtype; when set to weight, requires entry_type=biometric."},
-                "last_id": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}], "description": "Exclusive cursor. Results are ordered by ID descending; next page uses id < last_id."}
-            },
-            "allOf": [
-                {
-                    "if": {"required": ["subtype"], "properties": {"subtype": {"const": "weight"}}},
-                    "then": {"required": ["entry_type"], "properties": {"entry_type": {"const": "biometric"}}}
-                }
-            ],
-            "description": "Date bounds are inclusive. Results are always ordered by ID descending in fixed pages of 100. No limit or sort-direction parameter is accepted."
-        },
-        "log_day": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "Valid calendar day in YYYY-MM-DD form."},
-        "local_time": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](\\.[0-9]{1,3})?)?$", "description": "Profile-local time. Input accepts HH:MM, HH:MM:SS, or HH:MM:SS.f through HH:MM:SS.fff; responses serialize as HH:MM:SS.fff."},
-        "log_entry": {
-            "oneOf": [
-                {"$ref": "#/$defs/biometric_log_entry"},
-                {"$ref": "#/$defs/food_log_entry"},
-                {"$ref": "#/$defs/journal_log_entry"},
-                {"$ref": "#/$defs/exercise_log_entry"}
-            ]
-        },
-        "log_entry_patch": {
-            "oneOf": [
-                {"$ref": "#/$defs/biometric_log_entry"},
-                {"$ref": "#/$defs/food_log_entry_patch"},
-                {"$ref": "#/$defs/journal_log_entry"},
-                {"$ref": "#/$defs/exercise_log_entry_patch"}
-            ]
-        },
-        "exercise_log_entry": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "exercise_type", "intensity", "duration", "calories_burned"],
-            "properties": {
-                "type": {"const": "exercise"},
-                "exercise_type": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank exercise type, preserved as supplied."},
-                "intensity": {"type": "string", "enum": ["easy", "moderate", "hard", "very_hard"]},
-                "duration": {"type": "string", "description": "Duration such as 30 min or 0 s. Supports human-readable units and combined values. Responses use seconds."},
-                "calories_burned": {"type": "string", "description": "Nonnegative energy with the kcal unit, for example 150 kcal."},
-                "notes": {"anyOf": [{"type": "string"}, {"type": "null"}]}
-            }
-        },
-        "exercise_log_entry_patch": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["type"],
-            "properties": {
-                "type": {"const": "exercise"},
-                "exercise_type": {"type": "string", "minLength": 1, "pattern": "\\S"},
-                "intensity": {"type": "string", "enum": ["easy", "moderate", "hard", "very_hard"]},
-                "duration": {"type": "string", "description": "Duration such as 30 min or 0 s. Supports human-readable units and combined values. Responses use seconds."},
-                "calories_burned": {"type": "string", "description": "Nonnegative energy with the kcal unit."},
-                "notes": {"anyOf": [{"type": "string"}, {"type": "null"}], "description": "Null clears notes; omission preserves them."}
-            }
-        },
-        "journal_log_entry": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "text"],
-            "properties": {
-                "type": {"const": "journal"},
-                "text": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank journal text. Whitespace and line breaks are preserved."}
-            }
-        },
-        "biometric_log_entry": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "measurement"],
-            "properties": {
-                "type": {"const": "biometric"},
-                "measurement": {"$ref": "#/$defs/biometric_entry"}
-            }
-        },
-        "food_log_entry": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "food_id", "amount", "serving_size"],
-            "properties": {
-                "type": {"const": "food"},
-                "food_id": {"type": "integer", "minimum": 1, "description": "Existing positive FoodId. The server validates the food and derives the snapshot."},
-                "amount": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$", "description": "Positive decimal string without a unit, such as \"300\" or \"1.5\". Set the unit or named serving in the sibling serving_size field."},
-                "serving_size": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "One of kg, g, mg, µg, l, ml, or one nonblank, case-sensitive named serving defined by this food. The dimension must match the food's nutrition basis; surrounding whitespace is ignored."}
-            }
-        },
-        "food_log_entry_patch": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["type"],
-            "properties": {
-                "type": {"const": "food"},
-                "food_id": {"type": "integer", "minimum": 1, "description": "Existing positive FoodId. Omit to keep the stored FoodId."},
-                "amount": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$", "description": "Positive decimal string without a unit, such as \"1.5\". Set the unit or named serving in the sibling serving_size field. Omit to keep the stored amount."},
-                "serving_size": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "kg, g, mg, µg, l, ml, or one nonblank, case-sensitive named serving defined by the food. Omit to keep the stored serving. Null is invalid."}
-            },
-            "description": "Fields are optional and null is invalid. An empty food patch preserves the existing snapshot. Supplying any input field rebuilds the snapshot from the current food record after the merged food ID, amount, and serving size validate."
-        },
-        "biometric_entry": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "value"],
-            "properties": {
-                "type": {"const": "weight"},
-                "value": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*) kg$", "description": "Positive fixed-point weight in kilograms, for example 90 kg."}
-            }
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["day", "entry"],
+        "properties": {
+            "day": log_day_schema(),
+            "time": {"anyOf": [local_time_schema(), {"type": "null"}], "description": "Profile-local time. Omit or use null to resolve the current local time in the profile timezone."},
+            "entry": log_entry_schema()
         }
     })
+}
+
+fn patch_log_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "day": schema_with_description(log_day_schema(), "Replace the occurrence day. Omission preserves the stored day."),
+            "time": schema_with_description(local_time_schema(), "Replace the occurrence time. Null is invalid; omission preserves the stored time."),
+            "entry": schema_with_description(log_entry_patch_schema(), "Patch the weight measurement, food input, journal text, or exercise entry without changing the entry category. Food input fields refresh the snapshot; an empty food patch preserves it.")
+        }
+    })
+}
+
+fn log_filter_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "from": {"anyOf": [log_day_schema(), {"type": "null"}], "description": "Inclusive lower day bound."},
+            "to": {"anyOf": [log_day_schema(), {"type": "null"}], "description": "Inclusive upper day bound."},
+            "entry_type": {"anyOf": [{"type": "string", "enum": ["food", "biometric", "journal", "exercise"]}, {"type": "null"}]},
+            "subtype": {"anyOf": [{"type": "string", "enum": ["weight"]}, {"type": "null"}], "description": "Biometric subtype; when set to weight, requires entry_type=biometric."},
+            "last_id": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}], "description": "Exclusive cursor. Results are ordered by ID descending; next page uses id < last_id."}
+        },
+        "allOf": [
+            {
+                "if": {"required": ["subtype"], "properties": {"subtype": {"const": "weight"}}},
+                "then": {"required": ["entry_type"], "properties": {"entry_type": {"const": "biometric"}}}
+            }
+        ],
+        "description": "Date bounds are inclusive. Results are always ordered by ID descending in fixed pages of 100. No limit or sort-direction parameter is accepted."
+    })
+}
+
+fn log_day_schema() -> Map<String, Value> {
+    Map::from_iter([
+        ("type".to_owned(), json!("string")),
+        ("pattern".to_owned(), json!("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")),
+        (
+            "description".to_owned(),
+            json!("Valid calendar day in YYYY-MM-DD form."),
+        ),
+    ])
+}
+
+fn local_time_schema() -> Map<String, Value> {
+    Map::from_iter([
+        ("type".to_owned(), json!("string")),
+        (
+            "pattern".to_owned(),
+            json!("^([01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](\\.[0-9]{1,3})?)?$"),
+        ),
+        (
+            "description".to_owned(),
+            json!(
+                "Profile-local time. Input accepts HH:MM, HH:MM:SS, or HH:MM:SS.f through HH:MM:SS.fff; responses serialize as HH:MM:SS.fff."
+            ),
+        ),
+    ])
+}
+
+fn log_entry_schema() -> Value {
+    json!({
+        "oneOf": [
+            biometric_log_entry_schema(),
+            food_log_entry_schema(),
+            journal_log_entry_schema(),
+            exercise_log_entry_schema()
+        ]
+    })
+}
+
+fn log_entry_patch_schema() -> Map<String, Value> {
+    Map::from_iter([(
+        "oneOf".to_owned(),
+        json!([
+            biometric_log_entry_schema(),
+            food_log_entry_patch_schema(),
+            journal_log_entry_schema(),
+            exercise_log_entry_patch_schema()
+        ]),
+    )])
+}
+
+fn exercise_log_entry_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "exercise_type", "intensity", "duration", "calories_burned"],
+        "properties": {
+            "type": {"const": "exercise"},
+            "exercise_type": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank exercise type, preserved as supplied."},
+            "intensity": exercise_intensity_schema(),
+            "duration": {"type": "string", "description": "Duration such as 30 min or 0 s. Supports human-readable units and combined values. Responses use seconds."},
+            "calories_burned": {"type": "string", "description": "Nonnegative energy with the kcal unit, for example 150 kcal."},
+            "notes": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+        }
+    })
+}
+
+fn exercise_log_entry_patch_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+            "type": {"const": "exercise"},
+            "exercise_type": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "intensity": exercise_intensity_schema(),
+            "duration": {"type": "string", "description": "Duration such as 30 min or 0 s. Supports human-readable units and combined values. Responses use seconds."},
+            "calories_burned": {"type": "string", "description": "Nonnegative energy with the kcal unit."},
+            "notes": {"anyOf": [{"type": "string"}, {"type": "null"}], "description": "Null clears notes; omission preserves them."}
+        }
+    })
+}
+
+fn journal_log_entry_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "text"],
+        "properties": {
+            "type": {"const": "journal"},
+            "text": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Nonblank journal text. Whitespace and line breaks are preserved."}
+        }
+    })
+}
+
+fn biometric_log_entry_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "measurement"],
+        "properties": {
+            "type": {"const": "biometric"},
+            "measurement": biometric_entry_schema()
+        }
+    })
+}
+
+fn food_log_entry_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "food_id", "amount", "serving_size"],
+        "properties": {
+            "type": {"const": "food"},
+            "food_id": {"type": "integer", "minimum": 1, "description": "Existing positive FoodId. The server validates the food and derives the snapshot."},
+            "amount": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$", "description": "Positive decimal string without a unit, such as \"300\" or \"1.5\". Set the unit or named serving in the sibling serving_size field."},
+            "serving_size": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "One of kg, g, mg, µg, l, ml, or one nonblank, case-sensitive named serving defined by this food. The dimension must match the food's nutrition basis; surrounding whitespace is ignored."}
+        }
+    })
+}
+
+fn food_log_entry_patch_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+            "type": {"const": "food"},
+            "food_id": {"type": "integer", "minimum": 1, "description": "Existing positive FoodId. Omit to keep the stored FoodId."},
+            "amount": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$", "description": "Positive decimal string without a unit, such as \"1.5\". Set the unit or named serving in the sibling serving_size field. Omit to keep the stored amount."},
+            "serving_size": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "kg, g, mg, µg, l, ml, or one nonblank, case-sensitive named serving defined by the food. Omit to keep the stored serving. Null is invalid."}
+        },
+        "description": "Fields are optional and null is invalid. An empty food patch preserves the existing snapshot. Supplying any input field rebuilds the snapshot from the current food record after the merged food ID, amount, and serving size validate."
+    })
+}
+
+fn biometric_entry_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "value"],
+        "properties": {
+            "type": {"const": "weight"},
+            "value": {"type": "string", "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*) kg$", "description": "Positive fixed-point weight in kilograms, for example 90 kg."}
+        }
+    })
+}
+
+fn exercise_intensity_schema() -> Value {
+    json!({"type": "string", "enum": ["easy", "moderate", "hard", "very_hard"]})
+}
+
+fn schema_with_description(
+    mut schema: Map<String, Value>,
+    description: &str,
+) -> Map<String, Value> {
+    let description = match schema.get("description").and_then(Value::as_str) {
+        Some(base) => format!("{base} {description}"),
+        None => description.to_owned(),
+    };
+    schema.insert("description".to_owned(), Value::String(description));
+    schema
 }
 
 #[cfg(test)]

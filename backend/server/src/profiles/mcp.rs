@@ -97,98 +97,16 @@ impl ProfileTool {
     }
 
     fn output_schema(self) -> Map<String, Value> {
-        let mut defs = definitions();
-        defs.remove("create_profile");
-        defs.remove("create_settings");
-        defs.remove("patch_profile");
-        let profile = Map::from_iter([
-            ("type".to_owned(), json!("object")),
-            ("additionalProperties".to_owned(), json!(false)),
-            (
-                "required".to_owned(),
-                json!(["id", "name", "data", "derived"]),
-            ),
-            (
-                "properties".to_owned(),
-                json!({
-                    "id": {"type": "integer", "minimum": 1},
-                    "name": {"type": "string"},
-                    "data": {"$ref": "#/$defs/profile_data"},
-                    "derived": {"$ref": "#/$defs/profile_derived"}
-                }),
-            ),
-        ]);
-        defs.insert("profile".to_owned(), Value::Object(profile));
-        defs.insert("profile_data".to_owned(), json!({
-            "type": "object", "additionalProperties": false, "required": ["settings", "cache"],
-            "properties": {"settings": {"$ref": "#/$defs/profile_settings"}, "cache": {"$ref": "#/$defs/profile_cache"}}
-        }));
-        defs.insert("profile_settings".to_owned(), json!({
-            "type": "object", "additionalProperties": false,
-            "required": ["birth_date", "sex", "height", "timezone", "weight_goal", "weight_change_goal", "bmr", "baseline_activity"],
-            "properties": {
-                "birth_date": {"anyOf": [{"$ref": "#/$defs/birth_date"}, {"type": "null"}]},
-                "sex": {"anyOf": [{"$ref": "#/$defs/sex"}, {"type": "null"}]},
-                "height": {"anyOf": [{"$ref": "#/$defs/height"}, {"type": "null"}]},
-                "timezone": {"type": "string", "description": "IANA timezone name."},
-                "weight_goal": {"anyOf": [{"$ref": "#/$defs/weight"}, {"type": "null"}]},
-                "weight_change_goal": {"anyOf": [{"$ref": "#/$defs/weight_change_goal"}, {"type": "null"}]},
-                "bmr": {"$ref": "#/$defs/bmr"},
-                "baseline_activity": {"anyOf": [{"$ref": "#/$defs/baseline_activity"}, {"type": "null"}]}
-            }
-        }));
-        defs.insert("profile_cache".to_owned(), json!({
-            "type": "object", "additionalProperties": false, "required": ["current_weight"],
-            "properties": {"current_weight": {"anyOf": [{"$ref": "#/$defs/weight"}, {"type": "null"}]}}
-        }));
-        defs.insert("profile_derived".to_owned(), json!({
-            "type": "object", "additionalProperties": false,
-            "required": ["bmr", "baseline_activity", "maintenance_calories", "calorie_balance_goal"],
-            "properties": {
-                "bmr": {"$ref": "#/$defs/daily_energy"},
-                "baseline_activity": {"$ref": "#/$defs/daily_energy"},
-                "maintenance_calories": {"$ref": "#/$defs/daily_energy"},
-                "calorie_balance_goal": {"$ref": "#/$defs/daily_energy", "description": "An unset weight_change_goal gives an unset calorie_balance_goal. Negative is a deficit, positive a surplus, and zero is maintenance. Calculated as kg/week × 7700 / 7."}
-            }
-        }));
-        defs.insert(
-            "daily_energy".to_owned(),
-            json!({
-                "type": ["string", "null"], "description": "Energy in kcal/day."
-            }),
-        );
-        defs.insert(
-            "profile_list".to_owned(),
-            json!({
-                "type": "object", "additionalProperties": false, "required": ["items", "last_id"],
-                "properties": {
-                    "items": {"type": "array", "items": {"$ref": "#/$defs/profile"}},
-                    "last_id": {"type": ["integer", "null"], "minimum": 1}
-                }
-            }),
-        );
-        defs.insert(
-            "error".to_owned(),
-            json!({
-                "type": "object", "additionalProperties": false, "required": ["code", "error"],
-                "properties": {"code": {"type": "string"}, "error": {"type": "string"}}
-            }),
-        );
-        defs.insert("scope_error".to_owned(), json!({
-            "type": "object", "additionalProperties": false, "required": ["error", "required_scope"],
-            "properties": {"error": {"const": "insufficient_scope"}, "required_scope": {"type": "string"}}
-        }));
         let success = match self {
-            Self::List => "#/$defs/profile_list",
-            Self::Get | Self::Create | Self::Update => "#/$defs/profile",
+            Self::List => profile_list_schema(),
+            Self::Get | Self::Create | Self::Update => profile_schema(),
         };
         Map::from_iter([
             ("type".to_owned(), json!("object")),
             (
                 "oneOf".to_owned(),
-                json!([{"$ref": success}, {"$ref": "#/$defs/error"}, {"$ref": "#/$defs/scope_error"}]),
+                json!([success, error_schema(), scope_error_schema()]),
             ),
-            ("$defs".to_owned(), Value::Object(defs)),
         ])
     }
 
@@ -226,9 +144,8 @@ impl ProfileTool {
                 schema.insert("required".to_owned(), json!(["profile"]));
                 schema.insert(
                     "properties".to_owned(),
-                    json!({"profile": {"$ref": "#/$defs/create_profile"}}),
+                    json!({"profile": create_profile_schema()}),
                 );
-                schema.insert("$defs".to_owned(), Value::Object(definitions()));
             }
             Self::Update => {
                 schema.insert("required".to_owned(), json!(["id", "patch"]));
@@ -236,10 +153,9 @@ impl ProfileTool {
                     "properties".to_owned(),
                     json!({
                         "id": id,
-                        "patch": {"$ref": "#/$defs/patch_profile"}
+                        "patch": patch_profile_schema()
                     }),
                 );
-                schema.insert("$defs".to_owned(), Value::Object(definitions()));
             }
         }
 
@@ -373,96 +289,179 @@ fn tool_error(code: &'static str, message: impl Into<String>) -> CallToolResult 
     CallToolResult::structured_error(json!({"code": code, "error": message.into()}))
 }
 
-fn definitions() -> Map<String, Value> {
-    Map::from_iter([
-        (
-            "create_profile".to_owned(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["name"],
-                "properties": {
-                    "name": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Profile display name. Surrounding whitespace is trimmed; names are unique per account ignoring case, while accents remain significant."},
-                    "settings": {"anyOf": [{"$ref": "#/$defs/create_settings"}, {"type": "null"}], "description": "Optional settings object nested inside profile. Omit or use null for defaults."}
-                }
-            }),
-        ),
-        (
-            "create_settings".to_owned(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "birth_date": {"anyOf": [{"$ref": "#/$defs/birth_date"}, {"type": "null"}]},
-                    "sex": {"anyOf": [{"$ref": "#/$defs/sex"}, {"type": "null"}]},
-                    "height": {"anyOf": [{"$ref": "#/$defs/height"}, {"type": "null"}]},
-                    "timezone": {"type": ["string", "null"], "description": "IANA timezone name. Defaults to UTC."},
-                    "weight_goal": {"anyOf": [{"$ref": "#/$defs/weight"}, {"type": "null"}]},
-                    "weight_change_goal": {"anyOf": [{"$ref": "#/$defs/weight_change_goal"}, {"type": "null"}]},
-                    "bmr": {"anyOf": [{"$ref": "#/$defs/bmr"}, {"type": "null"}]},
-                    "baseline_activity": {"anyOf": [{"$ref": "#/$defs/baseline_activity"}, {"type": "null"}]}
-                }
-            }),
-        ),
-        (
-            "patch_profile".to_owned(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "name": {"type": "string", "minLength": 1, "pattern": "\\S"},
-                    "birth_date": {"anyOf": [{"$ref": "#/$defs/birth_date"}, {"type": "null"}]},
-                    "sex": {"anyOf": [{"$ref": "#/$defs/sex"}, {"type": "null"}]},
-                    "height": {"anyOf": [{"$ref": "#/$defs/height"}, {"type": "null"}]},
-                    "timezone": {"type": "string", "description": "IANA timezone name."},
-                    "weight_goal": {"anyOf": [{"$ref": "#/$defs/weight"}, {"type": "null"}]},
-                    "weight_change_goal": {"anyOf": [{"$ref": "#/$defs/weight_change_goal"}, {"type": "null"}], "description": "Omit to preserve the goal; null clears it."},
-                    "bmr": {"anyOf": [{"$ref": "#/$defs/bmr"}, {"type": "null"}], "description": "Null resets BMR to calculated mode."},
-                    "baseline_activity": {"anyOf": [{"$ref": "#/$defs/baseline_activity"}, {"type": "null"}]}
-                }
-            }),
-        ),
-        (
-            "birth_date".to_owned(),
-            json!({"type": "string", "pattern": "^[0-9]{4}(-[0-9]{2}(-[0-9]{2})?)?$", "description": "Valid calendar date in YYYY, YYYY-MM, or YYYY-MM-DD form."}),
-        ),
-        (
-            "sex".to_owned(),
-            json!({"type": "string", "enum": ["male", "female"]}),
-        ),
-        (
-            "height".to_owned(),
-            json!({"type": "string", "description": "Positive height in centimetres, for example 175 cm."}),
-        ),
-        (
-            "weight".to_owned(),
-            json!({"type": "string", "description": "Positive body weight with the kg unit, for example 70 kg."}),
-        ),
-        (
-            "weight_change_goal".to_owned(),
-            json!({"type": "string", "description": "kg/week. Negative means loss, positive means gain, and zero means no change.", "examples": ["-0.5 kg/week", "0 kg/week", "0.5 kg/week"]}),
-        ),
-        (
-            "bmr".to_owned(),
-            json!({
-                "description": "Tagged object: calculated mode, or custom mode with a unit-bearing kcal/day value.",
-                "oneOf": [
-                    {"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "calculated"}}},
-                    {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "custom"}, "value": {"type": "string", "description": "Positive BMR in kcal/day, for example 1700 kcal/day."}}}
-                ]
-            }),
-        ),
-        (
-            "baseline_activity".to_owned(),
-            json!({
-                "description": "Tagged object: preset mode with level, or custom mode with a unit-bearing kcal/day value.",
-                "oneOf": [
-                    {"type": "object", "additionalProperties": false, "required": ["mode", "level"], "properties": {"mode": {"const": "preset"}, "level": {"type": "string", "enum": ["no_activity", "sedentary", "lightly_active", "moderately_active", "very_active"]}}},
-                    {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "custom"}, "value": {"type": "string", "description": "Fixed baseline activity in kcal/day, for example 400 kcal/day."}}}
-                ]
-            }),
-        ),
-    ])
+fn create_profile_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+            "name": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Profile display name. Surrounding whitespace is trimmed; names are unique per account ignoring case, while accents remain significant."},
+            "settings": {"anyOf": [create_settings_schema(), {"type": "null"}], "description": "Optional settings object nested inside profile. Omit or use null for defaults."}
+        }
+    })
+}
+
+fn create_settings_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "birth_date": {"anyOf": [birth_date_schema(), {"type": "null"}]},
+            "sex": {"anyOf": [sex_schema(), {"type": "null"}]},
+            "height": {"anyOf": [height_schema(), {"type": "null"}]},
+            "timezone": {"type": ["string", "null"], "description": "IANA timezone name. Defaults to UTC."},
+            "weight_goal": {"anyOf": [weight_schema(), {"type": "null"}]},
+            "weight_change_goal": {"anyOf": [weight_change_goal_schema(), {"type": "null"}]},
+            "bmr": {"anyOf": [bmr_schema(), {"type": "null"}]},
+            "baseline_activity": {"anyOf": [baseline_activity_schema(), {"type": "null"}]}
+        }
+    })
+}
+
+fn patch_profile_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "name": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "birth_date": {"anyOf": [birth_date_schema(), {"type": "null"}]},
+            "sex": {"anyOf": [sex_schema(), {"type": "null"}]},
+            "height": {"anyOf": [height_schema(), {"type": "null"}]},
+            "timezone": {"type": "string", "description": "IANA timezone name."},
+            "weight_goal": {"anyOf": [weight_schema(), {"type": "null"}]},
+            "weight_change_goal": {"anyOf": [weight_change_goal_schema(), {"type": "null"}], "description": "Omit to preserve the goal; null clears it."},
+            "bmr": {"anyOf": [bmr_schema(), {"type": "null"}], "description": "Null resets BMR to calculated mode."},
+            "baseline_activity": {"anyOf": [baseline_activity_schema(), {"type": "null"}]}
+        }
+    })
+}
+
+fn birth_date_schema() -> Value {
+    json!({"type": "string", "pattern": "^[0-9]{4}(-[0-9]{2}(-[0-9]{2})?)?$", "description": "Valid calendar date in YYYY, YYYY-MM, or YYYY-MM-DD form."})
+}
+
+fn sex_schema() -> Value {
+    json!({"type": "string", "enum": ["male", "female"]})
+}
+
+fn height_schema() -> Value {
+    json!({"type": "string", "description": "Positive height in centimetres, for example 175 cm."})
+}
+
+fn weight_schema() -> Value {
+    json!({"type": "string", "description": "Positive body weight with the kg unit, for example 70 kg."})
+}
+
+fn weight_change_goal_schema() -> Value {
+    json!({"type": "string", "description": "kg/week. Negative means loss, positive means gain, and zero means no change.", "examples": ["-0.5 kg/week", "0 kg/week", "0.5 kg/week"]})
+}
+
+fn bmr_schema() -> Value {
+    json!({
+        "description": "Tagged object: calculated mode, or custom mode with a unit-bearing kcal/day value.",
+        "oneOf": [
+            {"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "calculated"}}},
+            {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "custom"}, "value": {"type": "string", "description": "Positive BMR in kcal/day, for example 1700 kcal/day."}}}
+        ]
+    })
+}
+
+fn baseline_activity_schema() -> Value {
+    json!({
+        "description": "Tagged object: preset mode with level, or custom mode with a unit-bearing kcal/day value.",
+        "oneOf": [
+            {"type": "object", "additionalProperties": false, "required": ["mode", "level"], "properties": {"mode": {"const": "preset"}, "level": {"type": "string", "enum": ["no_activity", "sedentary", "lightly_active", "moderately_active", "very_active"]}}},
+            {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "custom"}, "value": {"type": "string", "description": "Fixed baseline activity in kcal/day, for example 400 kcal/day."}}}
+        ]
+    })
+}
+
+fn profile_data_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false, "required": ["settings", "cache"],
+        "properties": {"settings": profile_settings_schema(), "cache": profile_cache_schema()}
+    })
+}
+
+fn profile_settings_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["birth_date", "sex", "height", "timezone", "weight_goal", "weight_change_goal", "bmr", "baseline_activity"],
+        "properties": {
+            "birth_date": {"anyOf": [birth_date_schema(), {"type": "null"}]},
+            "sex": {"anyOf": [sex_schema(), {"type": "null"}]},
+            "height": {"anyOf": [height_schema(), {"type": "null"}]},
+            "timezone": {"type": "string", "description": "IANA timezone name."},
+            "weight_goal": {"anyOf": [weight_schema(), {"type": "null"}]},
+            "weight_change_goal": {"anyOf": [weight_change_goal_schema(), {"type": "null"}]},
+            "bmr": bmr_schema(),
+            "baseline_activity": {"anyOf": [baseline_activity_schema(), {"type": "null"}]}
+        }
+    })
+}
+
+fn profile_cache_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false, "required": ["current_weight"],
+        "properties": {"current_weight": {"anyOf": [weight_schema(), {"type": "null"}]}}
+    })
+}
+
+fn profile_derived_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["bmr", "baseline_activity", "maintenance_calories", "calorie_balance_goal"],
+        "properties": {
+            "bmr": daily_energy_schema(),
+            "baseline_activity": daily_energy_schema(),
+            "maintenance_calories": daily_energy_schema(),
+            "calorie_balance_goal": {"type": ["string", "null"], "description": "Energy in kcal/day. An unset weight_change_goal gives an unset calorie_balance_goal. Negative is a deficit, positive a surplus, and zero is maintenance. Calculated as kg/week × 7700 / 7."}
+        }
+    })
+}
+
+fn daily_energy_schema() -> Value {
+    json!({
+        "type": ["string", "null"], "description": "Energy in kcal/day."
+    })
+}
+
+fn profile_list_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false, "required": ["items", "last_id"],
+        "properties": {
+            "items": {"type": "array", "items": profile_schema()},
+            "last_id": {"type": ["integer", "null"], "minimum": 1}
+        }
+    })
+}
+
+fn error_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false, "required": ["code", "error"],
+        "properties": {"code": {"type": "string"}, "error": {"type": "string"}}
+    })
+}
+
+fn scope_error_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false, "required": ["error", "required_scope"],
+        "properties": {"error": {"const": "insufficient_scope"}, "required_scope": {"type": "string"}}
+    })
+}
+
+fn profile_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "data", "derived"],
+        "properties": {
+            "id": {"type": "integer", "minimum": 1},
+            "name": {"type": "string"},
+            "data": profile_data_schema(),
+            "derived": profile_derived_schema()
+        }
+    })
 }
 
 #[cfg(test)]
