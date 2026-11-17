@@ -10,7 +10,6 @@ DROP TRIGGER crumbs_food_tags_fts_before_delete;
 DROP TRIGGER crumbs_food_tags_fts_after_delete;
 DROP TRIGGER crumbs_food_tags_fts_before_update;
 DROP TRIGGER crumbs_food_tags_fts_after_update;
-DROP TRIGGER crumbs_tags_fts_before_delete;
 DROP TRIGGER crumbs_tags_fts_before_update;
 DROP TRIGGER crumbs_tags_fts_after_update;
 
@@ -162,12 +161,6 @@ BEGIN
     SELECT id, source, dataset, description, category, barcode, tags
     FROM crumbs_foods_search_content
     WHERE id IN (old.food_id, new.food_id);
-END;
-
-CREATE TRIGGER crumbs_tags_fts_before_delete
-BEFORE DELETE ON crumbs_tags
-BEGIN
-    DELETE FROM crumbs_food_tags WHERE tag_id = old.id;
 END;
 
 CREATE TRIGGER crumbs_tags_fts_before_update
