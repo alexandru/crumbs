@@ -274,19 +274,11 @@ impl<'de> DeserializeSeed<'de> for RootSeed<'_> {
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_map(RootVisitor {
-            sender: self.sender,
-            state: self.state,
-        })
+        deserializer.deserialize_map(self)
     }
 }
 
-struct RootVisitor<'a> {
-    sender: &'a mpsc::Sender<StreamItem>,
-    state: &'a mut StreamState,
-}
-
-impl<'de> Visitor<'de> for RootVisitor<'_> {
+impl<'de> Visitor<'de> for RootSeed<'_> {
     type Value = ();
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -300,7 +292,7 @@ impl<'de> Visitor<'de> for RootVisitor<'_> {
     where
         A: MapAccess<'de>,
     {
-        let RootVisitor { sender, state } = self;
+        let Self { sender, state } = self;
         let Some(root) = map.next_key::<String>()? else {
             return Err(serde::de::Error::custom(
                 "expected one USDA root key, found an empty object",
@@ -341,21 +333,11 @@ impl<'de> DeserializeSeed<'de> for FoodListSeed<'_> {
     where
         D: serde::Deserializer<'de>,
     {
-        deserializer.deserialize_seq(FoodListVisitor {
-            sender: self.sender,
-            state: self.state,
-            root_kind: self.root_kind,
-        })
+        deserializer.deserialize_seq(self)
     }
 }
 
-struct FoodListVisitor<'a> {
-    sender: &'a mpsc::Sender<StreamItem>,
-    state: &'a mut StreamState,
-    root_kind: FoodKind,
-}
-
-impl<'de> Visitor<'de> for FoodListVisitor<'_> {
+impl<'de> Visitor<'de> for FoodListSeed<'_> {
     type Value = ();
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -366,7 +348,7 @@ impl<'de> Visitor<'de> for FoodListVisitor<'_> {
     where
         A: SeqAccess<'de>,
     {
-        let FoodListVisitor {
+        let Self {
             sender,
             state,
             root_kind,

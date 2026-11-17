@@ -1,3 +1,4 @@
+use std::num::NonZeroU16;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::http::{HeaderMap, header::AUTHORIZATION};
@@ -9,7 +10,11 @@ use url::{Host, Url};
 
 pub(super) struct ParsedRedirect<'a> {
     original: &'a str,
-    url: Url,
+    loopback: Option<LoopbackRedirect<'a>>,
+}
+
+#[derive(PartialEq, Eq)]
+struct LoopbackRedirect<'a> {
     raw_scheme: &'a str,
     raw_host: &'a str,
     raw_suffix: &'a str,
@@ -88,25 +93,11 @@ pub(super) fn redirect_matches_parsed(
     registered: &ParsedRedirect<'_>,
     requested: &ParsedRedirect<'_>,
 ) -> bool {
-    if registered.original == requested.original {
-        return true;
-    }
-
-    if registered.url.scheme() != "http"
-        || requested.url.scheme() != "http"
-        || !is_loopback_ip(&registered.url)
-        || !is_loopback_ip(&requested.url)
-    {
-        return false;
-    }
-
-    if registered.raw_scheme != requested.raw_scheme
-        || registered.raw_suffix != requested.raw_suffix
-    {
-        return false;
-    }
-
-    registered.raw_host == requested.raw_host
+    registered.original == requested.original
+        || matches!(
+            (&registered.loopback, &requested.loopback),
+            (Some(registered), Some(requested)) if registered == requested
+        )
 }
 
 pub(super) fn redirect_response(
@@ -217,13 +208,13 @@ fn parse_redirect(value: &str) -> Result<ParsedRedirect<'_>, ProtocolError> {
         return Err(ProtocolError::InvalidRequest);
     }
 
-    match url.scheme() {
-        "https" => {}
-        "http" if is_loopback_ip(&url) => {}
+    let loopback = match url.scheme() {
+        "https" => false,
+        "http" if is_loopback_ip(&url) => true,
         _ => return Err(ProtocolError::InvalidRequest),
-    }
+    };
 
-    let (raw_host, _) = authority_without_port(raw_authority)?;
+    let raw_host = authority_without_port(raw_authority)?;
 
     if url.query_pairs().any(|(name, _)| {
         matches!(
@@ -236,10 +227,11 @@ fn parse_redirect(value: &str) -> Result<ParsedRedirect<'_>, ProtocolError> {
 
     Ok(ParsedRedirect {
         original: value,
-        url,
-        raw_scheme,
-        raw_host,
-        raw_suffix,
+        loopback: loopback.then_some(LoopbackRedirect {
+            raw_scheme,
+            raw_host,
+            raw_suffix,
+        }),
     })
 }
 
@@ -250,21 +242,22 @@ fn raw_uri_parts(value: &str) -> Option<(&str, &str, &str)> {
     Some((scheme, authority, suffix))
 }
 
-fn authority_without_port(authority: &str) -> Result<(&str, Option<u16>), ProtocolError> {
+fn authority_without_port(authority: &str) -> Result<&str, ProtocolError> {
     let invalid = || ProtocolError::InvalidRequest;
 
     if let Some(bracketed) = authority.strip_prefix('[') {
         let closing_bracket = bracketed.find(']').ok_or_else(invalid)?;
-        let host_end = closing_bracket + 2;
-        let host = authority.get(..host_end).ok_or_else(invalid)?;
-        let suffix = authority.get(host_end..).ok_or_else(invalid)?;
+        let (host, suffix) = authority
+            .split_at_checked(closing_bracket + 2)
+            .ok_or_else(invalid)?;
         let Some(raw_port) = suffix.strip_prefix(':') else {
             if suffix.is_empty() {
-                return Ok((host, None));
+                return Ok(host);
             }
             return Err(invalid());
         };
-        return parse_port(raw_port).map(|port| (host, Some(port)));
+        parse_port(raw_port)?;
+        return Ok(host);
     }
 
     match authority.rsplit_once(':') {
@@ -272,24 +265,19 @@ fn authority_without_port(authority: &str) -> Result<(&str, Option<u16>), Protoc
             if host.contains(':') || host.is_empty() {
                 return Err(invalid());
             }
-            parse_port(raw_port).map(|port| (host, Some(port)))
+            parse_port(raw_port)?;
+            Ok(host)
         }
-        None if !authority.is_empty() => Ok((authority, None)),
+        None if !authority.is_empty() => Ok(authority),
         None => Err(invalid()),
     }
 }
 
-fn parse_port(value: &str) -> Result<u16, ProtocolError> {
+fn parse_port(value: &str) -> Result<NonZeroU16, ProtocolError> {
     if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(ProtocolError::InvalidRequest);
     }
-    let port = value
-        .parse::<u16>()
-        .map_err(|_| ProtocolError::InvalidRequest)?;
-    if port == 0 {
-        return Err(ProtocolError::InvalidRequest);
-    }
-    Ok(port)
+    value.parse().map_err(|_| ProtocolError::InvalidRequest)
 }
 
 fn is_loopback_ip(url: &Url) -> bool {

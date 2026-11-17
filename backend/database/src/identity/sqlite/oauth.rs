@@ -179,7 +179,7 @@ impl OAuthStore for Database {
         if row.user_id.is_some() || row.code_hash.is_some() || row.session_id.is_some() {
             return Err(AuthStoreError::InvalidRecord);
         }
-        let grant = row.grant()?;
+        let grant = row.into_grant()?;
         let user_is_current_and_active: bool = sqlx::query_scalar(
             "SELECT EXISTS(
                 SELECT 1 FROM users
@@ -246,7 +246,7 @@ impl OAuthStore for Database {
         if row.user_id.is_some() || row.session_id.is_some() {
             return Err(AuthStoreError::InvalidRecord);
         }
-        let grant = row.grant()?;
+        let grant = row.into_grant()?;
         sqlx::query(
             "DELETE FROM oauth_authorizations
              WHERE request_hash = ? AND csrf_hash = ? AND code_hash IS NULL AND expires_at > ?",
@@ -648,7 +648,7 @@ fn map_write_error(source: sqlx::Error) -> AuthStoreError {
     }
 }
 
-fn decode_hash(bytes: Vec<u8>) -> Result<CredentialHash, AuthStoreError> {
+fn decode_hash(bytes: &[u8]) -> Result<CredentialHash, AuthStoreError> {
     let bytes: [u8; 32] = bytes
         .try_into()
         .map_err(|_| AuthStoreError::InvalidRecord)?;
@@ -672,10 +672,10 @@ impl OAuthClientRow {
         let authentication = match (self.authentication.as_str(), self.secret_hash) {
             (CLIENT_PUBLIC, None) => ClientAuthentication::Public,
             (CLIENT_SECRET_BASIC, Some(hash)) => {
-                ClientAuthentication::SecretBasic(decode_hash(hash)?)
+                ClientAuthentication::SecretBasic(decode_hash(&hash)?)
             }
             (CLIENT_SECRET_POST, Some(hash)) => {
-                ClientAuthentication::SecretPost(decode_hash(hash)?)
+                ClientAuthentication::SecretPost(decode_hash(&hash)?)
             }
             _ => return Err(AuthStoreError::InvalidRecord),
         };
@@ -715,14 +715,16 @@ impl AuthorizationRow {
         OAuthScope::parse(&self.scope).ok_or(AuthStoreError::InvalidRecord)
     }
 
-    fn grant(&self) -> Result<AuthorizationGrant, AuthStoreError> {
+    fn into_grant(self) -> Result<AuthorizationGrant, AuthStoreError> {
+        let scope = self.parsed_scope()?;
+
         Ok(AuthorizationGrant {
-            client_id: self.client_id.clone(),
-            redirect_uri: self.redirect_uri.clone(),
-            resource: self.resource.clone(),
-            scope: self.parsed_scope()?,
-            state: self.state.clone(),
-            code_challenge: self.code_challenge.clone(),
+            client_id: self.client_id,
+            redirect_uri: self.redirect_uri,
+            resource: self.resource,
+            scope,
+            state: self.state,
+            code_challenge: self.code_challenge,
         })
     }
 
@@ -730,12 +732,16 @@ impl AuthorizationRow {
         if self.user_id.is_some() || self.code_hash.is_some() || self.session_id.is_some() {
             return Err(AuthStoreError::InvalidRecord);
         }
-        let grant = self.grant()?;
+        let request_hash = decode_hash(&self.request_hash)?;
+        let csrf_hash = decode_hash(&self.csrf_hash)?;
+        let expires_at = self.expires_at;
+        let grant = self.into_grant()?;
+
         Ok(PendingAuthorization {
-            request_hash: decode_hash(self.request_hash)?,
-            csrf_hash: decode_hash(self.csrf_hash)?,
+            request_hash,
+            csrf_hash,
             grant,
-            expires_at: self.expires_at,
+            expires_at,
         })
     }
 
