@@ -4,6 +4,7 @@ compile_error!("crumbs-server currently supports Unix targets only");
 mod assets;
 mod config;
 mod custom_foods;
+mod daily_status;
 mod home;
 mod mcp;
 mod oauth;

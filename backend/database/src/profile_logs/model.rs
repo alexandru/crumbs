@@ -79,6 +79,13 @@ impl LogDay {
     pub fn components(self) -> (i32, u32, u32) {
         (self.0.year(), self.0.month(), self.0.day())
     }
+
+    pub(crate) fn through(self, stop: Self) -> impl Iterator<Item = Self> {
+        self.0
+            .iter_days()
+            .take_while(move |day| *day <= stop.0)
+            .map(Self)
+    }
 }
 
 impl fmt::Display for LogDay {

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::Router;
+use crumbs_database::daily_status::DailyStatusStore;
 use crumbs_database::foods::{CustomFoodStore, FoodSearch};
 use crumbs_database::profile_logs::ProfileLogs;
 use crumbs_database::profiles::Profiles;
@@ -8,7 +9,7 @@ use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 
 use crumbs_database::identity::{OAuthStore, Users};
 
-use crate::{assets, custom_foods, home, mcp, oauth, profile_logs, profiles, search};
+use crate::{assets, custom_foods, daily_status, home, mcp, oauth, profile_logs, profiles, search};
 
 pub(crate) fn application<S, A>(
     reader: Arc<S>,
@@ -16,17 +17,26 @@ pub(crate) fn application<S, A>(
     authorization: Arc<oauth::AuthorizationServer<A>>,
 ) -> Router
 where
-    S: FoodSearch + CustomFoodStore + Profiles + ProfileLogs + Send + Sync + 'static,
+    S: FoodSearch
+        + CustomFoodStore
+        + Profiles
+        + ProfileLogs
+        + DailyStatusStore
+        + Send
+        + Sync
+        + 'static,
     A: Users + OAuthStore + Send + 'static,
 {
     let tools = search::mcp_tools::<S>()
         .chain(custom_foods::mcp_tools::<S>())
         .chain(profiles::mcp_tools::<S>())
-        .chain(profile_logs::mcp_tools::<S>());
+        .chain(profile_logs::mcp_tools::<S>())
+        .chain(daily_status::mcp_tools::<S>());
     search::routes(Arc::clone(&reader))
         .merge(custom_foods::routes(Arc::clone(&reader)))
         .merge(profiles::routes(Arc::clone(&reader)))
         .merge(profile_logs::routes(Arc::clone(&reader)))
+        .merge(daily_status::routes(Arc::clone(&reader)))
         .nest_service(
             "/mcp",
             mcp::service(reader, mcp_config, tools, MCP_INSTRUCTIONS),

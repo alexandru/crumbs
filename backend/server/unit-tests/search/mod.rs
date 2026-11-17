@@ -4,6 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use crumbs_database::daily_status::{
+    DailyStatusError, DailyStatusQuery, DailyStatusReport, DailyStatusStore,
+};
 use crumbs_database::foods::{
     CustomFoodInput, CustomFoodStore, Dataset, Food, FoodId, FoodLimit, FoodSearch, FoodWriter,
     SearchError, SearchQuery, SearchResults, Source, StoredFood, TagName, TagStore,
@@ -756,4 +759,17 @@ async fn limits_default_to_twenty_and_cap_at_one_thousand() -> Result<(), Box<dy
         Some(1_000)
     );
     Ok(())
+}
+
+impl DailyStatusStore for RecordingFoodReader {
+    async fn daily_status(
+        &self,
+        _user: UserId,
+        _profile: ProfileId,
+        _query: &DailyStatusQuery,
+    ) -> Result<Option<DailyStatusReport>, DailyStatusError> {
+        Err(DailyStatusError::Storage(Box::new(io::Error::other(
+            "daily status unavailable in recording reader",
+        ))))
+    }
 }

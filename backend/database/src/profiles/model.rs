@@ -256,7 +256,7 @@ impl IanaTimezone {
         self.0
     }
 
-    fn local_day(&self, timestamp: UnixMillis) -> Result<NaiveDate, ProfileError> {
+    pub(crate) fn local_day(&self, timestamp: UnixMillis) -> Result<NaiveDate, ProfileError> {
         let utc =
             chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp).ok_or_else(|| {
                 ProfileError::Calculation("clock timestamp is out of range".to_owned())

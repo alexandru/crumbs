@@ -3,6 +3,7 @@
 pub mod activity;
 mod clock;
 mod config;
+pub mod daily_status;
 pub mod foods;
 pub mod identity;
 pub mod nutrition_model;
