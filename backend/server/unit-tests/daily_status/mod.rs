@@ -92,12 +92,24 @@ async fn daily_status_rest_and_mcp_cover_dates_scope_and_ownership() -> Result<(
     assert_eq!(mcp.json["result"]["isError"], false);
     assert_eq!(mcp.json["result"]["structuredContent"], rest.json);
 
-    let one = app
-        .request(http_request(&format!("{path}?stop=2025-04-03"))?)
-        .await?;
-    assert_eq!(one.status, StatusCode::OK);
-    assert_eq!(one.json["start"], "2025-04-03");
-    assert_eq!(one.json["stop"], "2025-04-03");
+    for (bound, arguments) in [
+        (
+            "start",
+            json!({"profile_id": profile, "start":"2025-04-03"}),
+        ),
+        ("stop", json!({"profile_id": profile, "stop":"2025-04-03"})),
+    ] {
+        let response = app
+            .request(http_request(&format!("{path}?{bound}=2025-04-03"))?)
+            .await?;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+        let response = mcp_call(&app, 5, "get_daily_status", arguments).await?;
+        assert_eq!(response.json["result"]["isError"], true);
+        assert_eq!(
+            response.json["result"]["structuredContent"]["code"],
+            "invalid_input"
+        );
+    }
     let today = app.request(http_request(&path)?).await?;
     assert_eq!(today.status, StatusCode::OK);
     assert_eq!(today.json["start"], today.json["stop"]);

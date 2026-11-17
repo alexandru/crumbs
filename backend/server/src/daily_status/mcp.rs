@@ -91,7 +91,7 @@ fn tool() -> Tool {
             }),
         ),
     ]);
-    Tool::new_with_raw("get_daily_status", Some("Get daily status for an account-owned profile. Dates are inclusive. Omit both dates for today in the profile timezone; one date selects that day. Current profile settings and maintenance apply to historical days. Nutrient totals sum recorded amounts. Water uses an estimate of 1 g per ml. Missing activity readings are null. The calorie target is maintenance plus the configured balance, without adding exercise. Percent is null for zero or negative targets and may exceed 100. Requires crumbs:read.".into()), schema)
+    Tool::new_with_raw("get_daily_status", Some("Get daily status for an account-owned profile. Dates are inclusive. Provide start and stop together, or omit both for today in the profile timezone. Current profile settings and maintenance apply to historical days. Nutrient totals sum recorded amounts. Water uses an estimate of 1 g per ml. Missing activity readings are null. The calorie target is maintenance plus the configured balance, without adding exercise. Percent is null for zero or negative targets and may exceed 100. Requires crumbs:read.".into()), schema)
         .with_annotations(ToolAnnotations::new().read_only(true).destructive(false).open_world(false))
 }
 

@@ -1,4 +1,4 @@
-use crate::daily_status::{DailyStatusQuery, DailyStatusStore};
+use crate::daily_status::{DailyStatusError, DailyStatusQuery, DailyStatusStore};
 use crate::identity::UserId;
 use crate::profiles::{CreateProfile, ProfileId, Profiles};
 use crate::runtime::Database;
@@ -58,10 +58,11 @@ async fn dates_timezone_empty_days_and_ownership() -> Result<(), Box<dyn Error>>
         "2024-01-02"
     );
     for query in [json!({"start":"2024-01-03"}), json!({"stop":"2024-01-03"})] {
-        let result = report(&db, user, id, query).await?;
-        assert_eq!(result["start"], "2024-01-03");
-        assert_eq!(result["stop"], "2024-01-03");
-        assert_eq!(result["days"].as_array().map(Vec::len), Some(1));
+        let query: DailyStatusQuery = serde_json::from_value(query)?;
+        assert!(matches!(
+            db.daily_status(user, id, &query).await,
+            Err(DailyStatusError::InvalidInput(_))
+        ));
     }
     for (day, calories) in [
         ("2023-12-31", "99 kcal"),
@@ -253,7 +254,13 @@ async fn no_pagination_limit_and_zero_goals() -> Result<(), Box<dyn Error>> {
         )
         .await?;
     }
-    let result = report(&db, user, id, json!({"start":"2024-01-01"})).await?;
+    let result = report(
+        &db,
+        user,
+        id,
+        json!({"start":"2024-01-01", "stop":"2024-01-01"}),
+    )
+    .await?;
     let day = &result["days"][0];
     assert_eq!(day["calories_consumed"], "101 kcal");
     for goal in ["calories", "water", "steps", "active_time"] {

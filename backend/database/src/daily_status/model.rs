@@ -16,8 +16,15 @@ pub struct DailyStatusQuery {
 
 impl DailyStatusQuery {
     pub(super) fn resolve(self, today: LogDay) -> Result<DateRange, DailyStatusError> {
-        let start = self.start.or(self.stop).unwrap_or(today);
-        let stop = self.stop.unwrap_or(start);
+        let (start, stop) = match (self.start, self.stop) {
+            (Some(start), Some(stop)) => (start, stop),
+            (None, None) => (today, today),
+            _ => {
+                return Err(DailyStatusError::InvalidInput(
+                    "start and stop must be provided together".to_owned(),
+                ));
+            }
+        };
         if start > stop {
             return Err(DailyStatusError::InvalidInput(
                 "start must be on or before stop".to_owned(),
