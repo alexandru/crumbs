@@ -28,12 +28,12 @@ impl DailyGoals {
 
         Self {
             calories: calorie_target.map(|target| {
-                GoalProgress::new(target, Some(status.calories_consumed.total), Kcal::value)
+                GoalProgress::new(target, Some(status.calories_consumed), Kcal::value)
             }),
             water: settings.daily_water_goal.map(|target| {
                 GoalProgress::new(
                     target.value().to_millilitres(),
-                    Some(status.water.total),
+                    Some(status.water),
                     Millilitres::value,
                 )
             }),

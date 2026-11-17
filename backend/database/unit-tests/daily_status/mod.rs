@@ -49,10 +49,7 @@ async fn dates_timezone_empty_days_and_ownership() -> Result<(), Box<dyn Error>>
     let id = profile(&db, user, json!({"timezone":"America/Los_Angeles"})).await?;
     let first = report(&db, user, id, json!({})).await?;
     assert_eq!(first["start"], "2024-01-01");
-    assert_eq!(
-        first["days"][0]["calories_consumed"],
-        json!({"total":"0 kcal", "complete":true, "exact":true})
-    );
+    assert_eq!(first["days"][0]["calories_consumed"], "0 kcal");
     assert!(first["days"][0]["steps"].is_null());
     assert!(first["days"][0]["expenditure"]["total"].is_null());
     clock.store(u64::try_from(now + 1_000)?, Ordering::SeqCst);
@@ -161,18 +158,9 @@ async fn aggregates_food_exercise_and_latest_activity_with_goals() -> Result<(),
     }
     let result = report(&db, user, id, json!({"start":day, "stop":"2024-01-02"})).await?;
     let status = &result["days"][0];
-    assert_eq!(
-        status["calories_consumed"],
-        json!({"total":"1300 kcal", "complete":true, "exact":false})
-    );
-    assert_eq!(
-        status["nutrients"]["protein"],
-        json!({"total":"1.50 g", "complete":true, "exact":true})
-    );
-    assert_eq!(
-        status["nutrients"]["minerals"]["calcium"],
-        json!({"total":"0.001 g", "complete":false, "exact":true})
-    );
+    assert_eq!(status["calories_consumed"], "1300 kcal");
+    assert_eq!(status["nutrients"]["protein"], "1.50 g");
+    assert_eq!(status["nutrients"]["minerals"]["calcium"], "0.001 g");
     for (group, names, total) in [
         (
             "fat",
@@ -201,47 +189,25 @@ async fn aggregates_food_exercise_and_latest_activity_with_goals() -> Result<(),
         ),
     ] {
         for name in names.split_whitespace() {
-            assert_eq!(
-                status["nutrients"][group][name],
-                json!({"total":total, "complete":false, "exact":true}),
-                "{group}.{name}"
-            );
+            assert_eq!(status["nutrients"][group][name], total, "{group}.{name}");
         }
     }
     for name in "total added lactose".split_whitespace() {
         assert_eq!(
-            status["nutrients"]["carbohydrates"]["sugars"][name],
-            json!({"total":"1 g", "complete":false, "exact":true}),
+            status["nutrients"]["carbohydrates"]["sugars"][name], "1 g",
             "sugars.{name}"
         );
     }
-    assert_eq!(
-        status["nutrients"]["fat"]["total"],
-        json!({"total":"1 g", "complete":false, "exact":true})
-    );
+    assert_eq!(status["nutrients"]["fat"]["total"], "1 g");
     for name in "fibre salt".split_whitespace() {
-        assert_eq!(
-            status["nutrients"][name],
-            json!({"total":"1 g", "complete":false, "exact":true}),
-            "{name}"
-        );
+        assert_eq!(status["nutrients"][name], "1 g", "{name}");
     }
     for name in "sodium cholesterol choline".split_whitespace() {
-        assert_eq!(
-            status["nutrients"][name],
-            json!({"total":"0.001 g", "complete":false, "exact":true}),
-            "{name}"
-        );
+        assert_eq!(status["nutrients"][name], "0.001 g", "{name}");
     }
-    assert_eq!(
-        status["nutrients"]["caffeine"],
-        json!({"total":"0.001 g", "complete":false, "exact":false})
-    );
-    assert_eq!(
-        status["nutrients"]["water"],
-        json!({"total":"1250 g", "complete":true, "exact":true})
-    );
-    assert_eq!(status["water"]["total"], "1250 ml");
+    assert_eq!(status["nutrients"]["caffeine"], "0.001 g");
+    assert_eq!(status["nutrients"]["water"], "1250 g");
+    assert_eq!(status["water"], "1250 ml");
     assert_eq!(status["steps"], 1200);
     assert_eq!(status["active_time"], "2700 s");
     assert_eq!(
@@ -289,7 +255,7 @@ async fn no_pagination_limit_and_zero_goals() -> Result<(), Box<dyn Error>> {
     }
     let result = report(&db, user, id, json!({"start":"2024-01-01"})).await?;
     let day = &result["days"][0];
-    assert_eq!(day["calories_consumed"]["total"], "101 kcal");
+    assert_eq!(day["calories_consumed"], "101 kcal");
     for goal in ["calories", "water", "steps", "active_time"] {
         assert!(day["goals"][goal]["percent"].is_null());
     }

@@ -5,7 +5,7 @@ mod sqlite;
 
 pub use error::DailyStatusError;
 pub use goals::{DailyGoals, GoalProgress, Percentage};
-pub use model::{DailyExpenditure, DailyStatus, DailyStatusQuery, DailyStatusReport, IntakeTotal};
+pub use model::{DailyExpenditure, DailyStatus, DailyStatusQuery, DailyStatusReport};
 
 use std::future::Future;
 
