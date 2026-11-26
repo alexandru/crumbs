@@ -55,3 +55,6 @@ warnings = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+
+[profile.dev]
+debug = "line-tables-only"
